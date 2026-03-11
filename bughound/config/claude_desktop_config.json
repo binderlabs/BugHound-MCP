@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "bughound-recon": {
+      "command": "python3",
+      "args": ["-m", "mcp_servers.recon_server"],
+      "cwd": "/home/kali/AI/developing/BugHound/bughound",
+      "env": {
+        "PYTHONPATH": "/home/kali/AI/developing/BugHound/bughound",
+        "BUGHOUND_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}

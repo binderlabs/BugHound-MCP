@@ -1,0 +1,63 @@
+# Example configuration file for BugHound
+# Copy this to config.yaml and modify as needed
+
+bughound:
+  # AI provider configuration
+  ai:
+    provider: "openai"  # or "anthropic"
+    model: "gpt-4"
+    api_key: "${OPENAI_API_KEY}"  # Set via environment variable
+    temperature: 0.7
+    max_tokens: 2000
+    
+  # Security tools configuration
+  tools:
+    subfinder:
+      timeout: 300
+      threads: 10
+      recursive: true
+      sources:
+        - "crtsh"
+        - "hackertarget"
+        - "threatcrowd"
+      
+    nmap:
+      timeout: 600
+      scan_type: "default"  # or "aggressive", "stealth"
+      ports: "1-1000"
+      
+  # Workflow settings
+  workflows:
+    default_mode: "quick"  # or "deep", "custom"
+    max_concurrent_tools: 3
+    retry_attempts: 2
+    
+  # Security restrictions
+  security:
+    rate_limit: 60  # requests per minute
+    allowed_targets:
+      - "*.com"
+      - "*.org"
+      - "*.net"
+      - "*.io"
+    blocked_targets:
+      - "localhost"
+      - "127.0.0.1"
+      - "0.0.0.0"
+      - "192.168.*"
+      - "10.*"
+      - "172.16.*"
+      
+  # Workspace management
+  workspace:
+    base_dir: "workspaces"
+    retention_days: 30
+    max_size_mb: 1000
+    
+  # Logging configuration
+  logging:
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+    format: "json"  # or "text"
+    file: "logs/bughound.log"
+    max_size_mb: 100
+    backup_count: 5

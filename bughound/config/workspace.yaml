@@ -1,0 +1,60 @@
+# BugHound Workspace Configuration
+# This file controls workspace behavior, auto-archiving, size limits, and preferences
+
+archive_settings:
+  # Auto-archiving configuration
+  enabled: true
+  max_age_days: 30              # Auto-archive workspaces after 30 days
+  compression_level: 6          # Compression level (1-9, higher = more compressed)
+  remove_original: false        # Keep original workspace after archiving
+  preserve_reports: true        # Always preserve reports during archiving
+
+size_limits:
+  # Workspace size and storage limits
+  max_workspace_size_mb: 1024   # Maximum size for individual workspace (1GB)
+  max_total_workspaces_gb: 10   # Maximum total storage for all workspaces (10GB)
+  cleanup_threshold: 0.8        # Start cleanup when 80% of storage is used
+  auto_cleanup_enabled: true    # Enable automatic cleanup
+
+report_preferences:
+  # Default report generation settings
+  default_formats:              # Default report formats to generate
+    - markdown
+    - html
+  include_ai_insights: true     # Include AI-generated insights in reports
+  executive_level: false        # Use executive-friendly language
+  include_evidence: true        # Include evidence in reports
+  auto_generate: true           # Automatically generate reports after scans
+
+evidence_settings:
+  # Evidence collection configuration
+  auto_collect: true            # Automatically collect evidence during scans
+  max_evidence_per_finding: 10  # Maximum evidence items per finding
+  include_screenshots: true     # Capture screenshots when possible
+  include_payloads: true        # Save payloads used in scans
+  include_responses: true       # Save server responses
+  max_response_size_kb: 100     # Maximum response size to save (KB)
+  evidence_formats:             # Evidence formats to generate
+    - json
+    - raw
+    - markdown
+
+security_settings:
+  # Security and privacy configuration
+  anonymize_targets: false      # Anonymize target domains in logs
+  encrypt_sensitive_data: false # Encrypt sensitive data at rest
+  secure_delete: false          # Use secure deletion for sensitive files
+  audit_logging: true           # Enable detailed audit logging
+  access_control: false         # Enable access control features
+
+performance_settings:
+  # Performance and resource configuration
+  max_concurrent_scans: 3       # Maximum concurrent scans
+  default_scan_timeout: 3600    # Default scan timeout (1 hour)
+  cache_results: true           # Cache scan results for faster access
+  cache_ttl_hours: 24           # Cache time-to-live (hours)
+  parallel_tool_execution: true # Execute tools in parallel when possible
+
+# Metadata (automatically managed)
+created_at: ""
+last_updated: ""

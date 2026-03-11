@@ -1,0 +1,40 @@
+bughound:
+  ai:
+    provider: "openai"
+    model: "gpt-4"
+    temperature: 0.7
+    max_tokens: 2000
+    
+  tools:
+    subfinder:
+      timeout: 300
+      threads: 10
+      recursive: true
+      
+    nmap:
+      timeout: 600
+      scan_type: "default"
+      
+  workflows:
+    default_mode: "quick"
+    max_concurrent_tools: 3
+    
+  security:
+    rate_limit: 60  # requests per minute
+    allowed_targets:
+      - "*.com"
+      - "*.org"
+      - "*.net"
+    blocked_targets:
+      - "localhost"
+      - "127.0.0.1"
+      - "0.0.0.0"
+      
+  workspace:
+    base_dir: "workspaces"
+    retention_days: 30
+    
+  logging:
+    level: "INFO"
+    format: "json"
+    file: "logs/bughound.log"
