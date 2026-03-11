@@ -7,66 +7,66 @@ Target: Black Hat Arsenal demo-ready by Day 10
 ### Day 1: Cleanup + Project Skeleton
 
 **Cleanup (delete dead code):**
-- [ ] Rotate/remove hardcoded OpenRouter API key from config.py
-- [ ] Delete: commander_server.py
-- [ ] Delete: workflow_engine.py
-- [ ] Delete: ai_analyzer.py
-- [ ] Delete: ai_client.py
-- [ ] Delete: prioritization_engine.py
-- [ ] Delete: prompts/recon_analysis.py
-- [ ] Delete: scan_modes.py
-- [ ] Delete: recon_server.py.bak
-- [ ] Delete: phase2_test.log
-- [ ] Delete: literal dash-named files (bughound/- and BugHound/-)
-- [ ] Delete: backups/ directory (full source duplicate)
-- [ ] Delete: docs/legacy_plans/ directory
-- [ ] Delete: bughound/scripts/ (manual test scripts)
-- [ ] Delete: duplicate config/ directory at project root
-- [ ] Delete: old workspaces in workspaces/
-- [ ] Archive (move to _archive/): change_detector.py
-- [ ] Archive (move to _archive/): evidence_collector.py
+- [x] Rotate/remove hardcoded OpenRouter API key from config.py
+- [x] Delete: commander_server.py
+- [x] Delete: workflow_engine.py
+- [x] Delete: ai_analyzer.py
+- [x] Delete: ai_client.py
+- [x] Delete: prioritization_engine.py
+- [x] Delete: prompts/recon_analysis.py
+- [x] Delete: scan_modes.py
+- [x] Delete: recon_server.py.bak
+- [x] Delete: phase2_test.log
+- [x] Delete: literal dash-named files (bughound/- and BugHound/-)
+- [x] Delete: backups/ directory (full source duplicate)
+- [x] Delete: docs/legacy_plans/ directory
+- [x] Delete: bughound/scripts/ (manual test scripts)
+- [x] Delete: duplicate config/ directory at project root
+- [x] Delete: old workspaces in workspaces/
+- [x] Archive (move to _archive/): change_detector.py
+- [x] Archive (move to _archive/): evidence_collector.py
 
 **New project skeleton:**
-- [ ] Create bughound/server.py (single MCP server entry point)
-- [ ] Create bughound/config/settings.py
-- [ ] Create bughound/core/ directory with __init__.py
-- [ ] Create bughound/stages/ directory with __init__.py
-- [ ] Create bughound/schemas/ directory with __init__.py
-- [ ] Create bughound/utils/ directory with __init__.py
-- [ ] Move existing tool wrappers into new bughound/tools/ structure
-- [ ] Init git repo
-- [ ] First commit: "clean slate"
+- [x] Create bughound/server.py (single MCP server entry point)
+- [x] Create bughound/config/settings.py
+- [x] Create bughound/core/ directory with __init__.py
+- [x] Create bughound/stages/ directory with __init__.py
+- [x] Create bughound/schemas/ directory with __init__.py
+- [x] Create bughound/utils/ directory with __init__.py
+- [x] Move existing tool wrappers into new bughound/tools/ structure
+- [x] Init git repo
+- [x] First commit: "clean slate"
 
 ### Day 2: Core Infrastructure + Context Files
 
 **Context survival setup:**
-- [ ] CLAUDE.md in project root (copy from setup files)
-- [ ] .claude/skills/ directory with all skill files
-- [ ] DEVLOG.md initialized
-- [ ] PLAN.md (this file) in project root
-- [ ] Install context-manager agent
+- [x] CLAUDE.md in project root (copy from setup files)
+- [x] .claude/skills/ directory with all skill files
+- [x] DEVLOG.md initialized
+- [x] PLAN.md (this file) in project root
+- [x] Install context-manager agent
 
 **Core infrastructure (3 critical files):**
-- [ ] core/tool_runner.py: unified subprocess runner
+- [x] core/tool_runner.py: unified subprocess runner
   - Binary discovery with configurable PATH
   - Pre-flight is_available() check
   - Async execution with timeout
   - Structured error responses
   - Input sanitization (no shell injection)
-- [ ] core/job_manager.py: async job lifecycle
+- [x] core/job_manager.py: async job lifecycle
   - Create job with unique ID
   - Status tracking with real percentage
   - Configurable timeout per job
   - Job cancellation support
   - Job-to-workspace linking (indexed, not linear scan)
   - Cleanup of old completed jobs
-- [ ] core/workspace.py: new workspace management
+- [x] core/workspace.py: new workspace management
   - Data-type-based directory structure
   - Lazy directory creation
   - Pydantic schema validation on writes
   - metadata.json + config.json separation
   - Workspace CRUD operations
-- [ ] Git commit: "core infrastructure"
+- [x] Git commit: "core infrastructure"
 
 ## Phase 1: Stage 0 + Stage 1 (Days 3-4)
 

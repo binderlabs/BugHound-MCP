@@ -124,10 +124,10 @@ BugHound/
 
 <!-- UPDATE THIS SECTION DAILY -->
 
-**Phase:** Phase 0 - Foundation
-**Current task:** Initial cleanup + project skeleton
-**Completed:** Nothing yet (starting fresh refactor)
-**Next:** Delete dead code, create new skeleton, build core infrastructure
+**Phase:** Phase 1 - Stage 0 + Stage 1
+**Current task:** Day 3 - Stage 0 (target classifier + init MCP tools)
+**Completed:** Phase 0 complete. Cleanup done, project skeleton created, all 3 core infrastructure modules built (tool_runner, job_manager, workspace)
+**Next:** Build target_classifier.py, register bughound_init + workspace tools in server.py
 **Blockers:** None
 
 ## Key Decisions Log
