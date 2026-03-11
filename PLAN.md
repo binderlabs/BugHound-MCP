@@ -110,15 +110,15 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 ### Day 5: Discover - Probing + Fingerprinting
 
-- [ ] stages/discover.py orchestration module
-- [ ] Migrate tool wrappers:
-  - [ ] httpx (probe + fingerprint)
-  - [ ] wafw00f (WAF detection)
-- [ ] Probing as noise filter (tag parked/dead/redirect-only hosts)
-- [ ] Register MCP tool:
-  - [ ] bughound_discover (sync for single host, async for broad)
-- [ ] Output: hosts/live_hosts.json, hosts/technologies.json, hosts/waf.json
-- [ ] Git commit: "stage 2a - probe and fingerprint"
+- [x] stages/discover.py orchestration module
+- [x] Migrate tool wrappers:
+  - [x] httpx (probe + fingerprint)
+  - [x] wafw00f (WAF detection)
+- [x] Probing as noise filter (tag parked/dead/redirect-only hosts)
+- [x] Register MCP tool:
+  - [x] bughound_discover (sync for single host, async for broad)
+- [x] Output: hosts/live_hosts.json, hosts/technologies.json, hosts/waf.json
+- [x] Git commit: "stage 2a - probe and fingerprint"
 
 ### Day 6: Discover - URLs + JS + Secrets
 
