@@ -106,3 +106,106 @@ class JobRecord(BaseModel):
     completed_at: datetime | None = None
     result_summary: dict[str, Any] | None = None
     error: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Workspace models
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceState(str, Enum):
+    """Pipeline stage the workspace is currently in."""
+
+    INITIALIZED = "INITIALIZED"
+    ENUMERATING = "ENUMERATING"
+    DISCOVERING = "DISCOVERING"
+    ANALYZING = "ANALYZING"
+    TESTING = "TESTING"
+    VALIDATING = "VALIDATING"
+    COMPLETED = "COMPLETED"
+    ARCHIVED = "ARCHIVED"
+
+
+class StageEntry(BaseModel):
+    """One entry in the stage_history array."""
+
+    stage: int
+    status: str  # "running", "completed", "failed", "skipped"
+    started_at: datetime = Field(default_factory=_utcnow)
+    completed_at: datetime | None = None
+
+
+class WorkspaceStats(BaseModel):
+    """Aggregate statistics tracked in metadata."""
+
+    subdomains_found: int = 0
+    live_hosts: int = 0
+    urls_discovered: int = 0
+    findings_total: int = 0
+    findings_confirmed: int = 0
+
+
+class WorkspaceMetadata(BaseModel):
+    """System-managed execution state stored as metadata.json."""
+
+    workspace_id: str
+    target: str
+    target_type: TargetType | None = None
+    classification: dict[str, Any] | None = None
+    depth: str = "light"
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    current_stage: int = 0
+    state: WorkspaceState = WorkspaceState.INITIALIZED
+    stage_history: list[StageEntry] = Field(default_factory=list)
+    stats: WorkspaceStats = Field(default_factory=WorkspaceStats)
+    tool_versions: dict[str, str] = Field(default_factory=dict)
+
+
+class ScopeConfig(BaseModel):
+    """Target scope rules."""
+
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
+
+
+class TimeoutConfig(BaseModel):
+    """Per-category timeout overrides."""
+
+    passive_recon: int = 60
+    active_recon: int = 300
+    crawl_per_host: int = 300
+    dirfuzz_per_host: int = 600
+    nuclei: int = 600
+
+
+class WorkspaceConfig(BaseModel):
+    """User-managed preferences stored as config.json."""
+
+    scope: ScopeConfig = Field(default_factory=ScopeConfig)
+    depth: str = "light"
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    tool_overrides: dict[str, Any] = Field(default_factory=dict)
+    timeouts: TimeoutConfig = Field(default_factory=TimeoutConfig)
+
+
+class WorkspaceSummary(BaseModel):
+    """Lightweight workspace info for list operations."""
+
+    workspace_id: str
+    target: str
+    state: WorkspaceState
+    depth: str
+    created_at: datetime
+    updated_at: datetime
+    stats: WorkspaceStats
+
+
+class DataWrapper(BaseModel):
+    """Standard JSON wrapper for all data files written to workspace."""
+
+    generated_at: datetime = Field(default_factory=_utcnow)
+    generated_by: str = ""
+    target: str = ""
+    count: int = 0
+    data: list[Any] = Field(default_factory=list)
