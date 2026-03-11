@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from bughound.core import target_classifier, workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import WorkspaceState
+from bughound.stages import discover as stage_discover
 from bughound.stages import enumerate as stage_enumerate
 
 # Shared job manager instance (lives for server lifetime)
@@ -199,6 +200,27 @@ async def bughound_enumerate(workspace_id: str) -> str:
 async def bughound_enumerate_deep(workspace_id: str) -> str:
     """Start deep enumeration as a background job."""
     result = await stage_enumerate.enumerate_deep(workspace_id, _job_manager)
+    return json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# Stage 2: Discover
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_discover",
+    description=(
+        "Discover attack surface: probe live hosts, fingerprint technologies, "
+        "detect WAF/CDN, generate intelligence flags (NO_WAF, NON_CDN_IP, "
+        "OLD_TECH, GRAPHQL, DEFAULT_PAGE, DEBUG_MODE). Sync for single hosts "
+        "(~30s), async job for broad domains. Requires bughound_init first; "
+        "for broad domains also requires bughound_enumerate."
+    ),
+)
+async def bughound_discover(workspace_id: str) -> str:
+    """Run Stage 2 discovery."""
+    result = await stage_discover.discover(workspace_id, _job_manager)
     return json.dumps(result)
 
 

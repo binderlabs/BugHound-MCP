@@ -1,47 +1,66 @@
-from typing import Dict, Any, List
+"""Wafw00f WAF/CDN detection wrapper.
+
+Detects Web Application Firewalls on live hosts.
+Uses -o - -f json for structured output to stdout.
+"""
+
+from __future__ import annotations
+
 import json
-import os
-import tempfile
-from ..base_tool import BaseTool, ToolResult
+from typing import Any
 
-class Wafw00fTool(BaseTool):
-    """Wrapper for wafw00f WAF detection"""
-    def __init__(self):
-        super().__init__("wafw00f", timeout=90)
+from bughound.core import tool_runner
+from bughound.schemas.models import ToolResult
 
-    async def execute(self, target: str, options: Dict[str, Any]) -> ToolResult:
+BINARY = "wafw00f"
+TIMEOUT = 90
+
+
+def is_available() -> bool:
+    return tool_runner.is_available(BINARY)
+
+
+async def execute(
+    target: str,
+    timeout: int = TIMEOUT,
+) -> ToolResult:
+    """Run wafw00f against a single URL or domain."""
+    # Ensure target has a scheme for wafw00f
+    if not target.startswith(("http://", "https://")):
+        target = f"https://{target}"
+
+    result = await tool_runner.run(
+        BINARY,
+        [target, "-o", "-", "-f", "json"],
+        target=target,
+        timeout=timeout,
+    )
+
+    if not result.success:
+        return result
+
+    # wafw00f JSON output may be wrapped in text. Extract the JSON array.
+    raw = "\n".join(result.results)
+    waf_results: list[dict[str, Any]] = []
+
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start != -1 and end != -1:
         try:
-            cmd = self._build_command(target, options)
-            raw_output = await self._run_command(cmd)
-            parsed_data = self._parse_output(raw_output)
-            return ToolResult(success=True, data=parsed_data, raw_output=raw_output)
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
-
-    def _build_command(self, target: str, options: Dict[str, Any]) -> List[str]:
-        # Support either a single target or a file of targets
-        cmd = ["wafw00f", "-f", "json"]
-        
-        target_file = options.get("target_file")
-        if target_file and os.path.exists(target_file):
-            cmd.extend(["-i", target_file])
-        else:
-            # If target is a fast list we might pass it differently or just run individually
-            cmd.append(target)
-            
-        return cmd
-
-    def _parse_output(self, raw_output: str) -> Dict[str, Any]:
-        results = []
-        try:
-            # wafw00f outputs JSON when -f json is passed, but it might have surrounding text.
-            # We try to extract the JSON array.
-            start_idx = raw_output.find('[')
-            end_idx = raw_output.rfind(']') + 1
-            if start_idx != -1 and end_idx != -1:
-                json_str = raw_output[start_idx:end_idx]
-                results = json.loads(json_str)
-        except Exception:
+            waf_results = json.loads(raw[start : end + 1])
+        except json.JSONDecodeError:
             pass
-            
-        return {"waf_results": results}
+
+    # Normalize to consistent format
+    parsed: list[dict[str, Any]] = []
+    for entry in waf_results:
+        parsed.append({
+            "url": entry.get("url", target),
+            "waf": entry.get("firewall", entry.get("waf", None)),
+            "manufacturer": entry.get("manufacturer", ""),
+            "detected": entry.get("detected", False),
+        })
+
+    result.results = parsed
+    result.result_count = len(parsed)
+    return result
