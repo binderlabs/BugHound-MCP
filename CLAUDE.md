@@ -124,10 +124,10 @@ BugHound/
 
 <!-- UPDATE THIS SECTION DAILY -->
 
-**Phase:** Phase 1 - Stage 0 + Stage 1
-**Current task:** Day 3 - Stage 0 (target classifier + init MCP tools)
-**Completed:** Phase 0 complete. Cleanup done, project skeleton created, all 3 core infrastructure modules built (tool_runner, job_manager, workspace)
-**Next:** Build target_classifier.py, register bughound_init + workspace tools in server.py
+**Phase:** Phase 3 - Stage 3 + Stage 4
+**Current task:** Day 7 - Stage 3 (Analyze / Decision Engine)
+**Completed:** Stages 0-2 complete. 10 MCP tools registered. Full attack surface discovery: httpx probe, WAF detection, URL crawling (gau + waybackurls + gospider), JS analysis with secret extraction, parameter harvesting, intelligence flags.
+**Next:** Build bughound_get_attack_surface + bughound_submit_scan_plan
 **Blockers:** None
 
 ## Key Decisions Log

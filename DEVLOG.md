@@ -106,8 +106,50 @@
 
 ---
 
+## 2026-03-11/12 - Days 5-6: Stage 2 (Discover)
+
+### What Was Built
+
+**Day 5 — Phase 2A: Probing + Fingerprinting**
+
+- Rewrote httpx.py (511 → 99 lines): uses tool_runner.run(), temp file for batch targets, JSONL parsing with full fingerprint capture (url, host, status, title, tech, cdn, web_server, etc.)
+- Rewrote wafw00f.py (47 → 65 lines): uses tool_runner.run(), JSON array extraction from mixed output
+- Built stages/discover.py Phase 2A: httpx probe → WAF detection → intelligence flag generation
+- 6 intelligence flags: NO_WAF, NON_CDN_IP, DEFAULT_PAGE, GRAPHQL, OLD_TECH, DEBUG_MODE
+- OLD_TECH matches 10 patterns (WordPress <6, jQuery <3.5, PHP 5.x, Apache 2.2, etc.)
+- bughound_discover MCP tool: sync for single hosts, async job for broad domains
+- Tested on scanme.nmap.org: Apache 2.4.7 + Ubuntu detected in 6.35s
+
+**Day 6 — Phase 2B-2D: URLs, JS, Secrets, Parameters**
+
+- Rewrote gau.py (49 → 38 lines): tool_runner pattern, deduped URL output
+- Rewrote waybackurls.py (490 → 36 lines): tool_runner pattern
+- Created gospider.py (66 lines): new wrapper, JSONL parsing, depth-configurable crawler
+- Created js_analyzer.py (205 lines): pure Python, no binary needed
+  - 10 secret patterns (AWS keys, API keys, tokens, private keys, JWTs, etc.)
+  - 5 endpoint extraction patterns (fetch, axios, API paths, internal routes)
+  - Concurrent download with semaphore (max 20 parallel), 5MB size cap
+- Extended discover.py with Phases 2B-2D:
+  - 2B: gau + waybackurls in parallel + gospider crawl → urls/crawled.json
+  - 2C: JS analysis → secrets/js_secrets.json + endpoints/api_endpoints.json + endpoints/hidden_endpoints.json
+  - 2D: Parameter extraction from all URLs → urls/parameters.json
+- Progress callbacks for async jobs (10% → 25% → 40% → 65% → 85% → 100%)
+- Hidden endpoint detection: cross-reference JS endpoints vs crawled URLs
+
+### Design Decisions
+- gospider over katana: gospider was already installed
+- Custom js_analyzer over jsluice/linkfinder: no binary dependency, always available, regex-based is good enough for recon
+- Hidden endpoints (in JS but not crawled) are high-value — separated into their own file
+- Secret values truncated at 60 chars in output — don't leak full credentials in MCP responses
+- gospider capped at 10 hosts, JS analysis at 100 files — prevent runaway on broad domains
+
+### Current Tool Count: 10 MCP tools, 10 tool wrappers
+
+### What's Next
+- Phase 3 Day 7: Stage 3 (Analyze) — bughound_get_attack_surface + bughound_submit_scan_plan
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
-<!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
-<!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

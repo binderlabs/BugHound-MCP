@@ -122,15 +122,15 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 ### Day 6: Discover - URLs + JS + Secrets
 
-- [ ] Migrate/create tool wrappers:
-  - [ ] gau (historical URLs)
-  - [ ] waybackurls (historical URLs)
-  - [ ] gospider OR katana (crawler) -- pick whichever installs cleanly
-  - [ ] jsluice OR linkfinder (JS analysis) -- pick whichever works
-- [ ] Parameter harvesting from discovered URLs
-- [ ] JS secret extraction
-- [ ] Output: urls/crawled.json, urls/parameters.json, secrets/js_secrets.json
-- [ ] Git commit: "stage 2b - discovery complete"
+- [x] Migrate/create tool wrappers:
+  - [x] gau (historical URLs)
+  - [x] waybackurls (historical URLs)
+  - [x] gospider OR katana (crawler) -- gospider installed, wrapper created
+  - [x] jsluice OR linkfinder (JS analysis) -- built custom js_analyzer.py (regex-based, no binary)
+- [x] Parameter harvesting from discovered URLs
+- [x] JS secret extraction
+- [x] Output: urls/crawled.json, urls/parameters.json, secrets/js_secrets.json
+- [x] Git commit: "stage 2b - discovery complete"
 
 **HARD RULE: if a new tool wrapper takes more than 2 hours, skip it. Use existing gau + waybackurls as fallback for URL discovery.**
 
