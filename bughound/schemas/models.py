@@ -209,3 +209,19 @@ class DataWrapper(BaseModel):
     target: str = ""
     count: int = 0
     data: list[Any] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Target classification (Stage 0 output)
+# ---------------------------------------------------------------------------
+
+
+class TargetClassification(BaseModel):
+    """Result of classifying a user-provided target string."""
+
+    target_type: TargetType
+    original_input: str
+    normalized_targets: list[str]
+    stages_to_run: list[int]
+    depth: str = "light"
+    skip_reasons: dict[str, str] = Field(default_factory=dict)
