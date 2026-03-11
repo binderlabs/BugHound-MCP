@@ -28,5 +28,10 @@ WORKSPACE_BASE_DIR: Path = Path(
     )
 )
 
+# --- Jobs ---
+MAX_CONCURRENT_JOBS: int = int(os.getenv("BUGHOUND_MAX_CONCURRENT_JOBS", "5"))
+JOB_TIMEOUT: int = int(os.getenv("BUGHOUND_JOB_TIMEOUT", "3600"))  # 1 hour default
+JOB_CLEANUP_MAX_AGE_HOURS: int = int(os.getenv("BUGHOUND_JOB_CLEANUP_HOURS", "24"))
+
 # --- Logging ---
 LOG_LEVEL: str = os.getenv("BUGHOUND_LOG_LEVEL", "INFO")

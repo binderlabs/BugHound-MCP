@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -67,3 +68,41 @@ class TargetType(str, Enum):
     SINGLE_HOST = "single_host"
     SINGLE_ENDPOINT = "single_endpoint"
     URL_LIST = "url_list"
+
+
+# ---------------------------------------------------------------------------
+# Job manager models
+# ---------------------------------------------------------------------------
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class JobStatus(str, Enum):
+    """Lifecycle states for an async job."""
+
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    TIMED_OUT = "TIMED_OUT"
+
+
+class JobRecord(BaseModel):
+    """Persistent state for a single background job."""
+
+    job_id: str
+    workspace_id: str
+    job_type: str
+    target: str
+    status: JobStatus = JobStatus.PENDING
+    progress_pct: int = Field(default=0, ge=0, le=100)
+    message: str = ""
+    current_module: str = ""
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+    completed_at: datetime | None = None
+    result_summary: dict[str, Any] | None = None
+    error: str | None = None
