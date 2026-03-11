@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .env
 workspaces/
+bughound-workspaces/
 *.log
 .venv/
 node_modules/

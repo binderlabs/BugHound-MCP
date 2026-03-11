@@ -67,12 +67,15 @@ async def bughound_init(target: str, depth: str = "light") -> str:
 
     next_step = _suggest_next(classification.stages_to_run)
 
+    ws_path = workspace.workspace_dir(meta.workspace_id)
+
     return (
         f"## Workspace Created Successfully\n\n"
         f"**Workspace ID:** `{meta.workspace_id}`\n"
         f"**Target:** {target}\n"
         f"**Target Type:** {classification.target_type.value}\n"
         f"**Depth:** {depth}\n"
+        f"**Path:** `{ws_path}`\n"
         f"**Normalized Targets:** {', '.join(classification.normalized_targets)}\n\n"
         f"**Pipeline stages to run:** {stages_str}\n"
         f"{skips}\n"

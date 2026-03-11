@@ -21,10 +21,12 @@ TOOL_PATHS: list[str] = (
 DEFAULT_TIMEOUT: int = int(os.getenv("BUGHOUND_DEFAULT_TIMEOUT", "120"))
 
 # --- Workspace ---
+# Default: ./bughound-workspaces/ in the current working directory
+# (where the AI agent CLI is running, not the BugHound source tree)
 WORKSPACE_BASE_DIR: Path = Path(
     os.getenv(
         "BUGHOUND_WORKSPACE_DIR",
-        str(Path(__file__).resolve().parent.parent.parent / "workspaces"),
+        str(Path.cwd() / "bughound-workspaces"),
     )
 )
 
