@@ -85,24 +85,24 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 ### Day 4: Stage 1 (Enumerate)
 
-- [ ] stages/enumerate.py orchestration module
-- [ ] Migrate tool wrappers to new tool_runner base:
-  - [ ] subfinder
-  - [ ] assetfinder
-  - [ ] findomain
-  - [ ] crtsh (API-based)
-- [ ] Light enumeration: parallel passive sources + DNS resolution
-- [ ] Deep enumeration: async job with bruteforce + permutations
-- [ ] Auto-skip for non-BROAD_DOMAIN targets
-- [ ] Register MCP tools:
-  - [ ] bughound_enumerate (sync, light)
-  - [ ] bughound_enumerate_deep (async, deep)
-  - [ ] bughound_job_status (generic job polling)
-  - [ ] bughound_job_results (generic result retrieval)
-  - [ ] bughound_job_cancel (generic job cancellation)
-- [ ] Output: subdomains/all.txt, subdomains/sources.json, dns/records.json
-- [ ] Test: enumerate on real target, verify output
-- [ ] Git commit: "stage 1 - enumerate"
+- [x] stages/enumerate.py orchestration module
+- [x] Migrate tool wrappers to new tool_runner base:
+  - [x] subfinder
+  - [x] assetfinder
+  - [x] findomain
+  - [x] crtsh (API-based)
+- [x] Light enumeration: parallel passive sources + DNS resolution
+- [x] Deep enumeration: async job with bruteforce + permutations
+- [x] Auto-skip for non-BROAD_DOMAIN targets
+- [x] Register MCP tools:
+  - [x] bughound_enumerate (sync, light)
+  - [x] bughound_enumerate_deep (async, deep)
+  - [x] bughound_job_status (generic job polling)
+  - [x] bughound_job_results (generic result retrieval)
+  - [x] bughound_job_cancel (generic job cancellation)
+- [x] Output: subdomains/all.txt, subdomains/sources.json, dns/records.json
+- [x] Test: enumerate on real target, verify output
+- [x] Git commit: "stage 1 - enumerate"
 
 **Day 4 Checkpoint:** target input -> classification -> workspace -> enumerated subdomains
 
