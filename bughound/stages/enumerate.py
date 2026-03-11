@@ -15,7 +15,7 @@ import structlog
 from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, ToolResult, WorkspaceState
-from bughound.tools.recon import assetfinder, crtsh, dns_resolver, findomain, subfinder
+from bughound.tools.recon import amass, assetfinder, crtsh, dns_resolver, findomain, subfinder
 
 logger = structlog.get_logger()
 
@@ -277,6 +277,8 @@ def _get_available_tools() -> dict[str, Any]:
         tools["assetfinder"] = assetfinder.execute
     if findomain.is_available():
         tools["findomain"] = findomain.execute
+    if amass.is_available():
+        tools["amass"] = amass.execute
 
     return tools
 
