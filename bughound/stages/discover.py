@@ -16,7 +16,7 @@ import structlog
 from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, WorkspaceState
-from bughound.tools.discovery import js_analyzer
+from bughound.tools.discovery import cors_checker, js_analyzer, sensitive_paths, takeover_checker
 from bughound.tools.recon import gau, gospider, httpx, wafw00f, waybackurls
 
 logger = structlog.get_logger()
@@ -120,7 +120,7 @@ async def _run_discover(
     # Phase 2A: Probe + Fingerprint
     # ===================================================================
     if progress_cb:
-        await progress_cb(10, "Probing live hosts", "httpx")
+        await progress_cb(5, "Probing live hosts", "httpx")
 
     if not httpx.is_available():
         await workspace.add_stage_history(workspace_id, 2, "failed")
@@ -148,7 +148,7 @@ async def _run_discover(
 
     # WAF detection
     if progress_cb:
-        await progress_cb(25, "Detecting WAF/CDN", "wafw00f")
+        await progress_cb(20, "Detecting WAF/CDN", "wafw00f")
 
     waf_results: list[dict[str, Any]] = []
     if wafw00f.is_available():
@@ -214,7 +214,7 @@ async def _run_discover(
     # Phase 2B: URL Discovery
     # ===================================================================
     if progress_cb:
-        await progress_cb(40, "Discovering URLs and endpoints", "url_discovery")
+        await progress_cb(30, "Discovering URLs and endpoints", "url_discovery")
 
     # Extract the root domain for gau/waybackurls
     classification = meta.classification or {}
@@ -320,7 +320,7 @@ async def _run_discover(
 
     if js_urls:
         if progress_cb:
-            await progress_cb(65, "Analyzing JavaScript files", "js_analyzer")
+            await progress_cb(50, "Analyzing JavaScript files", "js_analyzer")
 
         js_result = await js_analyzer.analyze_js_files(
             js_urls[:100],  # cap at 100 JS files
@@ -366,17 +366,151 @@ async def _run_discover(
             files_written.append("endpoints/hidden_endpoints.json")
 
     # ===================================================================
-    # Phase 2D: Parameter Summary
+    # Phase 2C-param: Parameter Summary
     # ===================================================================
-    if progress_cb:
-        await progress_cb(85, "Building parameter summary", "parameters")
-
     if params_by_path:
         await workspace.write_data(
             workspace_id, "urls/parameters.json", params_by_path,
             generated_by="discover", target=target_label,
         )
         files_written.append("urls/parameters.json")
+
+    total_params = sum(len(e.get("params", [])) for e in params_by_path) if params_by_path else 0
+
+    # ===================================================================
+    # Phase 2D: Sensitive Path Checks
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(65, "Checking sensitive paths", "sensitive_paths")
+
+    sensitive_findings: dict[str, list[dict[str, Any]]] = {}
+    live_host_urls = [h["url"] for h in live_hosts if h.get("url")]
+    try:
+        sensitive_findings = await sensitive_paths.check_hosts(
+            live_host_urls, max_hosts=30,
+        )
+    except Exception as exc:
+        warnings.append(f"Sensitive path check failed: {exc}")
+
+    # Generate flags from sensitive path findings
+    sp_flag_count = 0
+    if sensitive_findings:
+        all_sp: list[dict[str, Any]] = []
+        for host_url, findings in sensitive_findings.items():
+            for f in findings:
+                all_sp.append({**f, "host_url": host_url})
+                # Add flag to the matching flagged_host
+                for fh in flagged_hosts:
+                    if fh.get("url") == host_url:
+                        flag_str = f"{f['category']}: {f['path']} accessible"
+                        if flag_str not in fh["flags"]:
+                            fh["flags"].append(flag_str)
+                            sp_flag_count += 1
+
+        await workspace.write_data(
+            workspace_id, "hosts/sensitive_paths.json", all_sp,
+            generated_by="sensitive_paths", target=target_label,
+        )
+        files_written.append("hosts/sensitive_paths.json")
+
+    # Re-write flags.json with updated flags
+    hosts_with_flags = [h for h in flagged_hosts if h.get("flags")]
+    if hosts_with_flags:
+        flags_summary = [{"host": h["host"], "url": h["url"], "flags": h["flags"]} for h in hosts_with_flags]
+        await workspace.write_data(
+            workspace_id, "hosts/flags.json", flags_summary,
+            generated_by="discover", target=target_label,
+        )
+        if "hosts/flags.json" not in files_written:
+            files_written.append("hosts/flags.json")
+
+    # ===================================================================
+    # Phase 2E: Subdomain Takeover (broad domain only)
+    # ===================================================================
+    takeover_results: list[dict[str, Any]] = []
+    takeover_confirmed: list[dict[str, Any]] = []
+
+    if meta.target_type == TargetType.BROAD_DOMAIN:
+        if progress_cb:
+            await progress_cb(78, "Checking subdomain takeover", "takeover")
+
+        # Dead subs = in subdomains/all.txt but not in live hosts
+        live_hosts_set = {h.get("host", "").lower() for h in live_hosts}
+        all_subs_data = await workspace.read_data(workspace_id, "subdomains/all.txt")
+        all_subs = all_subs_data if isinstance(all_subs_data, list) else []
+        dead_subs = [s for s in all_subs if s.lower() not in live_hosts_set]
+
+        # Load DNS records for CNAME lookup
+        dns_data = await workspace.read_data(workspace_id, "dns/records.json")
+        dns_lookup: dict[str, dict[str, Any]] = {}
+        if isinstance(dns_data, dict) and "data" in dns_data:
+            for rec in dns_data["data"]:
+                if isinstance(rec, dict) and "domain" in rec:
+                    dns_lookup[rec["domain"]] = rec
+
+        if dead_subs:
+            try:
+                takeover_results = await takeover_checker.check_takeovers(
+                    dead_subs[:100], dns_records=dns_lookup,
+                )
+            except Exception as exc:
+                warnings.append(f"Takeover check failed: {exc}")
+
+            # Also try nuclei if available
+            try:
+                takeover_confirmed = await takeover_checker.check_takeovers_nuclei(dead_subs[:100])
+            except Exception:
+                pass
+
+        if takeover_results:
+            await workspace.write_data(
+                workspace_id, "cloud/takeover_candidates.json", takeover_results,
+                generated_by="takeover_checker", target=target_label,
+            )
+            files_written.append("cloud/takeover_candidates.json")
+
+        if takeover_confirmed:
+            await workspace.write_data(
+                workspace_id, "cloud/takeover_confirmed.json", takeover_confirmed,
+                generated_by="nuclei", target=target_label,
+            )
+            files_written.append("cloud/takeover_confirmed.json")
+
+    # ===================================================================
+    # Phase 2F: CORS Probing
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(88, "Testing CORS configuration", "cors")
+
+    cors_results: list[dict[str, Any]] = []
+    try:
+        cors_results = await cors_checker.check_cors(live_host_urls, max_hosts=50)
+    except Exception as exc:
+        warnings.append(f"CORS check failed: {exc}")
+
+    if cors_results:
+        await workspace.write_data(
+            workspace_id, "hosts/cors_results.json", cors_results,
+            generated_by="cors_checker", target=target_label,
+        )
+        files_written.append("hosts/cors_results.json")
+
+        # Add CORS flags to hosts
+        for cr in cors_results:
+            for fh in flagged_hosts:
+                if fh.get("url") == cr.get("url"):
+                    flag_str = f"CORS_MISCONFIGURED: {cr['severity']} — origin {cr['origin_tested']} reflected"
+                    if flag_str not in fh["flags"]:
+                        fh["flags"].append(flag_str)
+
+        # Re-write flags with CORS additions
+        hosts_with_flags = [h for h in flagged_hosts if h.get("flags")]
+        if hosts_with_flags:
+            flags_summary = [{"host": h["host"], "url": h["url"], "flags": h["flags"]} for h in hosts_with_flags]
+            await workspace.write_data(
+                workspace_id, "hosts/flags.json", flags_summary,
+                generated_by="discover", target=target_label,
+            )
 
     # ===================================================================
     # Finalize
@@ -387,25 +521,36 @@ async def _run_discover(
     if progress_cb:
         await progress_cb(100, "Discovery complete", "done")
 
-    # Build flag distribution
+    # Build flag distribution from all phases
     flag_dist: Counter[str] = Counter()
     for h in flagged_hosts:
         for f in h.get("flags", []):
             flag_dist[f.split(":")[0]] += 1
 
-    # Secret type summary (counts only, not values)
     secret_types: Counter[str] = Counter()
     for s in js_secrets:
         secret_types[s.get("type", "UNKNOWN")] += 1
 
-    total_params = sum(len(e.get("params", [])) for e in params_by_path) if params_by_path else 0
+    # Sensitive path category counts
+    sp_categories: Counter[str] = Counter()
+    for findings_list in sensitive_findings.values():
+        for f in findings_list:
+            sp_categories[f["category"]] += 1
+
+    # CORS severity counts
+    cors_severities: Counter[str] = Counter()
+    for cr in cors_results:
+        cors_severities[cr.get("severity", "INFO")] += 1
 
     return {
         "status": "success",
         "message": (
             f"Full discovery complete for {target_label}. "
             f"{len(live_hosts)} live hosts, {len(unique_urls)} URLs, "
-            f"{len(js_secrets)} secrets, {len(hidden_endpoints)} hidden endpoints."
+            f"{len(js_secrets)} secrets, {len(hidden_endpoints)} hidden endpoints, "
+            f"{sum(len(v) for v in sensitive_findings.values())} sensitive paths, "
+            f"{len(takeover_results)} takeover candidates, "
+            f"{len(cors_results)} CORS issues."
         ),
         "workspace_id": workspace_id,
         "files_written": files_written,
@@ -422,8 +567,14 @@ async def _run_discover(
             "endpoints_from_js": len(js_endpoints),
             "hidden_endpoints": len(hidden_endpoints),
             "parameters_harvested": total_params,
+            "sensitive_paths_found": sum(len(v) for v in sensitive_findings.values()),
+            "sensitive_path_categories": dict(sp_categories.most_common(10)),
+            "takeover_candidates": len(takeover_results),
+            "takeover_confirmed": len(takeover_confirmed),
+            "cors_vulnerable": len(cors_results),
+            "cors_severities": dict(cors_severities.most_common()),
             "top_technologies": tech_counter.most_common(10),
-            "flag_distribution": dict(flag_dist.most_common(10)),
+            "flag_distribution": dict(flag_dist.most_common(15)),
             "majority_cdn": majority_cdn,
             "httpx_time": f"{httpx_result.execution_time_seconds}s",
         },

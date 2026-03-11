@@ -231,11 +231,11 @@ async def bughound_enumerate_deep(workspace_id: str) -> str:
 @mcp.tool(
     name="bughound_discover",
     description=(
-        "Discover full attack surface: probe live hosts, fingerprint tech, detect "
-        "WAF/CDN, crawl URLs, analyze JavaScript for secrets and hidden endpoints, "
-        "harvest parameters, generate intelligence flags. Sync for single hosts "
-        "(~60s), async job for broad domains. Requires bughound_init first; "
-        "for broad domains also requires bughound_enumerate."
+        "Full attack surface discovery: probe live hosts, fingerprint technologies, "
+        "detect WAF/CDN, crawl URLs, analyze JavaScript for secrets and hidden "
+        "endpoints, check 70+ sensitive paths, detect subdomain takeovers, test "
+        "CORS misconfigurations, harvest parameters. Returns intelligence flags per "
+        "host for AI reasoning. Sync for single hosts, async for broad domains."
     ),
 )
 async def bughound_discover(workspace_id: str) -> str:
@@ -472,6 +472,32 @@ def _format_discover(result: dict[str, Any]) -> str:
     params = data.get("parameters_harvested", 0)
     if params:
         lines.append(f"**Parameters Harvested:** {params}")
+
+    # Sensitive paths
+    sp = data.get("sensitive_paths_found", 0)
+    if sp:
+        lines.append(f"\n**Sensitive Paths Found:** {sp}")
+        sp_cats = data.get("sensitive_path_categories", {})
+        if sp_cats:
+            for cat, count in sp_cats.items():
+                lines.append(f"  - {cat}: {count}")
+
+    # Takeover
+    takeover = data.get("takeover_candidates", 0)
+    if takeover:
+        lines.append(f"\n**Subdomain Takeover Candidates:** {takeover}")
+    takeover_conf = data.get("takeover_confirmed", 0)
+    if takeover_conf:
+        lines.append(f"**Takeover Confirmed (nuclei):** {takeover_conf}")
+
+    # CORS
+    cors = data.get("cors_vulnerable", 0)
+    if cors:
+        lines.append(f"\n**CORS Misconfiguration:** {cors} hosts")
+        cors_sev = data.get("cors_severities", {})
+        if cors_sev:
+            for sev, count in cors_sev.items():
+                lines.append(f"  - {sev}: {count}")
 
     # CDN
     cdn = data.get("majority_cdn")
