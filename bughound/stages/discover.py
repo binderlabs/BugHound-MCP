@@ -221,16 +221,21 @@ async def _run_discover(
     root_targets = classification.get("normalized_targets", [meta.target])
 
     all_urls: list[dict[str, str]] = []  # [{url, source}]
+    url_tool_counts: dict[str, int] = {}  # tool_name -> count of URLs found
 
     # Passive URL sources (gau + waybackurls) — run in parallel
     url_tasks: dict[str, asyncio.Task] = {}
     for root in root_targets[:3]:  # limit to first 3 roots
         if gau.is_available():
             url_tasks[f"gau:{root}"] = asyncio.create_task(gau.execute(root))
+        else:
+            url_tool_counts["gau"] = -1  # -1 = not installed
         if waybackurls.is_available():
             url_tasks[f"waybackurls:{root}"] = asyncio.create_task(waybackurls.execute(root))
+        else:
+            url_tool_counts["waybackurls"] = -1
 
-    if not url_tasks:
+    if not url_tasks and not any(v >= 0 for v in url_tool_counts.values()):
         warnings.append("No URL discovery tools (gau, waybackurls) installed.")
 
     for key, task in url_tasks.items():
@@ -238,15 +243,21 @@ async def _run_discover(
         try:
             result = await task
             if result.success:
+                count = 0
                 for u in result.results:
                     all_urls.append({"url": u, "source": tool_name})
+                    count += 1
+                url_tool_counts[tool_name] = url_tool_counts.get(tool_name, 0) + count
             else:
+                url_tool_counts.setdefault(tool_name, 0)
                 warnings.append(f"{tool_name}: {result.error.message if result.error else 'failed'}")
         except Exception as exc:
+            url_tool_counts.setdefault(tool_name, 0)
             warnings.append(f"{tool_name}: {exc}")
 
     # Active crawler (gospider) on live host URLs
     if gospider.is_available():
+        gospider_count = 0
         crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
         for ct in crawl_targets:
             try:
@@ -255,9 +266,12 @@ async def _run_discover(
                     for entry in cr.results:
                         u = entry["url"] if isinstance(entry, dict) else str(entry)
                         all_urls.append({"url": u, "source": "gospider"})
+                        gospider_count += 1
             except Exception:
                 pass
+        url_tool_counts["gospider"] = gospider_count
     else:
+        url_tool_counts["gospider"] = -1
         warnings.append("gospider not installed — active crawling skipped.")
 
     # Deduplicate URLs
@@ -400,6 +414,7 @@ async def _run_discover(
             "hosts_with_flags": len(hosts_with_flags),
             "waf_detected": sum(1 for w in waf_results if w.get("detected")),
             "urls_discovered": len(unique_urls),
+            "url_sources": url_tool_counts,
             "js_files_found": len(js_urls),
             "js_files_analyzed": min(len(js_urls), 100),
             "secrets_found": len(js_secrets),

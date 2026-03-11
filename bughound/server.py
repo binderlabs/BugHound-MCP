@@ -441,11 +441,18 @@ def _format_discover(result: dict[str, Any]) -> str:
         for flag, count in flags.items():
             lines.append(f"  - **{flag}**: {count} hosts")
 
-    # URLs
+    # URLs with per-tool breakdown
     urls = data.get("urls_discovered", 0)
-    if urls:
-        lines.append(f"\n**URLs Discovered:** {urls}")
-        lines.append(f"**JS Files Found:** {data.get('js_files_found', 0)}")
+    lines.append(f"\n**URLs Discovered:** {urls}")
+    url_sources = data.get("url_sources", {})
+    if url_sources:
+        lines.append("**URL Sources:**")
+        for tool, count in url_sources.items():
+            if count == -1:
+                lines.append(f"  - {tool}: not installed (skipped)")
+            else:
+                lines.append(f"  - {tool}: {count} URLs")
+    lines.append(f"**JS Files Found:** {data.get('js_files_found', 0)}")
 
     # Secrets
     secrets = data.get("secrets_found", 0)
