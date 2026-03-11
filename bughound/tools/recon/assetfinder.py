@@ -1,33 +1,38 @@
-from typing import Dict, Any, List
-import os
-import tempfile
-from ..base_tool import BaseTool, ToolResult
+"""Assetfinder subdomain discovery wrapper.
 
-class AssetfinderTool(BaseTool):
-    """Wrapper for assetfinder"""
-    def __init__(self):
-        super().__init__("assetfinder", timeout=120)
+Secondary passive subdomain source. Outputs line-delimited text.
+"""
 
-    async def execute(self, target: str, options: Dict[str, Any]) -> ToolResult:
-        try:
-            cmd = self._build_command(target, options)
-            raw_output = await self._run_command(cmd)
-            parsed_data = self._parse_output(raw_output)
-            return ToolResult(success=True, data=parsed_data, raw_output=raw_output)
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
+from __future__ import annotations
 
-    def _build_command(self, target: str, options: Dict[str, Any]) -> List[str]:
-        cmd = ["assetfinder", "--subs-only", target]
-        return cmd
+from bughound.core import tool_runner
+from bughound.schemas.models import ToolResult
 
-    def _parse_output(self, raw_output: str) -> Dict[str, Any]:
-        subdomains = []
-        for line in raw_output.splitlines():
-            line = line.strip()
-            if line:
-                subdomains.append({"domain": line, "source": "assetfinder"})
-        return {
-            "subdomains": subdomains,
-            "count": len(subdomains)
-        }
+BINARY = "assetfinder"
+TIMEOUT = 60
+
+
+def is_available() -> bool:
+    return tool_runner.is_available(BINARY)
+
+
+async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
+    """Run assetfinder against a domain."""
+    result = await tool_runner.run(
+        BINARY,
+        ["--subs-only", target],
+        target=target,
+        timeout=timeout,
+    )
+
+    if not result.success:
+        return result
+
+    # Output is line-delimited subdomains
+    deduped = sorted(set(
+        line.strip().lower() for line in result.results if line.strip()
+    ))
+    result.results = deduped
+    result.result_count = len(deduped)
+
+    return result

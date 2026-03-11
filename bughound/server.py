@@ -7,7 +7,12 @@ import json
 from mcp.server.fastmcp import FastMCP
 
 from bughound.core import target_classifier, workspace
+from bughound.core.job_manager import JobManager
 from bughound.schemas.models import WorkspaceState
+from bughound.stages import enumerate as stage_enumerate
+
+# Shared job manager instance (lives for server lifetime)
+_job_manager = JobManager()
 
 mcp = FastMCP("bughound")
 
@@ -159,6 +164,136 @@ async def bughound_workspace_delete(workspace_id: str) -> str:
         "status": "error",
         "error_type": "execution_failed",
         "message": f"Failed to delete workspace '{workspace_id}'.",
+    })
+
+
+# ---------------------------------------------------------------------------
+# Stage 1: Enumerate
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_enumerate",
+    description=(
+        "Discover subdomains for a broad domain target. Stage 1: runs passive "
+        "subdomain sources (subfinder, assetfinder, findomain, crt.sh) in parallel, "
+        "resolves DNS, detects wildcards, and analyzes naming patterns. Requires "
+        "bughound_init first. Auto-skips for non-domain targets. Sync, ~30-60s."
+    ),
+)
+async def bughound_enumerate(workspace_id: str) -> str:
+    """Run light subdomain enumeration."""
+    result = await stage_enumerate.enumerate_light(workspace_id)
+    return json.dumps(result)
+
+
+@mcp.tool(
+    name="bughound_enumerate_deep",
+    description=(
+        "Deep subdomain enumeration as a background job. Stage 1 deep mode: "
+        "runs all passive sources plus active bruteforce and permutation fuzzing "
+        "if tools are available. Requires bughound_init first. Returns job_id — "
+        "poll with bughound_job_status. Async, 5-15 minutes."
+    ),
+)
+async def bughound_enumerate_deep(workspace_id: str) -> str:
+    """Start deep enumeration as a background job."""
+    result = await stage_enumerate.enumerate_deep(workspace_id, _job_manager)
+    return json.dumps(result)
+
+
+# ---------------------------------------------------------------------------
+# Jobs
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_job_status",
+    description=(
+        "Check the status of an async background job. Returns progress percentage, "
+        "current module, status, and result summary if completed. Sync."
+    ),
+)
+async def bughound_job_status(job_id: str) -> str:
+    """Poll job status."""
+    status = await _job_manager.get_status(job_id)
+    if status is None:
+        return json.dumps({
+            "status": "error",
+            "error_type": "not_found",
+            "message": f"Job '{job_id}' not found.",
+        })
+    return json.dumps({
+        "status": "success",
+        "data": status,
+    })
+
+
+@mcp.tool(
+    name="bughound_job_results",
+    description=(
+        "Get results of a completed async job. Returns the workspace data "
+        "written by the job. Requires a completed job_id. Sync."
+    ),
+)
+async def bughound_job_results(job_id: str) -> str:
+    """Get completed job results."""
+    status = await _job_manager.get_status(job_id)
+    if status is None:
+        return json.dumps({
+            "status": "error",
+            "error_type": "not_found",
+            "message": f"Job '{job_id}' not found.",
+        })
+
+    if status["status"] not in ("COMPLETED", "FAILED", "TIMED_OUT"):
+        return json.dumps({
+            "status": "error",
+            "error_type": "invalid_input",
+            "message": (
+                f"Job '{job_id}' is still {status['status']}. "
+                "Wait for completion or poll with bughound_job_status."
+            ),
+        })
+
+    return json.dumps({
+        "status": "success",
+        "data": {
+            "job_status": status["status"],
+            "result_summary": status.get("result_summary"),
+            "error": status.get("error"),
+            "workspace_id": status.get("workspace_id"),
+        },
+    })
+
+
+@mcp.tool(
+    name="bughound_job_cancel",
+    description=(
+        "Cancel a running async job. Returns confirmation. Sync."
+    ),
+)
+async def bughound_job_cancel(job_id: str) -> str:
+    """Cancel a background job."""
+    try:
+        cancelled = await _job_manager.cancel_job(job_id)
+    except KeyError:
+        return json.dumps({
+            "status": "error",
+            "error_type": "not_found",
+            "message": f"Job '{job_id}' not found.",
+        })
+
+    if cancelled:
+        return json.dumps({
+            "status": "success",
+            "message": f"Job '{job_id}' cancelled.",
+        })
+
+    return json.dumps({
+        "status": "error",
+        "error_type": "invalid_input",
+        "message": f"Job '{job_id}' is not running (cannot cancel).",
     })
 
 
