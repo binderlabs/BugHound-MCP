@@ -150,6 +150,60 @@
 
 ---
 
+## 2026-03-12 - Day 6 Enhancement: Full Intelligence Layer
+
+### What Was Built
+
+**Stage 1 Enhancement:**
+- Migrated amass wrapper to tool_runner (passive mode only)
+- 5 passive tools now run in parallel: subfinder, assetfinder, findomain, crtsh, amass
+
+**New Discovery Modules (3 new tools, no external binary needed):**
+
+1. **sensitive_paths.py** (193 lines): 70+ paths checked per host
+   - Git/SVN exposure (.git/HEAD, .svn/entries)
+   - Env/config leaks (.env, config.json, wp-config.php)
+   - API docs (swagger.json, openapi.yaml, graphql)
+   - Debug endpoints (phpinfo, actuator, telescope, elmah)
+   - Admin panels (admin, wp-admin, horizon)
+   - Backup files (backup.sql, backup.zip, dump.sql)
+   - Custom validators per path type (e.g., .git/HEAD must start with "ref: ")
+   - False positive filtering (generic 404 page detection)
+
+2. **takeover_checker.py** (182 lines): CNAME fingerprint matching
+   - 25 vulnerable services (Heroku, S3, GitHub Pages, Shopify, Azure, CloudFront, etc.)
+   - HTTP fingerprint verification for each candidate
+   - Falls back to nuclei takeover templates if available
+
+3. **cors_checker.py** (139 lines): CORS misconfiguration testing
+   - Tests: reflected origin, null origin, subdomain bypass
+   - Severity: CRITICAL (reflected + credentials), HIGH (reflected), MEDIUM (null), LOW (wildcard)
+
+**Discovery Pipeline Now Has 6 Phases:**
+```
+5%  Phase 2A: httpx probe
+20% Phase 2A: WAF detection (wafw00f)
+30% Phase 2B: URL discovery (gau + waybackurls + gospider)
+50% Phase 2B: JS analysis (secrets + endpoints + hidden endpoints)
+65% Phase 2D: Sensitive path checks
+78% Phase 2E: Subdomain takeover
+88% Phase 2F: CORS probing
+100% Complete
+```
+
+**15+ Intelligence Flags:**
+NO_WAF, NON_CDN_IP, DEFAULT_PAGE, GRAPHQL, OLD_TECH, DEBUG_MODE,
+GIT_EXPOSED, ENV_LEAKED, SWAGGER_EXPOSED, GRAPHQL_INTROSPECTION,
+ADMIN_PANEL, DEBUG_ENABLED, SPRING_ACTUATOR, BACKUP_FOUND,
+CORS_MISCONFIGURED
+
+**Tested:** scanme.nmap.org → 117 URLs, 1 Google API key, 2 hidden endpoints
+
+### What's Next
+- Phase 3 Day 7: Stage 3 (Analyze) — bughound_get_attack_surface + bughound_submit_scan_plan
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

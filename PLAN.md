@@ -134,6 +134,13 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 **HARD RULE: if a new tool wrapper takes more than 2 hours, skip it. Use existing gau + waybackurls as fallback for URL discovery.**
 
+**Day 6 Enhancement (completed):**
+- [x] Add amass to parallel enumeration (5 passive tools)
+- [x] Sensitive path checker (70+ paths: git, env, swagger, admin, actuator, backups)
+- [x] Subdomain takeover detection (25 CNAME fingerprints + nuclei templates)
+- [x] CORS misconfiguration probing (reflected origin, wildcard, null, subdomain bypass)
+- [x] Full intelligence flag system (15+ flag types)
+
 **Day 6 Checkpoint:** full attack surface map exists in workspace
 
 ## Phase 3: Stage 3 + Stage 4 (Days 7-8)

@@ -126,7 +126,7 @@ BugHound/
 
 **Phase:** Phase 3 - Stage 3 + Stage 4
 **Current task:** Day 7 - Stage 3 (Analyze / Decision Engine)
-**Completed:** Stages 0-2 complete. 10 MCP tools registered. Full attack surface discovery: httpx probe, WAF detection, URL crawling (gau + waybackurls + gospider), JS analysis with secret extraction, parameter harvesting, intelligence flags.
+**Completed:** Stages 0-2 complete. Full recon pipeline built. 10 MCP tools, 13 tool wrappers. Discovery runs 6 phases: httpx probe, WAF detection, URL crawling (gau + waybackurls + gospider), JS analysis with secret extraction, sensitive path checks (70+ paths), subdomain takeover detection (25 services), CORS probing, parameter harvesting. 15+ intelligence flags per host.
 **Next:** Build bughound_get_attack_surface + bughound_submit_scan_plan
 **Blockers:** None
 
