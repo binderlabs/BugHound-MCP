@@ -211,10 +211,10 @@ async def bughound_enumerate_deep(workspace_id: str) -> str:
 @mcp.tool(
     name="bughound_discover",
     description=(
-        "Discover attack surface: probe live hosts, fingerprint technologies, "
-        "detect WAF/CDN, generate intelligence flags (NO_WAF, NON_CDN_IP, "
-        "OLD_TECH, GRAPHQL, DEFAULT_PAGE, DEBUG_MODE). Sync for single hosts "
-        "(~30s), async job for broad domains. Requires bughound_init first; "
+        "Discover full attack surface: probe live hosts, fingerprint tech, detect "
+        "WAF/CDN, crawl URLs, analyze JavaScript for secrets and hidden endpoints, "
+        "harvest parameters, generate intelligence flags. Sync for single hosts "
+        "(~60s), async job for broad domains. Requires bughound_init first; "
         "for broad domains also requires bughound_enumerate."
     ),
 )
