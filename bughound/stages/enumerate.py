@@ -216,14 +216,73 @@ async def enumerate_deep(
         return _error("execution_failed", str(exc))
 
     async def _run_deep(jid: str) -> None:
-        # Phase 1: same passive enum as light
-        await job_manager.update_progress(jid, 10, "Running passive enumeration", "passive")
-        light_result = await enumerate_light(workspace_id)
-
-        await job_manager.update_progress(jid, 60, "Passive enumeration complete", "passive")
-
-        # Phase 2: active tools (puredns, gotator) if available
         extra_warnings: list[str] = []
+
+        # Phase 1: run fast passive tools (same as light, excludes amass)
+        await job_manager.update_progress(jid, 5, "Running fast passive enumeration", "passive")
+        light_result = await enumerate_light(workspace_id)
+        fast_count = light_result.get("data", {}).get("subdomains_found", 0)
+        await job_manager.update_progress(jid, 30, f"Fast passive done: {fast_count} subdomains", "passive")
+
+        # Phase 2: run amass (slow, thorough) with generous timeout
+        amass_subs: set[str] = set()
+        if amass.is_available():
+            await job_manager.update_progress(jid, 35, "Running amass (slow, thorough)", "amass")
+            try:
+                amass_result = await amass.execute(target, timeout=300)
+                if amass_result.success and amass_result.results:
+                    amass_subs = {s.strip().lower() for s in amass_result.results if s.strip()}
+                    await job_manager.update_progress(
+                        jid, 60, f"Amass found {len(amass_subs)} subdomains", "amass"
+                    )
+                else:
+                    msg = amass_result.error.message if amass_result.error else "no results"
+                    extra_warnings.append(f"amass: {msg}")
+                    await job_manager.update_progress(jid, 60, "Amass finished (no results)", "amass")
+            except Exception as exc:
+                extra_warnings.append(f"amass failed: {exc}")
+                await job_manager.update_progress(jid, 60, "Amass failed", "amass")
+        else:
+            extra_warnings.append("amass not installed, skipped.")
+            await job_manager.update_progress(jid, 60, "Amass not available", "amass")
+
+        # Phase 3: merge amass results with existing subdomains
+        existing_subs: set[str] = set()
+        existing_data = await workspace.read_data(workspace_id, "subdomains/all.txt")
+        if isinstance(existing_data, list):
+            existing_subs = {s.strip().lower() for s in existing_data if s.strip()}
+
+        new_from_amass = amass_subs - existing_subs
+        if new_from_amass:
+            merged = sorted(existing_subs | amass_subs)
+            await workspace.write_data(
+                workspace_id, "subdomains/all.txt", merged,
+                generated_by="enumerate_deep", target=target,
+            )
+            # Resolve DNS for new subdomains only
+            await job_manager.update_progress(
+                jid, 70, f"Resolving {len(new_from_amass)} new subdomains from amass", "dns"
+            )
+            new_dns = await dns_resolver.resolve_domains(sorted(new_from_amass))
+            # Merge with existing DNS records
+            existing_dns = await workspace.read_data(workspace_id, "dns/records.json")
+            dns_map: dict[str, Any] = {}
+            if isinstance(existing_dns, list):
+                for rec in existing_dns:
+                    if isinstance(rec, dict) and "domain" in rec:
+                        domain = rec.pop("domain")
+                        dns_map[domain] = rec
+            dns_map.update(new_dns)
+            dns_list = [{"domain": d, **r} for d, r in sorted(dns_map.items())]
+            await workspace.write_data(
+                workspace_id, "dns/records.json", dns_list,
+                generated_by="dns_resolver", target=target,
+            )
+            await workspace.update_stats(workspace_id, subdomains_found=len(merged))
+
+        await job_manager.update_progress(jid, 80, "Slow passive merge complete", "merge")
+
+        # Phase 4: active tools (puredns, gotator) if available
         from bughound.core import tool_runner
 
         has_puredns = tool_runner.is_available("puredns")
@@ -232,18 +291,22 @@ async def enumerate_deep(
         if not has_puredns and not has_gotator:
             extra_warnings.append(
                 "No active enumeration tools (puredns, gotator) available. "
-                "Deep mode ran passive sources only."
+                "Deep mode ran passive sources + amass only."
             )
-            await job_manager.update_progress(jid, 90, "No active tools available", "passive")
+            await job_manager.update_progress(jid, 95, "No active tools available", "active")
         else:
-            await job_manager.update_progress(jid, 70, "Active tools not yet integrated", "active")
+            await job_manager.update_progress(jid, 85, "Active tools not yet integrated", "active")
             extra_warnings.append(
-                "Active enumeration tools (puredns, gotator) not yet integrated. "
-                "Deep mode ran passive sources only in this version."
+                "Active enumeration tools (puredns, gotator) not yet integrated."
             )
 
+        final_subs = await workspace.read_data(workspace_id, "subdomains/all.txt")
+        final_count = len(final_subs) if isinstance(final_subs, list) else fast_count
+
         summary = {
-            "subdomains_found": light_result.get("data", {}).get("subdomains_found", 0),
+            "subdomains_found": final_count,
+            "fast_passive_count": fast_count,
+            "amass_new_count": len(new_from_amass),
             "resolved_count": light_result.get("data", {}).get("resolved_count", 0),
             "extra_warnings": extra_warnings,
         }
@@ -265,8 +328,11 @@ async def enumerate_deep(
 # ---------------------------------------------------------------------------
 
 
-def _get_available_tools() -> dict[str, Any]:
-    """Return dict of available enumeration tool names to their execute functions."""
+def _get_available_tools(include_slow: bool = False) -> dict[str, Any]:
+    """Return dict of available enumeration tool names to their execute functions.
+
+    include_slow: if True, include amass (slow but thorough, for deep mode only).
+    """
     tools: dict[str, Any] = {}
     # Always include crtsh (API-based)
     tools["crtsh"] = crtsh.execute
@@ -277,7 +343,7 @@ def _get_available_tools() -> dict[str, Any]:
         tools["assetfinder"] = assetfinder.execute
     if findomain.is_available():
         tools["findomain"] = findomain.execute
-    if amass.is_available():
+    if include_slow and amass.is_available():
         tools["amass"] = amass.execute
 
     return tools

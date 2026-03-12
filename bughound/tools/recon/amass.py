@@ -1,17 +1,17 @@
 """Amass passive subdomain enumeration wrapper.
 
-Uses passive mode only for speed. Outputs JSONL with subdomain names.
+v5 changed the CLI: passive is now the default, -json flag removed.
+Output is plain text (one subdomain per line) to stdout.
+Uses -timeout 1 (minutes) and -nocolor to keep execution brief.
 """
 
 from __future__ import annotations
-
-import json
 
 from bughound.core import tool_runner
 from bughound.schemas.models import ToolResult
 
 BINARY = "amass"
-TIMEOUT = 120
+TIMEOUT = 300  # 5 min — amass is slow but thorough, only used in deep mode
 
 
 def is_available() -> bool:
@@ -19,10 +19,14 @@ def is_available() -> bool:
 
 
 async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
-    """Run amass enum -passive against a domain."""
+    """Run amass enum against a domain (passive by default in v5).
+
+    Only called from deep enumeration — amass is too slow for light mode.
+    Uses -timeout 4 (minutes, amass internal) so it finishes before our process timeout.
+    """
     result = await tool_runner.run(
         BINARY,
-        ["enum", "-passive", "-d", target, "-json", "-"],
+        ["enum", "-d", target, "-nocolor", "-timeout", "4"],
         target=target,
         timeout=timeout,
     )
@@ -30,19 +34,12 @@ async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
     if not result.success:
         return result
 
-    # Parse JSONL: each line has {"name": "sub.example.com", ...}
+    # v5 outputs plain text: one subdomain per line
     subdomains: set[str] = set()
     for line in result.results:
-        try:
-            obj = json.loads(line)
-            name = obj.get("name", "").strip().lower()
-            if name:
-                subdomains.add(name)
-        except (json.JSONDecodeError, AttributeError):
-            # Fallback: treat line as plain subdomain
-            line = line.strip().lower()
-            if line and "." in line:
-                subdomains.add(line)
+        line = line.strip().lower()
+        if line and "." in line and not line.startswith("#"):
+            subdomains.add(line)
 
     deduped = sorted(subdomains)
     result.results = deduped
