@@ -126,6 +126,20 @@ _ENDPOINT_IGNORE = re.compile(
     re.I,
 )
 
+# Patterns for classifying endpoint types
+_API_ENDPOINT_RE = re.compile(
+    r"/api/|/v\d+/|/graphql|/rest/|/rpc/|\?|&|=",
+    re.I,
+)
+
+_CLIENT_ROUTE_RE = re.compile(
+    r"^/(dashboard|settings|login|logout|signup|register|profile|account"
+    r"|home|about|contact|help|faq|terms|privacy|admin|onboarding"
+    r"|notifications|messages|preferences|billing|checkout|cart"
+    r"|search|explore|discover|feed|timeline)(/|$)",
+    re.I,
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -231,8 +245,12 @@ def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
             value = match.group(1) if match.lastindex else match.group(0)
             value = value.strip()
 
-            # Skip empty or obviously too-short values
-            if len(value) < 8:
+            # Skip values below minimum length (12 chars)
+            if len(value) < 12:
+                continue
+
+            # Skip common JS literal values regardless of confidence
+            if value.strip().lower() in _FP_VALUES:
                 continue
 
             # Apply false-positive filter
@@ -307,4 +325,12 @@ def _add_endpoint(
     elif ".patch" in context:
         method = "PATCH"
 
-    endpoints.append({"path": path, "method": method, "source_file": source_file})
+    # Classify endpoint type
+    if _API_ENDPOINT_RE.search(path) or method != "GET":
+        endpoint_type = "api"
+    elif _CLIENT_ROUTE_RE.match(path):
+        endpoint_type = "client_route"
+    else:
+        endpoint_type = "api"  # default to api — safer for testing
+
+    endpoints.append({"path": path, "method": method, "source_file": source_file, "endpoint_type": endpoint_type})
