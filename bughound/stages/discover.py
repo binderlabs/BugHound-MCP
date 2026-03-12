@@ -16,7 +16,11 @@ import structlog
 from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, WorkspaceState
-from bughound.tools.discovery import cors_checker, js_analyzer, katana, sensitive_paths, takeover_checker
+from bughound.tools.discovery import (
+    cors_checker, dir_scanner, js_analyzer, katana, param_classifier,
+    sensitive_paths, takeover_checker,
+)
+from bughound.core import tool_runner
 from bughound.tools.recon import gau, gospider, httpx, wafw00f, waybackurls
 
 logger = structlog.get_logger()
@@ -120,7 +124,7 @@ async def _run_discover(
     # Phase 2A: Probe + Fingerprint
     # ===================================================================
     if progress_cb:
-        await progress_cb(10, "Probing live hosts", "httpx")
+        await progress_cb(10, "Probing live hosts", "httpx")  # 2A
 
     if not httpx.is_available():
         await workspace.add_stage_history(workspace_id, 2, "failed")
@@ -148,7 +152,7 @@ async def _run_discover(
 
     # WAF detection
     if progress_cb:
-        await progress_cb(20, "Detecting WAF/CDN", "wafw00f")
+        await progress_cb(20, "Detecting WAF/CDN", "wafw00f")  # 2A
 
     waf_results: list[dict[str, Any]] = []
     if wafw00f.is_available():
@@ -167,7 +171,7 @@ async def _run_discover(
 
     # Generate intelligence flags
     if progress_cb:
-        await progress_cb(30, "Generating intelligence flags", "flags")
+        await progress_cb(28, "Generating intelligence flags", "flags")  # 2A
 
     cdn_counter: Counter[str] = Counter()
     for h in live_hosts:
@@ -217,7 +221,7 @@ async def _run_discover(
     # Phase 2B: URL Discovery
     # ===================================================================
     if progress_cb:
-        await progress_cb(35, "Discovering URLs and endpoints", "url_discovery")
+        await progress_cb(30, "Discovering URLs and endpoints", "url_discovery")  # 2B
 
     # Extract the root domain for gau/waybackurls
     classification = meta.classification or {}
@@ -359,7 +363,7 @@ async def _run_discover(
 
     if js_urls:
         if progress_cb:
-            await progress_cb(50, "Analyzing JavaScript for secrets and endpoints", "js_analyzer")
+            await progress_cb(45, "Analyzing JavaScript for secrets and endpoints", "js_analyzer")  # 2B
 
         js_result = await js_analyzer.analyze_js_files(
             js_urls[:100],  # cap at 100 JS files
@@ -431,7 +435,7 @@ async def _run_discover(
     # Phase 2D: Sensitive Path Checks
     # ===================================================================
     if progress_cb:
-        await progress_cb(65, "Checking sensitive paths", "sensitive_paths")
+        await progress_cb(55, "Checking sensitive paths", "sensitive_paths")  # 2C
 
     sensitive_findings: dict[str, list[dict[str, Any]]] = {}
     live_host_urls = [h["url"] for h in live_hosts if h.get("url")]
@@ -482,7 +486,7 @@ async def _run_discover(
 
     if meta.target_type == TargetType.BROAD_DOMAIN:
         if progress_cb:
-            await progress_cb(80, "Checking subdomain takeover", "takeover")
+            await progress_cb(65, "Checking subdomain takeover", "takeover")  # 2D
 
         # Dead subs = in subdomains/all.txt but not in live hosts
         live_hosts_set = {h.get("host", "").lower() for h in live_hosts}
@@ -530,7 +534,7 @@ async def _run_discover(
     # Phase 2F: CORS Probing
     # ===================================================================
     if progress_cb:
-        await progress_cb(90, "Testing CORS configuration", "cors")
+        await progress_cb(72, "Testing CORS configuration", "cors")  # 2E
 
     cors_results: list[dict[str, Any]] = []
     try:
@@ -563,10 +567,150 @@ async def _run_discover(
             )
 
     # ===================================================================
+    # Phase 2F: Light Directory Discovery
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(82, "Light directory discovery", "dir_scanner")  # 2F
+
+    dir_results: dict[str, list[dict[str, Any]]] = {}
+    try:
+        # Build host list for scanner
+        scan_hosts = live_hosts[:30]  # cap for broad targets
+        tech_data = await workspace.read_data(workspace_id, "hosts/technologies.json")
+        tech_items = tech_data.get("data", []) if isinstance(tech_data, dict) else (tech_data or [])
+
+        dir_results = await dir_scanner.scan_directories(
+            scan_hosts, technologies=tech_items, concurrency=10, timeout=10,
+        )
+    except Exception as exc:
+        warnings.append(f"Directory scan failed: {exc}")
+
+    if dir_results:
+        # Flatten into list for workspace storage
+        dir_findings: list[dict[str, Any]] = []
+        for hostname, results_list in dir_results.items():
+            for r in results_list:
+                r["host"] = hostname
+                dir_findings.append(r)
+
+        await workspace.write_data(
+            workspace_id, "dirfuzz/light_results.json", dir_findings,
+            generated_by="dir_scanner", target=target_label,
+        )
+        files_written.append("dirfuzz/light_results.json")
+
+        # Generate directory flags
+        for hostname, results_list in dir_results.items():
+            new_flags: list[str] = []
+            for r in results_list:
+                path_lower = r["path"].lower()
+                sc = r["status_code"]
+
+                if sc == 200 and any(k in path_lower for k in ("/admin", "/dashboard", "/panel", "/console", "/manager")):
+                    new_flags.append(f"ADMIN_PANEL_FOUND: {r['path']} (200)")
+                if sc == 200 and any(k in path_lower for k in ("/swagger", "/openapi", "/api-docs", "/redoc")):
+                    new_flags.append(f"API_DOCS_FOUND: {r['path']} (200)")
+                if sc in (401, 403) and path_lower not in ("/.env", "/.git/head", "/.htaccess"):
+                    new_flags.append(f"RESTRICTED_PATH: {r['path']} ({sc})")
+                if sc == 200 and "/actuator" in path_lower:
+                    new_flags.append(f"ACTUATOR_FOUND: {r['path']} (200)")
+
+            # Update flagged_hosts
+            if new_flags:
+                for fh in flagged_hosts:
+                    if fh.get("host") == hostname:
+                        fh["flags"].extend(new_flags)
+
+        # Re-write flags
+        hosts_with_flags = [h for h in flagged_hosts if h.get("flags")]
+        if hosts_with_flags:
+            flags_summary = [{"host": h["host"], "url": h["url"], "flags": h["flags"]} for h in hosts_with_flags]
+            await workspace.write_data(
+                workspace_id, "hosts/flags.json", flags_summary,
+                generated_by="discover", target=target_label,
+            )
+
+    # ===================================================================
+    # Phase 2G: Light Parameter Discovery (arjun)
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(90, "Light parameter discovery", "arjun")  # 2G
+
+    hidden_params: list[dict[str, Any]] = []
+    if tool_runner.is_available("arjun"):
+        try:
+            # Pick top 10 interesting endpoints
+            interesting_eps = _pick_arjun_targets(unique_urls, hidden_endpoints, 10)
+            if interesting_eps:
+                for ep_url in interesting_eps:
+                    try:
+                        arjun_result = await tool_runner.run(
+                            "arjun", ["-u", ep_url, "-q", "-oJ", "/dev/stdout"],
+                            target=ep_url, timeout=60,
+                        )
+                        if arjun_result.success and arjun_result.results:
+                            import json as _json
+                            for line in arjun_result.results:
+                                try:
+                                    data = _json.loads(line)
+                                    if isinstance(data, dict):
+                                        for url_key, params in data.items():
+                                            if isinstance(params, list):
+                                                hidden_params.append({
+                                                    "url": url_key,
+                                                    "hidden_params": params,
+                                                    "tool": "arjun",
+                                                })
+                                except _json.JSONDecodeError:
+                                    continue
+                    except Exception:
+                        continue
+        except Exception as exc:
+            warnings.append(f"Arjun parameter discovery failed: {exc}")
+
+        if hidden_params:
+            await workspace.write_data(
+                workspace_id, "urls/hidden_parameters.json", hidden_params,
+                generated_by="arjun", target=target_label,
+            )
+            files_written.append("urls/hidden_parameters.json")
+    else:
+        warnings.append("arjun not installed — skipping hidden parameter discovery.")
+
+    # ===================================================================
+    # Phase 2H: Parameter Classification
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(95, "Classifying parameters by vulnerability type", "param_classifier")  # 2H
+
+    try:
+        # Read all parameter sources
+        urls_data = await workspace.read_data(workspace_id, "urls/crawled.json")
+        urls_items = urls_data.get("data", []) if isinstance(urls_data, dict) else (urls_data or [])
+        params_data = await workspace.read_data(workspace_id, "urls/parameters.json")
+        params_items = params_data.get("data", []) if isinstance(params_data, dict) else (params_data or [])
+        hidden_ep_data = await workspace.read_data(workspace_id, "endpoints/hidden_endpoints.json")
+        hidden_ep_items = hidden_ep_data.get("data", []) if isinstance(hidden_ep_data, dict) else (hidden_ep_data or [])
+
+        param_classification = param_classifier.classify_parameters(
+            urls_items, params_items, hidden_ep_items,
+        )
+
+        await workspace.write_data(
+            workspace_id, "urls/parameter_classification.json",
+            [param_classification],  # wrap in list for DataWrapper
+            generated_by="param_classifier", target=target_label,
+        )
+        files_written.append("urls/parameter_classification.json")
+    except Exception as exc:
+        warnings.append(f"Parameter classification failed: {exc}")
+        param_classification = {}
+
+    # ===================================================================
     # Finalize
     # ===================================================================
     if progress_cb:
-        await progress_cb(95, "Parameter aggregation + final analysis", "finalize")
+        await progress_cb(98, "Final analysis", "finalize")
 
     await workspace.update_stats(workspace_id, live_hosts=len(live_hosts))
     await workspace.add_stage_history(workspace_id, 2, "completed")
@@ -603,7 +747,10 @@ async def _run_discover(
             f"{len(js_secrets)} secrets, {len(hidden_endpoints)} hidden endpoints, "
             f"{sum(len(v) for v in sensitive_findings.values())} sensitive paths, "
             f"{len(takeover_results)} takeover candidates, "
-            f"{len(cors_results)} CORS issues."
+            f"{len(cors_results)} CORS issues, "
+            f"{sum(len(v) for v in dir_results.values())} directory findings, "
+            f"{len(hidden_params)} hidden param sets, "
+            f"{param_classification.get('stats', {}).get('unique_params_matched', 0)} classified params."
         ),
         "workspace_id": workspace_id,
         "files_written": files_written,
@@ -627,6 +774,9 @@ async def _run_discover(
             "takeover_confirmed": len(takeover_confirmed),
             "cors_vulnerable": len(cors_results),
             "cors_severities": dict(cors_severities.most_common()),
+            "dir_findings": sum(len(v) for v in dir_results.values()),
+            "hidden_params_discovered": len(hidden_params),
+            "param_classification": param_classification.get("stats", {}),
             "top_technologies": tech_counter.most_common(10),
             "flag_distribution": dict(flag_dist.most_common(15)),
             "majority_cdn": majority_cdn,
@@ -757,6 +907,49 @@ def _generate_flags(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _pick_arjun_targets(
+    urls: list[dict[str, str]],
+    hidden_endpoints: list[dict[str, Any]],
+    limit: int = 10,
+) -> list[str]:
+    """Pick the most interesting endpoints for parameter discovery.
+
+    Prioritizes: hidden endpoints > endpoints with existing params > API paths.
+    """
+    from urllib.parse import urlparse
+
+    candidates: list[tuple[int, str]] = []  # (priority, url)
+
+    # Hidden endpoints are top priority
+    for ep in hidden_endpoints:
+        path = ep.get("path", "")
+        if path and "://" in path:
+            candidates.append((0, path))
+
+    # URLs with query params (likely accept more params)
+    for entry in urls:
+        u = entry.get("url", "")
+        if not u:
+            continue
+        parsed = urlparse(u)
+        if parsed.query:
+            candidates.append((1, u.split("?")[0]))  # base URL without params
+        elif any(k in parsed.path.lower() for k in ("/api/", "/v1/", "/v2/", "/graphql", "/search")):
+            candidates.append((2, u))
+
+    # Deduplicate, sort by priority, return top N
+    seen: set[str] = set()
+    result: list[str] = []
+    for _, url in sorted(candidates):
+        if url not in seen:
+            seen.add(url)
+            result.append(url)
+            if len(result) >= limit:
+                break
+
+    return result
 
 
 def _extract_parameters(urls: list[dict[str, str]]) -> list[dict[str, Any]]:

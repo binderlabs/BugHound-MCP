@@ -257,6 +257,44 @@ Stage 4 executes the scan plan from Stage 3. Nuclei is the workhorse — no deci
 
 ---
 
+## 2026-03-13 - Day 8.5: Stage 2-3 Enhancement (Parameter Classification + Directory Discovery)
+
+### Overview
+Enhanced Stage 2 discover pipeline with parameter classification (gf-style) and light directory discovery. Enhanced Stage 3 analyze with new attack chains derived from classified parameters.
+
+### What Was Built
+
+**param_classifier.py** (new, 268 lines):
+- Pure Python gf-style parameter classification engine
+- 8 vulnerability type pattern sets: SQLi, XSS, SSRF, Redirect, LFI, IDOR, RCE, SSTI
+- Each type has `exact` name matches + glob `patterns` (fnmatch)
+- `classify_parameters()` aggregates from crawled URLs, parameters.json, hidden endpoints
+- Outputs per-type candidate lists, high_value_params (match 2+ types), stats
+
+**dir_scanner.py** (new, 242 lines):
+- aiohttp-based light directory checking (~200 common paths + tech-specific)
+- Technology-aware: WordPress, API, Spring, Node.js path sets
+- HEAD requests with semaphore-based concurrency, interesting statuses: 200/301/302/401/403/405
+- Generates intelligence flags: ADMIN_PANEL_FOUND, API_DOCS_FOUND, RESTRICTED_PATH, ACTUATOR_FOUND
+
+**discover.py enhancements**:
+- Phase 2F: light directory discovery → dirfuzz/light_results.json + flags
+- Phase 2G: arjun hidden parameter discovery (if installed) → urls/hidden_parameters.json
+- Phase 2H: parameter classification → urls/parameter_classification.json
+- `_pick_arjun_targets()` helper: prioritizes hidden endpoints > parameterized URLs > API paths
+
+**analyze.py enhancements**:
+- Loads 3 new data files: parameter_classification, dir_findings, hidden_parameters
+- 3 new attack chains: MASS_SQLI_PARAMS, SSRF_CLOUD_METADATA, REDIRECT_OAUTH_THEFT
+- `_suggest_test_classes()` now derives classes from param classification counts
+- `_summarize_param_classification()` and `_summarize_dir_findings()` for attack surface output
+- Stats include dir_findings, hidden_parameters, param_classification counts
+
+### What's Next
+- Phase 4 Day 9: Stage 5 (Validate) + Stage 6 (Report)
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

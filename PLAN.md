@@ -191,6 +191,13 @@ Target: Black Hat Arsenal demo-ready by Day 10
 - [x] Output: vulnerabilities/scan_results.json (with finding_id, severity, evidence, curl_command)
 - [x] Git commit: "stage 4 - test"
 
+**Day 8.5 Enhancement:**
+- [x] bughound/tools/discovery/param_classifier.py — gf-style parameter classification (8 vuln types)
+- [x] bughound/tools/discovery/dir_scanner.py — light directory discovery via aiohttp
+- [x] discover.py: Phase 2F (dir scanner), Phase 2G (arjun), Phase 2H (param classification)
+- [x] analyze.py: 3 new attack chains (Mass SQLi, SSRF→Cloud Metadata, Open Redirect→OAuth)
+- [x] analyze.py: param classification → test class suggestions, new summary sections
+
 **Day 8 Checkpoint:** full pipeline works: target -> recon -> AI analysis -> vulnerability scanning
 
 ## Phase 4: Stage 5 + Stage 6 + Polish (Days 9-10)

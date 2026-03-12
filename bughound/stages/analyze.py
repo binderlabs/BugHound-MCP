@@ -77,6 +77,9 @@ async def _load_all_data(workspace_id: str) -> dict[str, Any]:
         "hidden_endpoints": "endpoints/hidden_endpoints.json",
         "takeover_candidates": "cloud/takeover_candidates.json",
         "takeover_confirmed": "cloud/takeover_confirmed.json",
+        "parameter_classification": "urls/parameter_classification.json",
+        "dir_findings": "dirfuzz/light_results.json",
+        "hidden_parameters": "urls/hidden_parameters.json",
     }
     result: dict[str, list[Any]] = {}
     for key, path in files.items():
@@ -668,6 +671,88 @@ def _detect_attack_chains(
                 "report_ready": False,
             })
 
+    # CHAIN 13 — Mass SQLi via Classified Params (global)
+    param_class = _extract_items(data.get("parameter_classification"))
+    pc = param_class[0] if param_class and isinstance(param_class[0], dict) else {}
+    sqli_candidates = pc.get("sqli_candidates", [])
+    if len(sqli_candidates) >= 3:
+        top_params = [c["param"] for c in sqli_candidates[:5]]
+        top_urls = sorted(set(c["url"] for c in sqli_candidates[:5]))[:3]
+        chains.append({
+            "chain_id": "MASS_SQLI_PARAMS",
+            "name": "Mass SQLi via Classified Parameters",
+            "severity": "HIGH",
+            "bounty_estimate": "$1000-5000",
+            "affected_hosts": [_host_from_url(u) for u in top_urls],
+            "evidence": {
+                "trigger": f"{len(sqli_candidates)} SQLi-prone parameters identified",
+                "supporting": f"Top params: {', '.join(top_params)}",
+            },
+            "exploitation_steps": [
+                "Run sqlmap on each candidate: sqlmap -u URL --batch --level 2",
+                "Focus on parameters matching *_id, *_no patterns first",
+                "Test both GET and POST methods for each parameter",
+                "Check for blind/time-based SQLi if error-based fails",
+            ],
+            "report_ready": False,
+        })
+
+    # CHAIN 14 — SSRF to Cloud Metadata
+    ssrf_candidates = pc.get("ssrf_candidates", [])
+    has_cloud_infra = any(
+        any(k in t.lower() for k in ("aws", "amazon", "azure", "gcp", "cloud"))
+        for h in data["live_hosts"]
+        for t in h.get("technologies", [])
+    ) or any("cloud" in str(s).lower() for s in data["js_secrets"])
+    if ssrf_candidates and has_cloud_infra:
+        top_ssrf = [c["param"] for c in ssrf_candidates[:5]]
+        chains.append({
+            "chain_id": "SSRF_CLOUD_METADATA",
+            "name": "SSRF to Cloud Metadata",
+            "severity": "CRITICAL",
+            "bounty_estimate": "$2000-10000",
+            "affected_hosts": list(set(_host_from_url(c["url"]) for c in ssrf_candidates[:5])),
+            "evidence": {
+                "trigger": f"{len(ssrf_candidates)} SSRF-prone parameters ({', '.join(top_ssrf[:3])})",
+                "supporting": "Cloud infrastructure detected — metadata endpoint likely reachable",
+            },
+            "exploitation_steps": [
+                "Test with: http://169.254.169.254/latest/meta-data/ (AWS)",
+                "Test with: http://metadata.google.internal/ (GCP)",
+                "Test with: http://169.254.169.254/metadata/instance (Azure)",
+                "Check for URL scheme restrictions — try redirect bypass",
+                "If metadata accessible, extract IAM role credentials",
+            ],
+            "report_ready": False,
+        })
+
+    # CHAIN 15 — Open Redirect to OAuth Theft
+    redirect_candidates = pc.get("redirect_candidates", [])
+    has_oauth = any(
+        any(k in str(u).lower() for k in ("oauth", "callback", "redirect_uri", "login", "sso"))
+        for u in data["crawled_urls"]
+    )
+    if redirect_candidates and has_oauth:
+        top_redir = [c["param"] for c in redirect_candidates[:3]]
+        chains.append({
+            "chain_id": "REDIRECT_OAUTH_THEFT",
+            "name": "Open Redirect to OAuth Theft",
+            "severity": "HIGH",
+            "bounty_estimate": "$500-3000",
+            "affected_hosts": list(set(_host_from_url(c["url"]) for c in redirect_candidates[:5])),
+            "evidence": {
+                "trigger": f"{len(redirect_candidates)} redirect-prone parameters ({', '.join(top_redir)})",
+                "supporting": "OAuth/SSO flow detected on target",
+            },
+            "exploitation_steps": [
+                "Test redirect parameters with external URL: ?next=https://evil.com",
+                "Chain with OAuth flow: modify redirect_uri to steal authorization code",
+                "Test bypasses: //evil.com, ///evil.com, target.com@evil.com",
+                "Check if tokens are leaked via Referer header after redirect",
+            ],
+            "report_ready": False,
+        })
+
     # Deduplicate chains by chain_id + host
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
@@ -1103,6 +1188,11 @@ def _compute_stats(data: dict[str, list]) -> dict[str, Any]:
         len(p.get("params", [])) for p in data["parameters"]
     )
 
+    # Parameter classification stats
+    param_class = _extract_items(data.get("parameter_classification"))
+    pc = param_class[0] if param_class and isinstance(param_class[0], dict) else {}
+    pc_stats = pc.get("stats", {})
+
     return {
         "total_subdomains": len(data["subdomains"]),
         "live_hosts": len(data["live_hosts"]),
@@ -1120,6 +1210,9 @@ def _compute_stats(data: dict[str, list]) -> dict[str, Any]:
         "hidden_endpoints": len(data["hidden_endpoints"]),
         "api_endpoints": len(data["api_endpoints"]),
         "dns_records": len(data["dns_records"]),
+        "dir_findings": len(data.get("dir_findings", [])),
+        "hidden_parameters": len(data.get("hidden_parameters", [])),
+        "param_classification": pc_stats,
     }
 
 
@@ -1131,8 +1224,9 @@ def _compute_stats(data: dict[str, list]) -> dict[str, Any]:
 def _suggest_test_classes(
     chains: list[dict],
     playbooks: list[dict],
+    data: dict[str, list] | None = None,
 ) -> list[str]:
-    """Derive test classes from matched attack chains and playbooks."""
+    """Derive test classes from matched attack chains, playbooks, and param classification."""
     classes: set[str] = set()
 
     chain_to_class = {
@@ -1148,6 +1242,9 @@ def _suggest_test_classes(
         "GRAPHQL_EXPLOITATION": "graphql",
         "INTERNAL_IP_ADMIN_BYPASS": "access_control",
         "SHARED_INFRA_PIVOT": "ssrf",
+        "MASS_SQLI_PARAMS": "sqli",
+        "SSRF_CLOUD_METADATA": "ssrf",
+        "REDIRECT_OAUTH_THEFT": "open_redirect",
     }
     for chain in chains:
         cls = chain_to_class.get(chain.get("chain_id", ""))
@@ -1165,6 +1262,24 @@ def _suggest_test_classes(
         cls = playbook_to_class.get(pb.get("technology", ""))
         if cls:
             classes.add(cls)
+
+    # Parameter classification → test classes
+    if data:
+        param_class = _extract_items(data.get("parameter_classification"))
+        pc = param_class[0] if param_class and isinstance(param_class[0], dict) else {}
+        stats = pc.get("stats", {})
+        param_to_class = {
+            "sqli_count": "sqli",
+            "xss_count": "xss",
+            "ssrf_count": "ssrf",
+            "lfi_count": "lfi",
+            "rce_count": "rce",
+            "redirect_count": "open_redirect",
+            "idor_count": "idor",
+        }
+        for stat_key, test_class in param_to_class.items():
+            if stats.get(stat_key, 0) >= 2:
+                classes.add(test_class)
 
     # Always include generic classes
     classes.add("nuclei_general")
@@ -1194,6 +1309,58 @@ def _flags_summary(data: dict[str, list]) -> dict[str, int]:
             key = flag.split(":")[0]
             counter[key] += 1
     return dict(counter.most_common(20))
+
+
+def _summarize_param_classification(data: dict[str, list]) -> dict[str, Any]:
+    """Summarize parameter classification for attack surface output."""
+    param_class = _extract_items(data.get("parameter_classification"))
+    pc = param_class[0] if param_class and isinstance(param_class[0], dict) else {}
+    if not pc:
+        return {"available": False}
+
+    stats = pc.get("stats", {})
+    high_value = pc.get("high_value_params", [])
+
+    # Top candidates per vuln type (max 5 each)
+    top_by_type: dict[str, list[dict]] = {}
+    for vtype in ("sqli", "xss", "ssrf", "redirect", "lfi", "idor", "rce", "ssti"):
+        candidates = pc.get(f"{vtype}_candidates", [])
+        if candidates:
+            top_by_type[vtype] = candidates[:5]
+
+    return {
+        "available": True,
+        "stats": stats,
+        "high_value_params": high_value[:10],
+        "top_candidates_by_type": top_by_type,
+    }
+
+
+def _summarize_dir_findings(data: dict[str, list]) -> dict[str, Any]:
+    """Summarize directory discovery findings for attack surface output."""
+    findings = data.get("dir_findings", [])
+    if not findings:
+        return {"available": False, "total": 0}
+
+    by_status: Counter[int] = Counter()
+    interesting: list[dict[str, Any]] = []
+    for f in findings:
+        by_status[f.get("status_code", 0)] += 1
+        sc = f.get("status_code", 0)
+        path = f.get("path", "")
+        # Highlight particularly interesting findings
+        if sc == 200 and any(k in path.lower() for k in (
+            "/admin", "/swagger", "/actuator", "/.env", "/.git",
+            "/graphql", "/debug", "/phpinfo", "/console",
+        )):
+            interesting.append(f)
+
+    return {
+        "available": True,
+        "total": len(findings),
+        "by_status_code": dict(by_status.most_common()),
+        "interesting_findings": interesting[:20],
+    }
 
 
 # ===================================================================
@@ -1261,7 +1428,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
     stats = _compute_stats(data)
     tech_dist = _tech_distribution(data)
     flags_sum = _flags_summary(data)
-    test_classes = _suggest_test_classes(chains, playbooks)
+    test_classes = _suggest_test_classes(chains, playbooks, data)
 
     # Mark complete
     await workspace.add_stage_history(workspace_id, 3, "completed")
@@ -1280,6 +1447,9 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "technology_distribution": tech_dist,
         "flags_summary": flags_sum,
         "suggested_test_classes": test_classes,
+        "parameter_classification": _summarize_param_classification(data),
+        "directory_discovery": _summarize_dir_findings(data),
+        "hidden_parameters": data.get("hidden_parameters", [])[:30],
         "next_step": (
             "Review this analysis. For immediate wins, use bughound_generate_report "
             "directly. For deeper testing, use bughound_submit_scan_plan to define "

@@ -126,7 +126,7 @@ BugHound/
 
 **Phase:** Phase 4 - Stage 5 + Stage 6 + Polish
 **Current task:** Day 9 - Stage 5 (Validate) + Stage 6 (Report)
-**Completed:** Stages 0-4 complete. Full pipeline from target input through vulnerability scanning. 76 Python files, ~20.7K LOC. 18 MCP tools, 15 tool wrappers. Stage 4: nuclei scan plan execution, 16 test class → tag mappings, finding_id generation, needs_validation classification, sync/async execution. nuclei.py rewritten from 419 to 113 lines.
+**Completed:** Stages 0-4 complete. Full pipeline from target input through vulnerability scanning. 18 MCP tools, 15 tool wrappers. Stage 2 enhanced: 10 phases (probe, WAF, flags, URLs, JS secrets, sensitive paths, takeover, CORS, dir scan, param classification). Stage 3: 15 attack chains, param-classification-driven test class suggestions. Stage 4: nuclei execution, 16 test classes, finding processing.
 **Next:** Build Stage 5 (sqlmap/dalfox validation) + Stage 6 (report generation)
 **Blockers:** None
 
