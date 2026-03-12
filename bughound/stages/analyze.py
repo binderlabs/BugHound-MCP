@@ -1266,7 +1266,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
     # Mark complete
     await workspace.add_stage_history(workspace_id, 3, "completed")
 
-    return {
+    result = {
         "status": "success",
         "workspace_id": workspace_id,
         "target": meta.target,
@@ -1286,6 +1286,27 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
             "your strategy."
         ),
     }
+
+    # Persist analysis result so it can be retrieved later
+    await workspace.write_data(
+        workspace_id, "analysis/attack_surface.json", result,
+        generated_by="analyze", target=meta.target,
+    )
+
+    return result
+
+
+# ===================================================================
+# PUBLIC API — Retrieve cached attack surface
+# ===================================================================
+
+
+async def get_cached_attack_surface(workspace_id: str) -> dict[str, Any] | None:
+    """Return the last saved attack surface analysis, or None if not yet run."""
+    data = await workspace.read_data(workspace_id, "analysis/attack_surface.json")
+    if isinstance(data, dict) and data.get("status") == "success":
+        return data
+    return None
 
 
 # ===================================================================

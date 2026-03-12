@@ -50,7 +50,13 @@ mcp = FastMCP("bughound")
         "Initialize a new BugHound workspace for a target. Stage 0: classifies "
         "the target (broad domain, single host, endpoint, or URL list), creates "
         "a workspace, and returns which pipeline stages to run. Always call this "
-        "first before any other bughound tool. Sync."
+        "first before any other bughound tool. Sync.\n\n"
+        "depth parameter:\n"
+        "- 'light' (default): fast passive recon only, good for quick assessments\n"
+        "- 'deep': thorough recon with active tools, background jobs, brute-force — "
+        "use when user says 'full recon', 'deep scan', 'thorough', or 'comprehensive'\n\n"
+        "If the user just says 'scan X' or 'check X', use light. "
+        "If they say 'full recon on X' or 'deep scan X', use deep."
     ),
 )
 async def bughound_init(target: str, depth: str = "light") -> str:
@@ -213,10 +219,13 @@ async def bughound_workspace_delete(workspace_id: str) -> str:
     description=(
         "View workspace results dashboard or drill into specific data categories. "
         "Without a category, returns an overview of all collected data with counts. "
-        "With a category (subdomains, hosts, flags, technologies, urls, parameters, "
-        "secrets, hidden_endpoints, sensitive_paths, cors, takeover, vulnerabilities, "
-        "waf), returns the actual data. Use anytime to check recon progress or "
-        "review findings."
+        "With a category, returns the actual data. Categories: subdomains, dns, "
+        "hosts, flags, technologies, urls, parameters, secrets, js_secrets_confirmed, "
+        "hidden_endpoints, api_endpoints, sensitive_paths, cors, takeover, "
+        "takeover_confirmed, vulnerabilities, waf, attack_surface. "
+        "Use anytime to check recon progress or review findings. "
+        "The attack_surface category returns the saved Stage 3 analysis "
+        "(scored targets, chains, wins) without recomputing."
     ),
 )
 async def bughound_workspace_results(workspace_id: str, category: str = "") -> str:
@@ -251,6 +260,7 @@ async def _results_dashboard(workspace_id: str, meta: Any) -> str:
         ("takeover_candidates", "cloud/takeover_candidates.json"),
         ("takeover_confirmed", "cloud/takeover_confirmed.json"),
         ("vulnerabilities", "vulnerabilities/scan_results.json"),
+        ("attack_surface", "analysis/attack_surface.json"),
     ]
 
     lines = [
@@ -288,9 +298,10 @@ async def _results_dashboard(workspace_id: str, meta: Any) -> str:
 
     # Available drill-down categories
     lines.append(
-        "\n**Drill down:** call with category = subdomains | hosts | flags | "
-        "technologies | urls | parameters | secrets | hidden_endpoints | "
-        "sensitive_paths | cors | takeover | vulnerabilities | waf"
+        "\n**Drill down:** call with category = subdomains | dns | hosts | flags | "
+        "technologies | urls | parameters | secrets | js_secrets_confirmed | "
+        "hidden_endpoints | api_endpoints | sensitive_paths | cors | takeover | "
+        "takeover_confirmed | vulnerabilities | waf | attack_surface"
     )
 
     return "\n".join(lines) + "\n"
@@ -299,18 +310,28 @@ async def _results_dashboard(workspace_id: str, meta: Any) -> str:
 # Category -> (file_path, truncate_limit or 0 for no truncation)
 _CATEGORY_MAP: dict[str, tuple[str, int]] = {
     "subdomains": ("subdomains/all.txt", 100),
+    "dns": ("dns/records.json", 0),
+    "dns_records": ("dns/records.json", 0),
     "hosts": ("hosts/live_hosts.json", 0),
+    "live_hosts": ("hosts/live_hosts.json", 0),
     "flags": ("hosts/flags.json", 0),
     "technologies": ("hosts/technologies.json", 0),
     "urls": ("urls/crawled.json", 100),
     "parameters": ("urls/parameters.json", 0),
     "secrets": ("secrets/js_secrets.json", 0),
+    "js_secrets": ("secrets/js_secrets.json", 0),
+    "js_secrets_confirmed": ("secrets/js_secrets_confirmed.json", 0),
     "hidden_endpoints": ("endpoints/hidden_endpoints.json", 0),
+    "api_endpoints": ("endpoints/api_endpoints.json", 0),
     "sensitive_paths": ("hosts/sensitive_paths.json", 0),
     "cors": ("hosts/cors_results.json", 0),
+    "cors_results": ("hosts/cors_results.json", 0),
     "takeover": ("cloud/takeover_candidates.json", 0),
+    "takeover_candidates": ("cloud/takeover_candidates.json", 0),
+    "takeover_confirmed": ("cloud/takeover_confirmed.json", 0),
     "vulnerabilities": ("vulnerabilities/scan_results.json", 0),
     "waf": ("hosts/waf.json", 0),
+    "attack_surface": ("analysis/attack_surface.json", 0),
 }
 
 
@@ -329,6 +350,13 @@ async def _results_category(workspace_id: str, meta: Any, category: str) -> str:
             f"File `{file_path}` does not exist yet. "
             f"This data is collected during a later pipeline stage."
         )
+
+    # Special handling for attack_surface (full analysis result, not a list)
+    if category == "attack_surface":
+        if isinstance(data, dict) and "data" in data:
+            # DataWrapper envelope — unwrap
+            return _format_attack_surface(data["data"])
+        return _format_attack_surface(data)
 
     # Extract items from DataWrapper envelope or plain list
     if isinstance(data, dict):
@@ -538,20 +566,56 @@ def _fmt_vulnerabilities(items: list) -> list[str]:
     return lines
 
 
+def _fmt_api_endpoints(items: list) -> list[str]:
+    lines: list[str] = []
+    for ep in items:
+        method = ep.get("method", "GET")
+        path = ep.get("path", ep.get("endpoint", "?"))
+        source = ep.get("source", ep.get("from", ""))
+        host = ep.get("host", "")
+        prefix = f"{host}" if host else ""
+        lines.append(f"  - **{method}** `{path}`  {f'({source})' if source else ''} {prefix}")
+    return lines
+
+
+def _fmt_dns(items: list) -> list[str]:
+    lines: list[str] = []
+    for rec in items:
+        domain = rec.get("domain", "?")
+        a_records = rec.get("A", [])
+        cname = rec.get("CNAME", [])
+        resolved = rec.get("resolved", False)
+        status = "resolved" if resolved else "unresolved"
+        ips = ", ".join(a_records[:3]) if a_records else ""
+        cnames = ", ".join(cname[:2]) if cname else ""
+        detail = ips or cnames or status
+        lines.append(f"  - **{domain}** → {detail}")
+    return lines
+
+
 _CATEGORY_FORMATTERS: dict[str, Any] = {
     "subdomains": _fmt_subdomains,
     "hosts": _fmt_hosts,
+    "live_hosts": _fmt_hosts,
     "flags": _fmt_flags,
     "waf": _fmt_waf,
     "technologies": _fmt_technologies,
     "urls": _fmt_urls,
     "parameters": _fmt_parameters,
     "secrets": _fmt_secrets,
+    "js_secrets": _fmt_secrets,
+    "js_secrets_confirmed": _fmt_secrets,
     "hidden_endpoints": _fmt_hidden_endpoints,
+    "api_endpoints": _fmt_api_endpoints,
     "sensitive_paths": _fmt_sensitive_paths,
     "cors": _fmt_cors,
+    "cors_results": _fmt_cors,
     "takeover": _fmt_takeover,
+    "takeover_candidates": _fmt_takeover,
+    "takeover_confirmed": _fmt_takeover,
     "vulnerabilities": _fmt_vulnerabilities,
+    "dns": _fmt_dns,
+    "dns_records": _fmt_dns,
 }
 
 
