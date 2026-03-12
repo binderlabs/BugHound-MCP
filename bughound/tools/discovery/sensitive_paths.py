@@ -33,8 +33,10 @@ _PATHS: list[dict[str, Any]] = [
     {"path": "/config.json", "category": "CONFIG_LEAKED", "validate": lambda b: b.strip().startswith("{")},
     {"path": "/config.yaml", "category": "CONFIG_LEAKED"},
     {"path": "/config.yml", "category": "CONFIG_LEAKED"},
+    {"path": "/config.php", "category": "CONFIG_LEAKED"},
     {"path": "/wp-config.php", "category": "CONFIG_LEAKED"},
     {"path": "/wp-config.php.bak", "category": "CONFIG_LEAKED"},
+    {"path": "/wp-config.php.old", "category": "CONFIG_LEAKED"},
     {"path": "/web.config", "category": "CONFIG_LEAKED"},
     {"path": "/.htaccess", "category": "CONFIG_LEAKED"},
     {"path": "/.htpasswd", "category": "CONFIG_LEAKED"},
@@ -61,6 +63,7 @@ _PATHS: list[dict[str, Any]] = [
     {"path": "/server-status", "category": "DEBUG_ENABLED", "validate": lambda b: "Apache Server Status" in b},
     {"path": "/server-info", "category": "DEBUG_ENABLED"},
     {"path": "/.DS_Store", "category": "INFO_LEAK"},
+    {"path": "/Thumbs.db", "category": "INFO_LEAK"},
     {"path": "/debug", "category": "DEBUG_ENABLED"},
     {"path": "/debug/default/view", "category": "DEBUG_ENABLED"},
     {"path": "/_debug_toolbar/", "category": "DEBUG_ENABLED"},
@@ -85,6 +88,8 @@ _PATHS: list[dict[str, Any]] = [
     {"path": "/dump.sql", "category": "BACKUP_FOUND"},
     {"path": "/backup.tar.gz", "category": "BACKUP_FOUND"},
     {"path": "/site.tar.gz", "category": "BACKUP_FOUND"},
+    # Robots (check for juicy disallowed paths)
+    {"path": "/robots.txt", "category": "INFO_LEAK"},
     # Security files
     {"path": "/security.txt", "category": "INFO_LEAK"},
     {"path": "/.well-known/security.txt", "category": "INFO_LEAK"},
@@ -123,6 +128,25 @@ async def check_host(
     base = base_url.rstrip("/")
     sem = asyncio.Semaphore(concurrency)
     findings: list[dict[str, Any]] = []
+
+    # Build dynamic backup paths from hostname
+    try:
+        from urllib.parse import urlparse
+        hostname = urlparse(base).hostname or ""
+        # e.g. "pro.odaha.io" -> "pro_odaha_io" and "pro.odaha"
+        name_underscore = hostname.replace(".", "_")
+        name_short = hostname.rsplit(".", 1)[0].replace(".", "_") if "." in hostname else hostname
+    except Exception:
+        name_underscore = ""
+        name_short = ""
+
+    dynamic_paths = _PATHS.copy()
+    if name_underscore:
+        dynamic_paths.append({"path": f"/{name_underscore}.sql", "category": "BACKUP_FOUND"})
+        dynamic_paths.append({"path": f"/{name_underscore}.zip", "category": "BACKUP_FOUND"})
+    if name_short and name_short != name_underscore:
+        dynamic_paths.append({"path": f"/{name_short}.sql", "category": "BACKUP_FOUND"})
+        dynamic_paths.append({"path": f"/{name_short}.zip", "category": "BACKUP_FOUND"})
 
     async def _check_one(entry: dict[str, Any]) -> None:
         async with sem:
@@ -164,7 +188,7 @@ async def check_host(
             except Exception:
                 pass
 
-    tasks = [_check_one(e) for e in _PATHS]
+    tasks = [_check_one(e) for e in dynamic_paths]
     await asyncio.gather(*tasks)
 
     findings.sort(key=lambda f: f["path"])
