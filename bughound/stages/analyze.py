@@ -493,7 +493,8 @@ def _detect_attack_chains(
 
         # CHAIN 7 — Unauthenticated API + Injection
         eps_with_params = [ep for ep in hidden_eps if ep.get("path") and "?" in ep.get("path", "")]
-        if hidden_eps and has_no_waf:
+        host_has_params = bool(info["parameters"]) or bool(eps_with_params)
+        if hidden_eps and host_has_params and has_no_waf:
             chains.append({
                 "chain_id": "UNAUTH_API_INJECTION",
                 "name": "Unauthenticated API + Injection",
