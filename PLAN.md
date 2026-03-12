@@ -218,6 +218,15 @@ Target: Black Hat Arsenal demo-ready by Day 10
 - [x] Install hints for one-liner tools in tool_runner.py
 - [x] Git commit: "one-liner pipeline engine"
 
+**Day 8.95 — Enhanced One-liners + Smart Pipelines:**
+- [x] 4 new tool wrappers: gxss.py, bhedak.py, urldedupe.py, interlace.py (10 total)
+- [x] 8 smart pipelines: xss_deep_reflection, mass_ssrf/redirect/lfi/crlf, smart_xss/sqli, ssti_quick (17 total)
+- [x] _httpx_verify() — pure-Python HTTP response matching for pipeline verification
+- [x] _smart_dedupe() — global urldedupe pass before every pipeline
+- [x] Phase 4D-pre enhanced: smart pipeline preference, verified hits → findings
+- [x] Tool coverage checker updated with 10 one-liner tools
+- [x] Git commit: "enhance: 4 new one-liner tools + 8 smart pipelines"
+
 **Day 8 Checkpoint:** full pipeline works: target -> recon -> AI analysis -> vulnerability scanning
 
 ## Phase 4: Stage 5 + Stage 6 + Polish (Days 9-10)

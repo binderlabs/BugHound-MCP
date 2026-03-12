@@ -461,11 +461,12 @@ async def _run_tests(
     await _progress(45, "Phase 4D-pre: One-liner pre-filtering", "pipeline")
 
     injection_classes = {
-        "sqli", "xss", "ssrf", "open_redirect", "lfi", "crlf",
+        "sqli", "xss", "ssrf", "open_redirect", "lfi", "crlf", "ssti",
     }
     active_injection_classes = [c for c in injection_classes if c in all_test_classes]
 
     pipeline_candidates: dict[str, list] = {}
+    pipeline_findings: list[dict[str, Any]] = []
     if active_injection_classes:
         try:
             from bughound.tools.oneliners.pipeline import run_prefilter
@@ -474,11 +475,42 @@ async def _run_tests(
             pipeline_candidates = prefilter_result.get("candidates_by_class", {})
             total_prefiltered = prefilter_result.get("total_candidates", 0)
             phase_stats["4D_pre_pipeline"] = total_prefiltered
+            phase_stats["4D_pre_urls_before_dedupe"] = prefilter_result.get("urls_before_dedupe", 0)
+            phase_stats["4D_pre_urls_after_dedupe"] = prefilter_result.get("urls_after_dedupe", 0)
+
+            # Smart pipelines that do HTTP verification produce confirmed findings
+            for vc, candidates in pipeline_candidates.items():
+                for c in candidates:
+                    if not isinstance(c, dict):
+                        continue
+                    # mass_* pipelines return hits with severity set
+                    if c.get("severity") and c.get("matched"):
+                        pipeline_findings.append({
+                            "host": _host_from_url(c.get("url", "")),
+                            "endpoint": c.get("url", ""),
+                            "vulnerability_class": vc,
+                            "severity": c.get("severity", "medium"),
+                            "tool": "pipeline",
+                            "technique_id": f"pipeline_{vc}",
+                            "description": c.get("description", f"Pipeline {vc} hit"),
+                            "evidence": f"Match: {c.get('matched_strings', c.get('match_type', ''))}",
+                            "confidence": "medium",
+                            "needs_validation": True,
+                            "finding_id": _make_finding_id(c),
+                            "validated": False,
+                            "validation_status": None,
+                        })
+
+            if pipeline_findings:
+                all_findings.extend(pipeline_findings)
+                phase_stats["4D_pre_findings"] = len(pipeline_findings)
 
             if total_prefiltered > 0:
                 await _progress(
                     47, f"Pre-filter: {total_prefiltered} candidates across "
-                    f"{len(pipeline_candidates)} classes", "pipeline",
+                    f"{len(pipeline_candidates)} classes "
+                    f"({len(pipeline_findings)} verified hits)",
+                    "pipeline",
                 )
         except Exception as exc:
             warnings.append(f"Pipeline pre-filter error: {exc}")

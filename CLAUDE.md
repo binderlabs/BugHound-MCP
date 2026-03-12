@@ -129,7 +129,7 @@ BugHound/
 
 **Phase:** Phase 4 - Stage 5 + Stage 6 + Polish
 **Current task:** Day 9 - Stage 5 (Validate) + Stage 6 (Report)
-**Completed:** Stages 0-4 complete. 91 files, ~25K LOC, 21 MCP tools, 16 testing techniques, 9 one-liner pipelines. Stage 4 enhanced: 5-phase execution with pipeline pre-filtering (nuclei → dirfuzz → param discovery → pipeline pre-filter → injection → tech-specific), pure-Python injection testers, GraphQL/JWT/WordPress/Spring testing, 6 one-liner tool wrappers with Python fallbacks.
+**Completed:** Stages 0-4 complete. 95 files, ~26K LOC, 21 MCP tools, 16 testing techniques, 17 one-liner pipelines (9 basic + 8 smart with HTTP verification). 10 one-liner tools (qsreplace, kxss, gf, uro, unfurl, anew, Gxss, bhedak, urldedupe, interlace). Smart pipelines use urldedupe for global dedup + httpx verification for confirmed hits.
 **Next:** Build Stage 5 (sqlmap/dalfox validation) + Stage 6 (report generation)
 **Blockers:** None
 

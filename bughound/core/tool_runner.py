@@ -325,6 +325,10 @@ _INSTALL_HINTS: dict[str, str] = {
     "uro": "pip install uro",
     "unfurl": "go install github.com/tomnomnom/unfurl@latest",
     "anew": "go install github.com/tomnomnom/anew@latest",
+    "Gxss": "go install github.com/KathanP19/Gxss@latest",
+    "bhedak": "pipx install bhedak",
+    "urldedupe": "git clone https://github.com/ameenmaali/urldedupe && cd urldedupe && cmake . && make",
+    "interlace": "pipx install git+https://github.com/codingo/Interlace.git",
 }
 
 

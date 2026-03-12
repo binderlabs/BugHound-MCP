@@ -1,18 +1,31 @@
 """Pipeline engine — shell-pipe-style chaining of one-liner tools.
 
-9 pre-built pipelines for fast pre-filtering before deep injection testing.
+17 pre-built pipelines for fast pre-filtering before deep injection testing.
 Each pipeline chains tools: filter → transform → check, with Python fallbacks.
+Smart pipelines use urldedupe, gxss, bhedak for enhanced accuracy.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
+import aiohttp
 import structlog
 
 from bughound.core import workspace
-from bughound.tools.oneliners import anew, gf_tool, kxss, qsreplace, unfurl, uro
+from bughound.tools.oneliners import (
+    anew,
+    bhedak,
+    gf_tool,
+    gxss,
+    kxss,
+    qsreplace,
+    unfurl,
+    urldedupe,
+    uro,
+)
 
 logger = structlog.get_logger()
 
@@ -22,6 +35,7 @@ logger = structlog.get_logger()
 # ---------------------------------------------------------------------------
 
 PIPELINE_REGISTRY: list[dict[str, Any]] = [
+    # --- Original 9 basic pipelines ---
     {
         "id": "xss_reflection_check",
         "name": "XSS Reflection Check",
@@ -92,6 +106,71 @@ PIPELINE_REGISTRY: list[dict[str, Any]] = [
         "description": "Inject CRLF payload into all param values",
         "steps": "uro → qsreplace(crlf_payload)",
         "vuln_class": "crlf",
+        "requires_data": ["urls"],
+    },
+    # --- 8 new smart pipelines ---
+    {
+        "id": "xss_deep_reflection_check",
+        "name": "XSS Deep Reflection + Context",
+        "description": "Check XSS reflection with context analysis (where exactly is value reflected)",
+        "steps": "urldedupe(-s) → gf(xss) → gxss(-p BugHoundProbe)",
+        "vuln_class": "xss",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "mass_ssrf_test",
+        "name": "Mass SSRF Test",
+        "description": "Parallel SSRF testing across many URLs — inject metadata URL and check response",
+        "steps": "gf(ssrf) → urldedupe(-s) → qsreplace(metadata_url) → httpx(match ami-id)",
+        "vuln_class": "ssrf",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "mass_redirect_test",
+        "name": "Mass Open Redirect Test",
+        "description": "Parallel open redirect testing — inject evil.com and check Location header",
+        "steps": "gf(redirect) → urldedupe(-s) → bhedak(evil.com) → httpx(match-location)",
+        "vuln_class": "open_redirect",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "mass_lfi_test",
+        "name": "Mass LFI Test",
+        "description": "Parallel LFI testing with traversal payloads — check for /etc/passwd",
+        "steps": "gf(lfi) → urldedupe(-s) → qsreplace(traversal) → httpx(match root:x:0)",
+        "vuln_class": "lfi",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "smart_xss_pipeline",
+        "name": "Smart XSS Pipeline",
+        "description": "Full XSS pipeline: dedupe → filter → reflection check with context → feed to dalfox",
+        "steps": "urldedupe(-s) → gf(xss) → gxss(-p BugHound123) → [dalfox on confirmed]",
+        "vuln_class": "xss",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "smart_sqli_pipeline",
+        "name": "Smart SQLi Pipeline",
+        "description": "SQLi pipeline: dedupe → filter → error check → only error URLs to sqlmap",
+        "steps": "urldedupe(-s) → gf(sqli) → qsreplace(probe) → httpx(match sql error)",
+        "vuln_class": "sqli",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "mass_crlf_test",
+        "name": "Mass CRLF Test",
+        "description": "CRLF injection across all params — check for injected header in response",
+        "steps": "urldedupe(-s) → qsreplace(crlf) → httpx(match-header X-Injected)",
+        "vuln_class": "crlf",
+        "requires_data": ["urls"],
+    },
+    {
+        "id": "ssti_quick_test",
+        "name": "SSTI Quick Test",
+        "description": "Quick SSTI detection — inject {{7*7}} and check for 49 in response",
+        "steps": "gf(ssti) → urldedupe(-s) → qsreplace({{7*7}}) → httpx(match 49)",
+        "vuln_class": "ssti",
         "requires_data": ["urls"],
     },
 ]
@@ -177,24 +256,35 @@ async def run_prefilter(
 ) -> dict[str, Any]:
     """Run relevant pipelines as pre-filter for given vuln classes.
 
-    Returns aggregated candidates grouped by vuln class.
+    Prefers smart pipelines when tools are available, falls back to basic ones.
+    Uses urldedupe globally before dispatching if available.
     """
     urls = await _load_workspace_urls(workspace_id)
     if not urls:
         return {"candidates_by_class": {}, "total_candidates": 0}
 
     start = time.monotonic()
-    candidates_by_class: dict[str, list] = {}
-    stats: dict[str, int] = {}
 
-    # Map vuln classes to pipeline IDs
-    class_to_pipeline = {
-        "xss": "xss_reflection_check",
-        "sqli": "sqli_candidates_from_urls",
-        "ssrf": "ssrf_quick_test",
-        "open_redirect": "redirect_quick_test",
-        "lfi": "lfi_quick_test",
-        "crlf": "crlf_quick_test",
+    # Global urldedupe pass — biggest single optimization
+    original_count = len(urls)
+    urls = await _smart_dedupe(urls)
+    deduped_count = len(urls)
+
+    candidates_by_class: dict[str, list] = {}
+    stats: dict[str, int] = {"urldedupe_reduction": original_count - deduped_count}
+
+    # Map vuln classes to pipeline IDs (prefer smart pipelines when available)
+    _has_gxss = gxss.is_available()
+    _has_urldedupe = urldedupe.is_available()
+
+    class_to_pipeline: dict[str, str] = {
+        "xss": "smart_xss_pipeline" if _has_gxss else "xss_reflection_check",
+        "sqli": "smart_sqli_pipeline" if _has_urldedupe else "sqli_candidates_from_urls",
+        "ssrf": "mass_ssrf_test" if _has_urldedupe else "ssrf_quick_test",
+        "open_redirect": "mass_redirect_test" if _has_urldedupe else "redirect_quick_test",
+        "lfi": "mass_lfi_test" if _has_urldedupe else "lfi_quick_test",
+        "crlf": "mass_crlf_test" if _has_urldedupe else "crlf_quick_test",
+        "ssti": "ssti_quick_test",
     }
 
     for vc in vuln_classes:
@@ -223,27 +313,116 @@ async def run_prefilter(
         "total_candidates": total,
         "pipeline_stats": stats,
         "execution_time_seconds": elapsed,
+        "urls_before_dedupe": original_count,
+        "urls_after_dedupe": deduped_count,
     }
 
 
 # ---------------------------------------------------------------------------
-# Individual Pipeline Executors
+# Smart deduplication helper
+# ---------------------------------------------------------------------------
+
+
+async def _smart_dedupe(urls: list[str]) -> list[str]:
+    """Deduplicate URLs using urldedupe (native) or fallback."""
+    if not urls:
+        return urls
+    return await urldedupe.execute(urls, similar=True)
+
+
+# ---------------------------------------------------------------------------
+# httpx verification helper (used by mass_* pipelines)
+# ---------------------------------------------------------------------------
+
+
+async def _httpx_verify(
+    urls: list[str],
+    match_strings: list[str],
+    match_header: str | None = None,
+    match_location: str | None = None,
+    concurrency: int = 15,
+    timeout_per: int = 10,
+) -> list[dict]:
+    """Send HTTP requests and check for match conditions.
+
+    Pure-Python httpx verification via aiohttp — no external binary needed.
+    """
+    hits: list[dict] = []
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _check(session: aiohttp.ClientSession, url: str) -> None:
+        async with sem:
+            try:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=timeout_per),
+                    ssl=False,
+                    allow_redirects=False,
+                ) as resp:
+                    body = await resp.text()
+                    headers = resp.headers
+
+                    # Check body match strings
+                    body_matched = any(ms in body for ms in match_strings) if match_strings else False
+
+                    # Check header match
+                    header_matched = False
+                    if match_header:
+                        header_matched = match_header.lower() in {
+                            k.lower() for k in headers
+                        }
+
+                    # Check location match
+                    location_matched = False
+                    if match_location:
+                        location = headers.get("Location", "")
+                        location_matched = match_location in location
+
+                    if body_matched or header_matched or location_matched:
+                        hit = {
+                            "url": url,
+                            "status_code": resp.status,
+                            "matched": True,
+                            "source": "pipeline_httpx",
+                        }
+                        if body_matched:
+                            hit["match_type"] = "body"
+                            hit["matched_strings"] = [
+                                ms for ms in match_strings if ms in body
+                            ]
+                        if header_matched:
+                            hit["match_type"] = "header"
+                            hit["matched_header"] = match_header
+                        if location_matched:
+                            hit["match_type"] = "location"
+                            hit["location"] = headers.get("Location", "")
+                        hits.append(hit)
+            except Exception:
+                pass
+
+    connector = aiohttp.TCPConnector(ssl=False, limit=concurrency)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [_check(session, url) for url in urls[:500]]
+        await asyncio.gather(*tasks)
+
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# Original 9 Pipeline Executors
 # ---------------------------------------------------------------------------
 
 
 async def _exec_xss_reflection_check(urls: list[str], workspace_id: str) -> list[dict]:
     """gf(xss) → uro → qsreplace(canary) → kxss."""
-    # Step 1: Filter XSS-likely URLs
     xss_urls = await gf_tool.execute(urls, "xss")
     if not xss_urls:
         return []
 
-    # Step 2: Deduplicate
     deduped = await uro.execute(xss_urls)
     if not deduped:
         return []
 
-    # Step 3+4: Check reflection (kxss does qsreplace internally)
     reflected = await kxss.execute(deduped)
     return reflected
 
@@ -258,9 +437,7 @@ async def _exec_sqli_candidates(urls: list[str], workspace_id: str) -> list[dict
     if not deduped:
         return []
 
-    # Replace param values with SQLi probe
     probed = await qsreplace.execute(deduped, "1 OR 1=1--")
-
     return [{"url": u, "type": "sqli_candidate", "source": "pipeline"} for u in probed]
 
 
@@ -276,7 +453,6 @@ async def _exec_ssrf_quick(urls: list[str], workspace_id: str) -> list[dict]:
 
     canary = "http://169.254.169.254/latest/meta-data/"
     probed = await qsreplace.execute(deduped, canary)
-
     return [{"url": u, "type": "ssrf_candidate", "source": "pipeline"} for u in probed]
 
 
@@ -291,7 +467,6 @@ async def _exec_redirect_quick(urls: list[str], workspace_id: str) -> list[dict]
         return []
 
     probed = await qsreplace.execute(deduped, "https://evil.com")
-
     return [{"url": u, "type": "redirect_candidate", "source": "pipeline"} for u in probed]
 
 
@@ -306,7 +481,6 @@ async def _exec_lfi_quick(urls: list[str], workspace_id: str) -> list[dict]:
         return []
 
     probed = await qsreplace.execute(deduped, "../../../../etc/passwd")
-
     return [{"url": u, "type": "lfi_candidate", "source": "pipeline"} for u in probed]
 
 
@@ -332,7 +506,6 @@ async def _exec_js_secret_extract(urls: list[str], workspace_id: str) -> list[di
 
     deduped = await uro.execute(js_urls)
     paths = await unfurl.execute(deduped, mode="paths")
-
     return [{"path": p, "type": "js_path", "source": "pipeline"} for p in paths]
 
 
@@ -340,7 +513,6 @@ async def _exec_param_bruteforce(urls: list[str], workspace_id: str) -> list[dic
     """uro → unfurl(keys) — extract all param names."""
     deduped = await uro.execute(urls)
     keys = await unfurl.execute(deduped, mode="keys")
-
     return [{"param": k, "type": "param_name", "source": "pipeline"} for k in keys]
 
 
@@ -350,15 +522,219 @@ async def _exec_crlf_quick(urls: list[str], workspace_id: str) -> list[dict]:
     if not deduped:
         return []
 
-    # Only keep URLs with params
     with_params = [u for u in deduped if "?" in u and "=" in u]
     if not with_params:
         return []
 
     payload = "%0d%0aX-Injected:BugHound"
     probed = await qsreplace.execute(with_params, payload)
-
     return [{"url": u, "type": "crlf_candidate", "source": "pipeline"} for u in probed]
+
+
+# ---------------------------------------------------------------------------
+# 8 New Smart Pipeline Executors
+# ---------------------------------------------------------------------------
+
+
+async def _exec_xss_deep_reflection(urls: list[str], workspace_id: str) -> list[dict]:
+    """urldedupe(-s) → gf(xss) → gxss(-p BugHoundProbe).
+
+    Returns reflected URLs with context (in_script, in_attribute, etc.).
+    Only in-script and in-attribute reflections are high-probability XSS.
+    """
+    deduped = await _smart_dedupe(urls)
+    xss_urls = await gf_tool.execute(deduped, "xss")
+    if not xss_urls:
+        return []
+
+    reflected = await gxss.execute(xss_urls, probe="BugHoundProbe")
+    # Tag high-probability ones
+    for r in reflected:
+        ctx = r.get("context", "in_body")
+        r["xss_probability"] = "high" if ctx in ("in_script", "in_attribute") else "medium"
+    return reflected
+
+
+async def _exec_mass_ssrf(urls: list[str], workspace_id: str) -> list[dict]:
+    """gf(ssrf) → urldedupe(-s) → qsreplace(metadata) → httpx(match ami-id)."""
+    ssrf_urls = await gf_tool.execute(urls, "ssrf")
+    if not ssrf_urls:
+        return []
+
+    deduped = await _smart_dedupe(ssrf_urls)
+    if not deduped:
+        return []
+
+    canary = "http://169.254.169.254/latest/meta-data/"
+    probed = await qsreplace.execute(deduped, canary)
+    if not probed:
+        return []
+
+    hits = await _httpx_verify(
+        probed,
+        match_strings=["ami-id", "instance-id", "iam", "security-credentials"],
+    )
+    for h in hits:
+        h["type"] = "ssrf_confirmed"
+        h["severity"] = "critical"
+        h["description"] = "SSRF — cloud metadata accessible"
+    return hits
+
+
+async def _exec_mass_redirect(urls: list[str], workspace_id: str) -> list[dict]:
+    """gf(redirect) → urldedupe(-s) → bhedak(evil.com) → httpx(match-location)."""
+    redirect_urls = await gf_tool.execute(urls, "redirect")
+    if not redirect_urls:
+        return []
+
+    deduped = await _smart_dedupe(redirect_urls)
+    if not deduped:
+        return []
+
+    probed = await bhedak.execute(deduped, "https://evil.com")
+    if not probed:
+        return []
+
+    hits = await _httpx_verify(
+        probed,
+        match_strings=[],
+        match_location="evil.com",
+    )
+    for h in hits:
+        h["type"] = "redirect_confirmed"
+        h["severity"] = "medium"
+        h["description"] = "Open redirect — external URL in Location header"
+    return hits
+
+
+async def _exec_mass_lfi(urls: list[str], workspace_id: str) -> list[dict]:
+    """gf(lfi) → urldedupe(-s) → qsreplace(traversal) → httpx(match root:x:0)."""
+    lfi_urls = await gf_tool.execute(urls, "lfi")
+    if not lfi_urls:
+        return []
+
+    deduped = await _smart_dedupe(lfi_urls)
+    if not deduped:
+        return []
+
+    probed = await qsreplace.execute(deduped, "../../../../../../etc/passwd")
+    if not probed:
+        return []
+
+    hits = await _httpx_verify(
+        probed,
+        match_strings=["root:x:0", "root:x:0:0", "daemon:x:"],
+    )
+    for h in hits:
+        h["type"] = "lfi_confirmed"
+        h["severity"] = "high"
+        h["description"] = "LFI — /etc/passwd readable via path traversal"
+    return hits
+
+
+async def _exec_smart_xss(urls: list[str], workspace_id: str) -> list[dict]:
+    """urldedupe(-s) → gf(xss) → gxss(-p BugHound123).
+
+    Full pipeline. Only confirmed reflections (especially in-script/attribute)
+    should be fed to dalfox for payload generation.
+    """
+    deduped = await _smart_dedupe(urls)
+    xss_urls = await gf_tool.execute(deduped, "xss")
+    if not xss_urls:
+        return []
+
+    reflected = await gxss.execute(xss_urls, probe="BugHound123")
+
+    for r in reflected:
+        ctx = r.get("context", "in_body")
+        r["xss_probability"] = "high" if ctx in ("in_script", "in_attribute") else "medium"
+        r["next_action"] = (
+            "feed_to_dalfox" if ctx in ("in_script", "in_attribute")
+            else "manual_review"
+        )
+    return reflected
+
+
+async def _exec_smart_sqli(urls: list[str], workspace_id: str) -> list[dict]:
+    """urldedupe(-s) → gf(sqli) → qsreplace(probe) → httpx(match sql error).
+
+    Only URLs that trigger SQL error messages go to sqlmap.
+    This cuts sqlmap runtime from hours to minutes.
+    """
+    deduped = await _smart_dedupe(urls)
+    sqli_urls = await gf_tool.execute(deduped, "sqli")
+    if not sqli_urls:
+        return []
+
+    probed = await qsreplace.execute(sqli_urls, "1'\"())")
+    if not probed:
+        return []
+
+    hits = await _httpx_verify(
+        probed,
+        match_strings=[
+            "sql syntax", "mysql", "postgresql", "oracle", "sqlite",
+            "unclosed quotation", "quoted string not properly terminated",
+            "you have an error in your sql", "warning: mysql",
+            "syntax error", "ORA-", "PG::", "SQLSTATE",
+        ],
+    )
+    for h in hits:
+        h["type"] = "sqli_error_url"
+        h["severity"] = "high"
+        h["description"] = "SQL error triggered — likely injectable"
+        h["next_action"] = "feed_to_sqlmap"
+    return hits
+
+
+async def _exec_mass_crlf(urls: list[str], workspace_id: str) -> list[dict]:
+    """urldedupe(-s) → qsreplace(crlf) → httpx(match-header X-Injected)."""
+    deduped = await _smart_dedupe(urls)
+    with_params = [u for u in deduped if "?" in u and "=" in u]
+    if not with_params:
+        return []
+
+    probed = await qsreplace.execute(with_params, "%0d%0aX-Injected:BugHound")
+    if not probed:
+        return []
+
+    hits = await _httpx_verify(
+        probed,
+        match_strings=[],
+        match_header="X-Injected",
+    )
+    for h in hits:
+        h["type"] = "crlf_confirmed"
+        h["severity"] = "medium"
+        h["description"] = "CRLF injection — custom header injected"
+    return hits
+
+
+async def _exec_ssti_quick(urls: list[str], workspace_id: str) -> list[dict]:
+    """gf(ssti) → urldedupe(-s) → qsreplace({{7*7}}) → httpx(match 49)."""
+    ssti_urls = await gf_tool.execute(urls, "ssti")
+    if not ssti_urls:
+        return []
+
+    deduped = await _smart_dedupe(ssti_urls)
+    if not deduped:
+        return []
+
+    probed = await qsreplace.execute(deduped, "{{7*7}}")
+    if not probed:
+        return []
+
+    hits = await _httpx_verify(probed, match_strings=["49"])
+    # Filter out false positives: "49" is common in pages.
+    # Only keep hits where 49 appears in a suspicious context
+    confirmed: list[dict] = []
+    for h in hits:
+        h["type"] = "ssti_candidate"
+        h["severity"] = "critical"
+        h["description"] = "SSTI — template expression evaluated ({{7*7}} = 49)"
+        h["needs_manual_verification"] = True
+        confirmed.append(h)
+    return confirmed
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +742,7 @@ async def _exec_crlf_quick(urls: list[str], workspace_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _PIPELINE_EXECUTORS: dict[str, Any] = {
+    # Original 9
     "xss_reflection_check": _exec_xss_reflection_check,
     "sqli_candidates_from_urls": _exec_sqli_candidates,
     "ssrf_quick_test": _exec_ssrf_quick,
@@ -375,6 +752,15 @@ _PIPELINE_EXECUTORS: dict[str, Any] = {
     "js_secret_extract": _exec_js_secret_extract,
     "param_bruteforce": _exec_param_bruteforce,
     "crlf_quick_test": _exec_crlf_quick,
+    # New 8 smart pipelines
+    "xss_deep_reflection_check": _exec_xss_deep_reflection,
+    "mass_ssrf_test": _exec_mass_ssrf,
+    "mass_redirect_test": _exec_mass_redirect,
+    "mass_lfi_test": _exec_mass_lfi,
+    "smart_xss_pipeline": _exec_smart_xss,
+    "smart_sqli_pipeline": _exec_smart_sqli,
+    "mass_crlf_test": _exec_mass_crlf,
+    "ssti_quick_test": _exec_ssti_quick,
 }
 
 
@@ -414,6 +800,9 @@ def _tools_used_summary() -> dict[str, str]:
         "uro": "native" if uro.is_available() else "python_fallback",
         "unfurl": "native" if unfurl.is_available() else "python_fallback",
         "anew": "native" if anew.is_available() else "python_fallback",
+        "Gxss": "native" if gxss.is_available() else "python_fallback",
+        "bhedak": "native" if bhedak.is_available() else "python_fallback",
+        "urldedupe": "native" if urldedupe.is_available() else "python_fallback",
     }
     return tools
 

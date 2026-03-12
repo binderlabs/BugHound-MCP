@@ -833,6 +833,10 @@ async def bughound_check_tool_coverage() -> str:
         "uro": "pip install uro",
         "unfurl": "go install github.com/tomnomnom/unfurl@latest",
         "anew": "go install github.com/tomnomnom/anew@latest",
+        "Gxss": "go install github.com/KathanP19/Gxss@latest",
+        "bhedak": "pipx install bhedak",
+        "urldedupe": "git clone https://github.com/ameenmaali/urldedupe && cd urldedupe && cmake . && make",
+        "interlace": "pipx install git+https://github.com/codingo/Interlace.git",
     }
     oneliner_avail = []
     oneliner_missing = []
@@ -944,10 +948,12 @@ async def bughound_list_techniques() -> str:
     name="bughound_run_pipeline",
     description=(
         "Run a one-liner pipeline for fast pre-filtering of URLs. Chains tools "
-        "like gf, qsreplace, kxss, uro for quick candidate identification. "
-        "Pipelines: xss_reflection_check, sqli_candidates_from_urls, ssrf_quick_test, "
-        "redirect_quick_test, lfi_quick_test, xss_quick_test, js_secret_extract, "
-        "param_bruteforce, crlf_quick_test. All have Python fallbacks. Stage 4."
+        "like gf, qsreplace, kxss, gxss, urldedupe, bhedak for quick candidate "
+        "identification. 17 pipelines: 9 basic (xss_reflection_check, sqli_candidates, "
+        "ssrf/redirect/lfi/crlf quick tests, js_secret_extract, param_bruteforce) + "
+        "8 smart (xss_deep_reflection_check, smart_xss_pipeline, smart_sqli_pipeline, "
+        "mass_ssrf/redirect/lfi/crlf tests, ssti_quick_test). Smart pipelines verify "
+        "hits via HTTP response matching. All have Python fallbacks. Stage 4."
     ),
 )
 async def bughound_run_pipeline(workspace_id: str, pipeline_id: str) -> str:
@@ -961,8 +967,8 @@ async def bughound_run_pipeline(workspace_id: str, pipeline_id: str) -> str:
 @mcp.tool(
     name="bughound_list_pipelines",
     description=(
-        "List all available one-liner pipelines with descriptions and tool chain. "
-        "Shows which tools are native vs Python fallback. Stage 4."
+        "List all 17 one-liner pipelines (9 basic + 8 smart) with descriptions "
+        "and tool chains. Shows which tools are native vs Python fallback. Stage 4."
     ),
 )
 async def bughound_list_pipelines() -> str:

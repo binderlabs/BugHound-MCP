@@ -396,6 +396,51 @@ Each wrapper has BINARY, is_available(), execute() + Python fallback:
 
 ---
 
+## 2026-03-13 - Day 8.95: 4 New One-liner Tools + 8 Smart Pipelines
+
+### What Was Built
+
+**4 new tool wrappers (bughound/tools/oneliners/):**
+- gxss.py — reflection check with context analysis (in_script, in_attribute, in_tag, in_comment)
+- bhedak.py — upgraded qsreplace with append mode and param targeting
+- urldedupe.py — smart URL deduplication by parameter structure (50K URLs → 5K patterns)
+- interlace.py — parallel command execution across multiple targets
+
+**8 new smart pipelines (pipeline.py, 17 total):**
+1. xss_deep_reflection_check — urldedupe → gf(xss) → gxss (context-aware reflection)
+2. mass_ssrf_test — gf(ssrf) → urldedupe → qsreplace(metadata) → httpx(match ami-id)
+3. mass_redirect_test — gf(redirect) → urldedupe → bhedak(evil.com) → httpx(match-location)
+4. mass_lfi_test — gf(lfi) → urldedupe → qsreplace(traversal) → httpx(match root:x:0)
+5. smart_xss_pipeline — urldedupe → gf(xss) → gxss (feeds only in-script/attribute to dalfox)
+6. smart_sqli_pipeline — urldedupe → gf(sqli) → qsreplace(probe) → httpx(match sql error)
+7. mass_crlf_test — urldedupe → qsreplace(crlf) → httpx(match-header X-Injected)
+8. ssti_quick_test — gf(ssti) → urldedupe → qsreplace({{7*7}}) → httpx(match 49)
+
+**Smart pipeline enhancements:**
+- _httpx_verify() — pure-Python HTTP verification (body match, header match, location match)
+- _smart_dedupe() — global urldedupe pass before every pipeline (biggest single optimization)
+- run_prefilter() now prefers smart pipelines when tools available, falls back to basic
+- Phase 4D-pre now converts verified hits directly into findings
+- Pipeline pre-filter reports urls_before/after_dedupe for optimization stats
+
+**Installation notes:**
+- Gxss: go install (Go binary)
+- bhedak: pipx install (Python package)
+- urldedupe: cmake/make from source (C++ binary)
+- interlace: pipx install from GitHub (Python)
+- Tool coverage checker updated with all 10 one-liner tools
+
+### Stats
+- 95 Python files, ~26K LOC
+- 21 MCP tools
+- 16 testing techniques + 17 one-liner pipelines
+- 10/10 one-liner tools installed natively
+
+### What's Next
+- Phase 4 Day 9: Stage 5 (Validate) + Stage 6 (Report)
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->
