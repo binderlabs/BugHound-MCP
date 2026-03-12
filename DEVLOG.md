@@ -215,6 +215,48 @@ HIDDEN_ENDPOINT, SHARED_INFRASTRUCTURE, LEAKED_CREDENTIAL, TECH_MISMATCH, PARAME
 
 ---
 
+## 2026-03-13 - Day 8: Stage 4 (Test / Execution Engine)
+
+### Overview
+Stage 4 executes the scan plan from Stage 3. Nuclei is the workhorse — no decision-making happens here, tools run exactly what the plan says.
+
+### What Was Built
+
+**nuclei.py rewrite** (419 → 113 lines):
+- Migrated from BaseTool class to tool_runner.run() pattern
+- Supports: -u (single), -l (file list), -tags, -severity, -t (template path)
+- Parses JSONL output into structured finding dicts
+- Rate limiting, timeout support, temp file cleanup
+
+**stages/test.py** (362 lines):
+- `execute_tests()`: reads scan_plan.json, maps 16 test_classes to nuclei tags, runs priority-ordered
+- `test_single()`: surgical single-endpoint testing, scope-checked, always sync
+- Finding processing: unique finding_id (sha256 hash), vuln classification, needs_validation flag
+- Sync for small plans (≤2 targets, ≤6 classes), async with progress for larger
+- 16 test class → nuclei tag mappings (sqli, xss, ssrf, graphql, wordpress, lfi, rfi, redirect, takeover, cve, misconfig, default_creds, exposure, idor, auth_bypass, api)
+- Definitive vs needs-validation classification (takeover/exposure/misconfig are definitive; sqli/xss/ssrf need Stage 5)
+
+**2 new MCP tools** (18 total):
+- bughound_execute_tests: run full scan plan, sync or async
+- bughound_test_single: surgical test one endpoint
+
+### Bug Fixes
+- attack_surface.json persistence: DataWrapper expects list, result is dict → use aiofiles directly
+- NoneType crash in takeover scoring: `info.get("takeover", {})` returns None → use `(info.get("takeover") or {})`
+- Missing workspace_results categories: api_endpoints, dns, js_secrets_confirmed, takeover_confirmed
+- Category name mismatches: added aliases (hosts/live_hosts, cors/cors_results, etc.)
+
+### Current State
+- **76 Python files, ~20,700 LOC**
+- **18 MCP tools** on single FastMCP server
+- **15 tool wrappers** (nuclei rewritten)
+- **Stages 0-4 fully implemented**
+
+### What's Next
+- Phase 4 Day 9: Stage 5 (Validate) + Stage 6 (Report)
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

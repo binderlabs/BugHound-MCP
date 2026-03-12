@@ -32,6 +32,7 @@ from bughound.schemas.models import WorkspaceState
 from bughound.stages import analyze as stage_analyze
 from bughound.stages import discover as stage_discover
 from bughound.stages import enumerate as stage_enumerate
+from bughound.stages import test as stage_test
 
 # Shared job manager instance (lives for server lifetime)
 _job_manager = JobManager()
@@ -828,6 +829,52 @@ async def bughound_check_tool_coverage() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Stage 4: Test
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_execute_tests",
+    description=(
+        "Execute vulnerability scan plan created in Stage 3. Runs nuclei with "
+        "targeted template tags per host based on the scan plan. Sync for single "
+        "targets (<=2 hosts, <=6 test classes), async for larger plans. "
+        "Requires bughound_submit_scan_plan first. Stage 4."
+    ),
+)
+async def bughound_execute_tests(workspace_id: str) -> str:
+    """Run the scan plan."""
+    result = await stage_test.execute_tests(workspace_id, _job_manager)
+    if result.get("status") == "job_started":
+        return _format_job_started(result)
+    return _format_test_results(result)
+
+
+@mcp.tool(
+    name="bughound_test_single",
+    description=(
+        "Surgical vulnerability test on a specific endpoint. Use for targeted "
+        "follow-up when the AI identifies an interesting target from analysis. "
+        "Always synchronous. Scope-checked. Stage 4."
+    ),
+)
+async def bughound_test_single(
+    workspace_id: str,
+    target_url: str,
+    tool: str = "nuclei",
+    tags: str = "",
+    severity: str = "",
+) -> str:
+    """Test one specific endpoint."""
+    result = await stage_test.test_single(
+        workspace_id, target_url, tool,
+        tags=tags or None,
+        severity=severity or None,
+    )
+    return _format_test_results(result)
+
+
+# ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------
 
@@ -1403,6 +1450,83 @@ def _format_enrich_target(result: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _format_test_results(result: dict[str, Any]) -> str:
+    """Format test execution results as readable text."""
+    if result.get("status") == "error":
+        return f"Error [{result.get('error_type', '?')}]: {result['message']}"
+
+    lines = [f"## Test Results\n"]
+
+    # Single-target mode
+    if result.get("tool"):
+        lines.append(f"**Tool:** {result['tool']}")
+        lines.append(f"**Target:** {result.get('target', '?')}")
+    else:
+        lines.append(f"**Targets Tested:** {result.get('targets_tested', 0)}")
+
+    lines.append(f"**Findings Total:** {result.get('findings_total', 0)}\n")
+
+    # Severity breakdown
+    sev = result.get("findings_by_severity", {})
+    if any(sev.values()):
+        lines.append("**Findings by Severity:**")
+        for level in ("critical", "high", "medium", "low", "info"):
+            count = sev.get(level, 0)
+            if count:
+                lines.append(f"  - **{level.upper()}**: {count}")
+        lines.append("")
+
+    # Validation breakdown
+    needs_val = result.get("findings_needing_validation")
+    definitive = result.get("findings_definitive")
+    if needs_val is not None:
+        lines.append(f"**Definitive (report now):** {definitive}")
+        lines.append(f"**Needs Validation (Stage 5):** {needs_val}\n")
+
+    # Show findings
+    findings = result.get("findings", [])
+    if findings:
+        lines.append("### Findings\n")
+        for f in findings[:15]:
+            sev_tag = f.get("severity", "?").upper()
+            val_tag = " [needs validation]" if f.get("needs_validation") else " [definitive]"
+            lines.append(
+                f"**[{sev_tag}]** `{f.get('template_id', '?')}`{val_tag}"
+            )
+            lines.append(f"  - Host: {f.get('host', '?')}")
+            lines.append(f"  - Endpoint: `{f.get('endpoint', '?')}`")
+            lines.append(f"  - Class: {f.get('vulnerability_class', '?')}")
+            name = f.get("template_name", "")
+            if name:
+                lines.append(f"  - Name: {name}")
+            curl = f.get("curl_command", "")
+            if curl:
+                lines.append(f"  - Curl: `{curl[:120]}{'...' if len(curl) > 120 else ''}`")
+            lines.append("")
+
+        if len(findings) > 15:
+            lines.append(f"... and {len(findings) - 15} more findings.\n")
+
+    # Warnings
+    warnings = result.get("warnings", [])
+    if warnings:
+        lines.append("**Warnings:**")
+        for w in warnings:
+            lines.append(f"  - {w}")
+        lines.append("")
+
+    # Files
+    files = result.get("files_written", [])
+    if files:
+        lines.append("**Files written:**")
+        for f in files:
+            lines.append(f"  - `{f}`")
+        lines.append("")
+
+    lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    return "\n".join(lines) + "\n"
+
+
 def _suggest_next(stages: list[int]) -> str:
     """Suggest the next tool to call based on stages_to_run."""
     if 1 in stages:
@@ -1411,6 +1535,8 @@ def _suggest_next(stages: list[int]) -> str:
         return "Call `bughound_discover` to probe and discover the attack surface."
     if 3 in stages:
         return "Call `bughound_get_attack_surface` to analyze the attack surface."
+    if 4 in stages:
+        return "Call `bughound_execute_tests` to run the scan plan."
     return "Call the next stage tool in the pipeline."
 
 

@@ -179,15 +179,17 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 ### Day 8: Stage 4 (Test)
 
-- [ ] stages/test.py
-- [ ] Migrate nuclei wrapper to new tool_runner base
-- [ ] Map test_classes from scan plan to nuclei template tags
-- [ ] Execute scan plan against approved targets
-- [ ] Register MCP tools:
-  - [ ] bughound_execute_tests (async for broad, sync for single)
-  - [ ] bughound_test_single (surgical, always sync)
-- [ ] Output: vulnerabilities/scan_results.json
-- [ ] Git commit: "stage 4 - test"
+- [x] stages/test.py (362 lines — scan plan execution + surgical testing)
+- [x] Migrate nuclei wrapper to new tool_runner base (419 → 113 lines)
+- [x] Map 16 test_classes from scan plan to nuclei template tags
+- [x] Execute scan plan against approved targets (priority-ordered, per-target timeout)
+- [x] Finding processing: unique IDs, vuln classification, needs_validation flag, confidence scoring
+- [x] Sync for ≤2 targets + ≤6 test classes, async with progress for larger plans
+- [x] Register MCP tools:
+  - [x] bughound_execute_tests (async for broad, sync for single)
+  - [x] bughound_test_single (surgical, always sync, scope-checked)
+- [x] Output: vulnerabilities/scan_results.json (with finding_id, severity, evidence, curl_command)
+- [x] Git commit: "stage 4 - test"
 
 **Day 8 Checkpoint:** full pipeline works: target -> recon -> AI analysis -> vulnerability scanning
 
