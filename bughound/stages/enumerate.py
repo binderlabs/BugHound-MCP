@@ -229,7 +229,7 @@ async def enumerate_deep(
         if amass.is_available():
             await job_manager.update_progress(jid, 35, "Running amass (slow, thorough)", "amass")
             try:
-                amass_result = await amass.execute(target, timeout=300)
+                amass_result = await amass.execute(target, timeout=660)
                 if amass_result.success and amass_result.results:
                     amass_subs = {s.strip().lower() for s in amass_result.results if s.strip()}
                     await job_manager.update_progress(

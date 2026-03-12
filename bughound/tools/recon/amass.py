@@ -11,7 +11,7 @@ from bughound.core import tool_runner
 from bughound.schemas.models import ToolResult
 
 BINARY = "amass"
-TIMEOUT = 300  # 5 min — amass is slow but thorough, only used in deep mode
+TIMEOUT = 660  # 11 min — amass is slow but thorough, only used in deep mode
 
 
 def is_available() -> bool:
@@ -26,7 +26,7 @@ async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
     """
     result = await tool_runner.run(
         BINARY,
-        ["enum", "-d", target, "-nocolor", "-timeout", "4"],
+        ["enum", "-d", target, "-nocolor", "-timeout", "10"],
         target=target,
         timeout=timeout,
     )
