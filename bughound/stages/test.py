@@ -153,6 +153,7 @@ async def test_single(
     tool: str = "nuclei",
     tags: str | None = None,
     severity: str | None = None,
+    template: str | None = None,
 ) -> dict[str, Any]:
     """Surgical test of one specific endpoint. Always synchronous."""
     meta = await workspace.get_workspace(workspace_id)
@@ -178,6 +179,7 @@ async def test_single(
             target_url,
             tags=tag_list,
             severity=severity or "critical,high,medium",
+            template_path=template,
             timeout=300,
         )
 

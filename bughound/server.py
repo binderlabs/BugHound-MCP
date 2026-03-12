@@ -864,12 +864,14 @@ async def bughound_test_single(
     tool: str = "nuclei",
     tags: str = "",
     severity: str = "",
+    template: str = "",
 ) -> str:
     """Test one specific endpoint."""
     result = await stage_test.test_single(
         workspace_id, target_url, tool,
         tags=tags or None,
         severity=severity or None,
+        template=template or None,
     )
     return _format_test_results(result)
 
