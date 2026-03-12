@@ -3,9 +3,28 @@
 from __future__ import annotations
 
 import json
+import logging
+import sys
 from typing import Any
 
+import structlog
 from mcp.server.fastmcp import FastMCP
+
+# ---------------------------------------------------------------------------
+# Logging — ALL output must go to stderr. stdout is the JSON-RPC stdio pipe.
+# Writing anything to stdout (including structlog's default ConsoleRenderer)
+# corrupts the MCP transport and freezes the AI client (gemini-cli, etc.).
+# ---------------------------------------------------------------------------
+logging.basicConfig(format="%(message)s", level=logging.WARNING, stream=sys.stderr)
+structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING),
+    processors=[
+        structlog.processors.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.dev.ConsoleRenderer(),
+    ],
+    logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+)
 
 from bughound.core import target_classifier, workspace
 from bughound.core.job_manager import JobManager
