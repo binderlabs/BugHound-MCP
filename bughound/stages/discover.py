@@ -120,7 +120,7 @@ async def _run_discover(
     # Phase 2A: Probe + Fingerprint
     # ===================================================================
     if progress_cb:
-        await progress_cb(5, "Probing live hosts", "httpx")
+        await progress_cb(10, "Probing live hosts", "httpx")
 
     if not httpx.is_available():
         await workspace.add_stage_history(workspace_id, 2, "failed")
@@ -166,6 +166,9 @@ async def _run_discover(
     }
 
     # Generate intelligence flags
+    if progress_cb:
+        await progress_cb(30, "Generating intelligence flags", "flags")
+
     cdn_counter: Counter[str] = Counter()
     for h in live_hosts:
         if h.get("cdn"):
@@ -214,7 +217,7 @@ async def _run_discover(
     # Phase 2B: URL Discovery
     # ===================================================================
     if progress_cb:
-        await progress_cb(30, "Discovering URLs and endpoints", "url_discovery")
+        await progress_cb(35, "Discovering URLs and endpoints", "url_discovery")
 
     # Extract the root domain for gau/waybackurls
     classification = meta.classification or {}
@@ -355,7 +358,7 @@ async def _run_discover(
 
     if js_urls:
         if progress_cb:
-            await progress_cb(50, "Analyzing JavaScript files", "js_analyzer")
+            await progress_cb(50, "Analyzing JavaScript for secrets and endpoints", "js_analyzer")
 
         js_result = await js_analyzer.analyze_js_files(
             js_urls[:100],  # cap at 100 JS files
@@ -467,7 +470,7 @@ async def _run_discover(
 
     if meta.target_type == TargetType.BROAD_DOMAIN:
         if progress_cb:
-            await progress_cb(78, "Checking subdomain takeover", "takeover")
+            await progress_cb(80, "Checking subdomain takeover", "takeover")
 
         # Dead subs = in subdomains/all.txt but not in live hosts
         live_hosts_set = {h.get("host", "").lower() for h in live_hosts}
@@ -515,7 +518,7 @@ async def _run_discover(
     # Phase 2F: CORS Probing
     # ===================================================================
     if progress_cb:
-        await progress_cb(88, "Testing CORS configuration", "cors")
+        await progress_cb(90, "Testing CORS configuration", "cors")
 
     cors_results: list[dict[str, Any]] = []
     try:
@@ -550,6 +553,9 @@ async def _run_discover(
     # ===================================================================
     # Finalize
     # ===================================================================
+    if progress_cb:
+        await progress_cb(95, "Parameter aggregation + final analysis", "finalize")
+
     await workspace.update_stats(workspace_id, live_hosts=len(live_hosts))
     await workspace.add_stage_history(workspace_id, 2, "completed")
 
