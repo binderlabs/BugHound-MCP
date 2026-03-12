@@ -16,7 +16,7 @@ import structlog
 from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, WorkspaceState
-from bughound.tools.discovery import cors_checker, js_analyzer, sensitive_paths, takeover_checker
+from bughound.tools.discovery import cors_checker, js_analyzer, katana, sensitive_paths, takeover_checker
 from bughound.tools.recon import gau, gospider, httpx, wafw00f, waybackurls
 
 logger = structlog.get_logger()
@@ -255,10 +255,23 @@ async def _run_discover(
             url_tool_counts.setdefault(tool_name, 0)
             warnings.append(f"{tool_name}: {exc}")
 
-    # Active crawler (gospider) on live host URLs
-    if gospider.is_available():
+    # Active crawler — prefer katana, fallback to gospider
+    crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
+    if katana.is_available():
+        katana_count = 0
+        for ct in crawl_targets:
+            try:
+                cr = await katana.execute(ct, depth=2, timeout=60)
+                if cr.success:
+                    for entry in cr.results:
+                        u = entry["url"] if isinstance(entry, dict) else str(entry)
+                        all_urls.append({"url": u, "source": "katana"})
+                        katana_count += 1
+            except Exception:
+                pass
+        url_tool_counts["katana"] = katana_count
+    elif gospider.is_available():
         gospider_count = 0
-        crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
         for ct in crawl_targets:
             try:
                 cr = await gospider.execute(ct, depth=2, timeout=60)
@@ -271,8 +284,23 @@ async def _run_discover(
                 pass
         url_tool_counts["gospider"] = gospider_count
     else:
-        url_tool_counts["gospider"] = -1
-        warnings.append("gospider not installed — active crawling skipped.")
+        url_tool_counts["crawler"] = -1
+        warnings.append("No crawler installed (katana or gospider) — active crawling skipped.")
+
+    # Robots.txt + sitemap.xml fetching
+    robots_sitemap_data: list[dict[str, Any]] = []
+    for host_url in crawl_targets[:5]:
+        rs = await _fetch_robots_sitemap(host_url)
+        if rs:
+            robots_sitemap_data.extend(rs)
+            for entry in rs:
+                if entry.get("type") == "sitemap_url":
+                    all_urls.append({"url": entry["value"], "source": "sitemap"})
+                elif entry.get("type") == "disallowed":
+                    # Construct full URL from disallowed path for discovery
+                    base = host_url.rstrip("/")
+                    full = f"{base}{entry['value']}"
+                    all_urls.append({"url": full, "source": "robots"})
 
     # Deduplicate URLs
     seen_urls: set[str] = set()
@@ -286,7 +314,7 @@ async def _run_discover(
     # Extract JS files
     js_urls = sorted(set(
         e["url"] for e in unique_urls
-        if e["url"].lower().endswith((".js", ".mjs"))
+        if e["url"].lower().endswith((".js", ".mjs", ".jsx"))
         or "/js/" in e["url"].lower()
     ))
 
@@ -308,6 +336,13 @@ async def _run_discover(
             generated_by="url_discovery", target=target_label,
         )
         files_written.append("urls/js_files.json")
+
+    if robots_sitemap_data:
+        await workspace.write_data(
+            workspace_id, "urls/robots_sitemap.json", robots_sitemap_data,
+            generated_by="discover", target=target_label,
+        )
+        files_written.append("urls/robots_sitemap.json")
 
     await workspace.update_stats(workspace_id, urls_discovered=len(unique_urls))
 
@@ -705,10 +740,11 @@ def _generate_flags(
 
 
 def _extract_parameters(urls: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """Extract unique parameters grouped by endpoint path."""
+    """Extract unique parameters grouped by endpoint path with frequency analysis."""
     from urllib.parse import parse_qs, urlparse
 
     params_by_path: dict[str, dict[str, set]] = {}  # path -> {param_name: {values}}
+    param_global_count: Counter[str] = Counter()  # param_name -> how many paths use it
 
     for entry in urls:
         try:
@@ -722,9 +758,13 @@ def _extract_parameters(urls: list[dict[str, str]]) -> list[dict[str, Any]]:
             for param, values in qs.items():
                 if param not in params_by_path[path]:
                     params_by_path[path][param] = set()
+                    param_global_count[param] += 1
                 params_by_path[path][param].update(values[:3])
         except Exception:
             continue
+
+    # Identify high-frequency params (appear on 3+ endpoints = framework-level)
+    high_freq = {p for p, c in param_global_count.items() if c >= 3}
 
     # Convert to serializable format
     result: list[dict[str, Any]] = []
@@ -732,11 +772,80 @@ def _extract_parameters(urls: list[dict[str, str]]) -> list[dict[str, Any]]:
         result.append({
             "path": path,
             "params": [
-                {"name": name, "example_values": sorted(vals)[:3]}
+                {
+                    "name": name,
+                    "example_values": sorted(vals)[:3],
+                    "frequency": param_global_count[name],
+                    "high_frequency": name in high_freq,
+                }
                 for name, vals in sorted(params.items())
             ],
         })
     return result
+
+
+async def _fetch_robots_sitemap(base_url: str) -> list[dict[str, Any]]:
+    """Fetch and parse robots.txt + sitemap.xml from a host."""
+    import aiohttp
+
+    results: list[dict[str, Any]] = []
+    base = base_url.rstrip("/")
+
+    # robots.txt
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{base}/robots.txt",
+                timeout=aiohttp.ClientTimeout(total=8),
+                ssl=False,
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.text(errors="replace")
+                    for line in body.splitlines():
+                        line = line.strip()
+                        if line.lower().startswith("disallow:"):
+                            path = line.split(":", 1)[1].strip()
+                            if path and path != "/":
+                                results.append({
+                                    "host": base,
+                                    "type": "disallowed",
+                                    "value": path,
+                                })
+                        elif line.lower().startswith("sitemap:"):
+                            sitemap_url = line.split(":", 1)[1].strip()
+                            # Handle "Sitemap: https://..." where split on : cuts the URL
+                            if not sitemap_url.startswith("http"):
+                                sitemap_url = line.split(" ", 1)[1].strip()
+                            results.append({
+                                "host": base,
+                                "type": "sitemap_ref",
+                                "value": sitemap_url,
+                            })
+    except Exception:
+        pass
+
+    # sitemap.xml
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{base}/sitemap.xml",
+                timeout=aiohttp.ClientTimeout(total=8),
+                ssl=False,
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.text(errors="replace")
+                    # Simple regex extraction of <loc> tags
+                    import re
+                    for match in re.finditer(r"<loc>\s*(https?://[^<]+)\s*</loc>", body):
+                        results.append({
+                            "host": base,
+                            "type": "sitemap_url",
+                            "value": match.group(1).strip(),
+                        })
+    except Exception:
+        pass
+
+    return results
 
 
 def _error(error_type: str, message: str) -> dict[str, Any]:

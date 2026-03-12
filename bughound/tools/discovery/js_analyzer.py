@@ -1,7 +1,7 @@
 """JavaScript file analyzer for secret and endpoint extraction.
 
 Downloads JS files via aiohttp and applies regex patterns to find:
-- API keys, tokens, passwords, private keys
+- API keys, tokens, passwords, private keys, Firebase, S3 buckets, internal IPs
 - API endpoints and internal paths
 No external binary needed — pure Python.
 """
@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 import structlog
@@ -24,14 +25,23 @@ logger = structlog.get_logger()
 _SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ("AWS_ACCESS_KEY", re.compile(r"AKIA[0-9A-Z]{16}"), "AWS Access Key ID"),
     ("AWS_SECRET_KEY", re.compile(r"""(?:aws_secret|secret_?access_?key)['":\s=]+([A-Za-z0-9/+=]{40})""", re.I), "AWS Secret Key"),
-    ("API_KEY", re.compile(r"""(?:api[_-]?key|apikey|api_secret|api[_-]?token)[\s:="']+([A-Za-z0-9_\-]{20,})""", re.I), "API Key"),
-    ("BEARER_TOKEN", re.compile(r"""(?:bearer|token|auth[_-]?token)[\s:="']+([A-Za-z0-9_\-\.]{20,})""", re.I), "Bearer/Auth Token"),
+    ("GOOGLE_API", re.compile(r"AIza[0-9A-Za-z\-_]{35}"), "Google API Key"),
+    ("SLACK_TOKEN", re.compile(r"xox[bpors]-[0-9a-zA-Z-]{10,}"), "Slack Token"),
     ("PRIVATE_KEY", re.compile(r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----"), "Private Key"),
+    ("API_KEY", re.compile(r"""(?:api[_-]?key|apikey|api[_-]?secret)[\s:="']+([A-Za-z0-9_\-]{16,})""", re.I), "API Key"),
+    ("BEARER_TOKEN", re.compile(r"""(?:token|bearer|authorization|auth[_-]?token)[\s:="']+([A-Za-z0-9_\-\.]{20,})""", re.I), "Bearer/Auth Token"),
     ("GENERIC_SECRET", re.compile(r"""(?:secret|password|passwd|pwd)[\s:="']+([^\s"']{8,64})""", re.I), "Generic Secret/Password"),
-    ("GOOGLE_API", re.compile(r"AIza[0-9A-Za-z_-]{35}"), "Google API Key"),
     ("GITHUB_TOKEN", re.compile(r"gh[pousr]_[A-Za-z0-9_]{36,}"), "GitHub Token"),
-    ("SLACK_TOKEN", re.compile(r"xox[baprs]-[0-9a-zA-Z-]{10,}"), "Slack Token"),
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "JSON Web Token"),
+    ("FIREBASE", re.compile(r"[a-z0-9-]+\.firebaseio\.com"), "Firebase Database URL"),
+    ("S3_BUCKET", re.compile(r"[a-z0-9.-]+\.s3\.amazonaws\.com"), "AWS S3 Bucket"),
+    ("INTERNAL_IP", re.compile(
+        r"(?:^|[\"'\s,;=])("
+        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+        r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+        r"|192\.168\.\d{1,3}\.\d{1,3}"
+        r")(?:[\"'\s,;:]|$)"
+    ), "Internal/Private IP Address"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -39,11 +49,18 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
 # ---------------------------------------------------------------------------
 
 _ENDPOINT_PATTERNS: list[re.Pattern] = [
-    re.compile(r"""(?:fetch|axios|\.get|\.post|\.put|\.delete|\.patch|XMLHttpRequest)\s*\(\s*['"](\/[^'"]{2,}?)['"]"""),
-    re.compile(r"""['"](\/api\/[a-zA-Z0-9/_\-\.]{2,}?)['"]"""),
-    re.compile(r"""['"](\/v[0-9]+\/[a-zA-Z0-9/_\-\.]{2,}?)['"]"""),
-    re.compile(r"""['"](\/[a-zA-Z0-9_\-]+\/[a-zA-Z0-9/_\-\.]{2,}?)['"]"""),
-    re.compile(r"""(?:url|endpoint|path|href|action)\s*[:=]\s*['"](\/[^'"]{2,}?)['"]""", re.I),
+    # fetch/axios/jQuery ajax calls
+    re.compile(r"""(?:fetch|axios|\.get|\.post|\.put|\.delete|\.patch)\s*\(\s*['"](\/[^'"]{2,}?)['"]"""),
+    # XMLHttpRequest .open("METHOD", "/url")
+    re.compile(r"""\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["'](\/[^"']+)["']"""),
+    # /api/... paths in strings
+    re.compile(r"""["'](\/api\/[^"']+)["']"""),
+    # /v1/... /v2/... versioned paths
+    re.compile(r"""["'](\/v[0-9]+\/[a-zA-Z0-9/_\-\.]{2,}?)["']"""),
+    # Generic multi-segment paths in strings
+    re.compile(r"""["'](\/[a-zA-Z0-9_\-]+\/[a-zA-Z0-9/_\-\.]{2,}?)["']"""),
+    # url/endpoint/path/href assignments
+    re.compile(r"""(?:url|endpoint|path|href|action)\s*[:=]\s*["'](\/[^"']{2,}?)["']""", re.I),
 ]
 
 # Filter out common non-interesting paths
@@ -68,10 +85,10 @@ async def analyze_js_files(
 
     Returns:
         {
-            "secrets": [{"type": "...", "value": "...", "source_file": "...", "description": "..."}],
-            "endpoints": [{"path": "/api/...", "source_file": "...", "method": "..."}],
-            "files_analyzed": 5,
-            "files_failed": 1,
+            "secrets": [...],
+            "endpoints": [...],
+            "files_analyzed": N,
+            "files_failed": N,
             "errors": [...]
         }
     """
@@ -133,7 +150,6 @@ async def _download_js(url: str, timeout: int) -> str | None:
             ) as resp:
                 if resp.status != 200:
                     return None
-                # Limit size to 5MB to avoid memory issues
                 content = await resp.text(encoding="utf-8", errors="replace")
                 if len(content) > 5_000_000:
                     content = content[:5_000_000]
@@ -148,9 +164,8 @@ def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
 
     for name, pattern, description in _SECRET_PATTERNS:
         for match in pattern.finditer(content):
-            value = match.group(0)
-            # Truncate long values for safety
-            display_value = value[:60] + "..." if len(value) > 60 else value
+            value = match.group(1) if match.lastindex else match.group(0)
+            display_value = value.strip()[:60] + ("..." if len(value.strip()) > 60 else "")
             secrets.append({
                 "type": name,
                 "value": display_value,
@@ -171,35 +186,65 @@ def _extract_endpoints(
     endpoints: list[dict[str, Any]] = []
     seen: set[str] = set()
 
+    # Standard path patterns
     for pattern in _ENDPOINT_PATTERNS:
         for match in pattern.finditer(content):
             path = match.group(1) if match.lastindex else match.group(0)
-            path = path.strip()
+            _add_endpoint(path, match, content, source_file, endpoints, seen)
 
-            if not path or path in seen:
-                continue
-            if _ENDPOINT_IGNORE.match(path):
-                continue
-            if len(path) < 3 or len(path) > 200:
-                continue
-
-            seen.add(path)
-
-            # Detect HTTP method from context
-            method = "GET"
-            ctx_start = max(0, match.start() - 50)
-            context = content[ctx_start : match.start()].lower()
-            if ".post" in context or "post" in context:
-                method = "POST"
-            elif ".put" in context:
-                method = "PUT"
-            elif ".delete" in context:
-                method = "DELETE"
-
-            endpoints.append({
-                "path": path,
-                "method": method,
-                "source_file": source_file,
-            })
+    # Full URLs matching target domain
+    if target_domain:
+        domain_pattern = re.compile(
+            r"""["'](https?://[^"']*"""
+            + re.escape(target_domain)
+            + r"""[^"']*)["']"""
+        )
+        for match in domain_pattern.finditer(content):
+            full_url = match.group(1).strip()
+            try:
+                path = urlparse(full_url).path
+                if path and path != "/":
+                    _add_endpoint(path, match, content, source_file, endpoints, seen)
+            except Exception:
+                pass
 
     return endpoints
+
+
+def _add_endpoint(
+    path: str,
+    match: re.Match,
+    content: str,
+    source_file: str,
+    endpoints: list[dict[str, Any]],
+    seen: set[str],
+) -> None:
+    """Add an endpoint if it passes filters."""
+    path = path.strip()
+    if not path or path in seen:
+        return
+    if _ENDPOINT_IGNORE.match(path):
+        return
+    if len(path) < 3 or len(path) > 200:
+        return
+
+    seen.add(path)
+
+    # Detect HTTP method from surrounding context
+    method = "GET"
+    ctx_start = max(0, match.start() - 60)
+    context = content[ctx_start : match.start()].lower()
+    if ".post" in context or '"post"' in context or "'post'" in context:
+        method = "POST"
+    elif ".put" in context or '"put"' in context:
+        method = "PUT"
+    elif ".delete" in context or '"delete"' in context:
+        method = "DELETE"
+    elif ".patch" in context:
+        method = "PATCH"
+
+    endpoints.append({
+        "path": path,
+        "method": method,
+        "source_file": source_file,
+    })
