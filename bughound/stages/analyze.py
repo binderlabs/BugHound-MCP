@@ -842,6 +842,7 @@ _PLAYBOOKS: dict[str, dict[str, Any]] = {
             {"path": "/wp-content/plugins/", "purpose": "Plugin directory listing for CVE matching"},
             {"tool": "nuclei", "args": "-tags wordpress", "purpose": "Known WordPress CVEs"},
             {"path": "/wp-config.php.bak", "purpose": "Backup config with DB credentials"},
+            {"path": "/wp-config.php.old", "purpose": "Old config backup with DB credentials"},
         ],
     },
     "graphql": {
