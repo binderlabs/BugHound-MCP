@@ -136,10 +136,16 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 **Day 6 Enhancement (completed):**
 - [x] Add amass to parallel enumeration (5 passive tools)
-- [x] Sensitive path checker (70+ paths: git, env, swagger, admin, actuator, backups)
+- [x] Install + create katana wrapper (active crawler with js-crawl)
+- [x] Add Firebase, S3, Internal IP secret patterns to js_analyzer (13 total)
+- [x] Add XMLHttpRequest .open() + target domain URL matching to endpoint extraction
+- [x] Add robots.txt + sitemap.xml parsing (urls/robots_sitemap.json)
+- [x] Add .jsx to JS file filter + high-frequency parameter analysis
+- [x] Sensitive path checker (77+ paths: git, env, swagger, admin, actuator, backups, dynamic target names)
 - [x] Subdomain takeover detection (25 CNAME fingerprints + nuclei templates)
-- [x] CORS misconfiguration probing (reflected origin, wildcard, null, subdomain bypass)
-- [x] Full intelligence flag system (15+ flag types)
+- [x] CORS misconfiguration probing (reflected origin, wildcard, null, subdomain bypass; 5 severity levels)
+- [x] Full intelligence flag system (15+ flag types across all phases)
+- [x] Progress percentages aligned: 10→20→30→35→50→65→80→90→95→100
 
 **Day 6 Checkpoint:** full attack surface map exists in workspace
 

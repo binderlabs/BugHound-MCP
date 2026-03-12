@@ -199,6 +199,19 @@ CORS_MISCONFIGURED
 
 **Tested:** scanme.nmap.org → 117 URLs, 1 Google API key, 2 hidden endpoints
 
+**Day 6 Enhancement — Part 2 fixes:**
+- Installed katana, created katana.py wrapper (JSONL, -js-crawl, depth config)
+- Added 3 missing secret patterns: Firebase, S3 bucket, Internal IP (13 total)
+- Added XMLHttpRequest .open() endpoint pattern + target domain URL matching
+- Added .jsx to JS file extension filter
+- Added robots.txt + sitemap.xml parsing → urls/robots_sitemap.json
+- Added high-frequency parameter analysis (3+ endpoints = framework-level)
+- Added 6 missing sensitive paths: /config.php, /wp-config.php.old, /Thumbs.db, /robots.txt, /{target_name}.sql/.zip
+- Fixed CORS: null origin without credentials → INFO (was MEDIUM)
+- Aligned progress percentages: 10→20→30→35→50→65→80→90→95→100
+
+**Final stats:** 94 Python files, 21,000 LOC, 10 MCP tools, 15 tool wrappers
+
 ### What's Next
 - Phase 3 Day 7: Stage 3 (Analyze) — bughound_get_attack_surface + bughound_submit_scan_plan
 
