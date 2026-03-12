@@ -214,7 +214,7 @@ def _score_host(host: str, info: dict[str, Any]) -> dict[str, Any]:
             reasons.append(f"{s['type']} leaked in JS (HIGH confidence) — verify if key is active")
             break  # count once per host
 
-    if info.get("takeover", {}).get("confirmed"):
+    if (info.get("takeover") or {}).get("confirmed"):
         score += _W_CRITICAL
         reasons.append("Confirmed subdomain takeover — immediate report")
 
@@ -696,7 +696,7 @@ def _find_immediate_wins(
         sp_paths = {sp.get("path", ""): sp for sp in info["sensitive_paths"]}
 
         # 1. Confirmed subdomain takeovers
-        if info.get("takeover", {}).get("confirmed"):
+        if (info.get("takeover") or {}).get("confirmed"):
             t = info["takeover"]
             wins.append({
                 "type": "SUBDOMAIN_TAKEOVER",
@@ -1288,10 +1288,12 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
     }
 
     # Persist analysis result so it can be retrieved later
-    await workspace.write_data(
-        workspace_id, "analysis/attack_surface.json", result,
-        generated_by="analyze", target=meta.target,
-    )
+    # Write directly (not DataWrapper — result is a dict, not a list)
+    from bughound.config.settings import WORKSPACE_BASE_DIR
+    analysis_dir = WORKSPACE_BASE_DIR / workspace_id / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    async with aiofiles.open(analysis_dir / "attack_surface.json", "w") as f:
+        await f.write(json.dumps(result, indent=2, default=str))
 
     return result
 
@@ -1303,9 +1305,17 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
 
 async def get_cached_attack_surface(workspace_id: str) -> dict[str, Any] | None:
     """Return the last saved attack surface analysis, or None if not yet run."""
-    data = await workspace.read_data(workspace_id, "analysis/attack_surface.json")
-    if isinstance(data, dict) and data.get("status") == "success":
-        return data
+    from bughound.config.settings import WORKSPACE_BASE_DIR
+    fpath = WORKSPACE_BASE_DIR / workspace_id / "analysis" / "attack_surface.json"
+    if not fpath.exists():
+        return None
+    try:
+        async with aiofiles.open(fpath) as f:
+            data = json.loads(await f.read())
+        if isinstance(data, dict) and data.get("status") == "success":
+            return data
+    except (json.JSONDecodeError, OSError):
+        pass
     return None
 
 
