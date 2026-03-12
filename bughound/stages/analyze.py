@@ -109,7 +109,7 @@ def _build_host_index(data: dict[str, list]) -> dict[str, dict[str, Any]]:
                 "host_data": None, "flags": [], "secrets": [], "sensitive_paths": [],
                 "cors": [], "hidden_endpoints": [], "parameters": [],
                 "urls": [], "waf": None, "technologies": [],
-                "api_endpoints": [], "takeover": None,
+                "api_endpoints": [], "takeover": None, "robots_disallowed": [],
             })
             idx[host]["host_data"] = h
             idx[host]["technologies"] = h.get("technologies", [])
@@ -187,6 +187,13 @@ def _build_host_index(data: dict[str, list]) -> dict[str, dict[str, Any]]:
         host = (t.get("subdomain") or t.get("host") or "").lower()
         if host in idx:
             idx[host]["takeover"] = {**t, "confirmed": True}
+
+    # Robots disallowed paths
+    for rs in data["robots_sitemap"]:
+        if rs.get("type") == "disallowed":
+            host = _host_from_url(rs.get("host", ""))
+            if host in idx:
+                idx[host]["robots_disallowed"].append(rs.get("value", ""))
 
     return idx
 
@@ -291,6 +298,11 @@ def _score_host(host: str, info: dict[str, Any]) -> dict[str, Any]:
     if 0 < total_params < 10:
         score += _W_LOW
         reasons.append(f"{total_params} parameters found")
+
+    # robots.txt interesting disallowed paths
+    if info.get("robots_disallowed"):
+        score += _W_LOW
+        reasons.append(f"robots.txt has {len(info['robots_disallowed'])} interesting disallowed paths")
 
     # Risk level
     if score >= 80:
