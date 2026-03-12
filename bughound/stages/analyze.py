@@ -1029,6 +1029,29 @@ def _detect_correlations(
                 "data": {"parameter": name, "endpoint_count": count, "sample_endpoints": eps},
             })
 
+    # CERTIFICATE_INTEL — hostnames in TLS SANs not in subdomain list
+    subdomain_set = {s.lower() for s in data["subdomains"]}
+    cert_new_hosts: set[str] = set()
+    for h in data["live_hosts"]:
+        # httpx stores TLS SANs in tls.san or tls_data.subject_an when -tls-grab is used
+        tls = h.get("tls") or h.get("tls_data") or {}
+        sans = tls.get("san", []) or tls.get("subject_an", [])
+        if isinstance(sans, list):
+            for san in sans:
+                san_lower = san.strip().lower()
+                # Only consider DNS names, skip wildcards and IPs
+                if "." in san_lower and not san_lower.startswith("*") and san_lower not in subdomain_set:
+                    cert_new_hosts.add(san_lower)
+    if cert_new_hosts:
+        correlations.append({
+            "type": "CERTIFICATE_INTEL",
+            "description": f"{len(cert_new_hosts)} hostname(s) in TLS certificates not in subdomain list",
+            "significance": "New targets from certificate analysis — may reveal additional attack surface",
+            "affected_hosts": sorted(cert_new_hosts)[:20],
+            "priority": "MEDIUM",
+            "data": {"new_hostnames": sorted(cert_new_hosts)[:50]},
+        })
+
     # ROBOTS_HIDDEN
     crawled_paths: set[str] = set()
     for u in data["crawled_urls"]:
