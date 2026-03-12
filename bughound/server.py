@@ -796,6 +796,9 @@ async def bughound_job_status(job_id: str) -> str:
     if status.get("error"):
         lines.append(f"\n**Error:** {status['error']}")
 
+    if status["status"] in ("RUNNING", "PENDING"):
+        lines.append(f"\n**Wait at least 30 seconds before checking again.**")
+
     return "\n".join(lines) + "\n"
 
 
@@ -1061,6 +1064,7 @@ def _format_job_started(result: dict[str, Any]) -> str:
         f"**Message:** {result.get('message', '')}\n"
         f"**Estimated Time:** {result.get('estimated_time', 'unknown')}\n\n"
         f"Use `bughound_job_status` with job_id `{result.get('job_id', '')}` to check progress.\n"
+        f"**IMPORTANT:** Wait at least 30 seconds between status checks. Do not poll rapidly.\n"
     )
 
 
