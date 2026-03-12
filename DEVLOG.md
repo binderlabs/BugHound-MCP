@@ -347,6 +347,55 @@ Rebuilt Stage 4 with a 16-technique library, 5-phase execution engine, and pure-
 
 ---
 
+## 2026-03-13 - Day 8.9: One-liner Pipeline Engine
+
+### What Was Built
+
+**One-liner tool wrappers (6 wrappers in bughound/tools/oneliners/):**
+Each wrapper has BINARY, is_available(), execute() + Python fallback:
+- qsreplace.py — replace query param values (Python: urllib.parse manipulation)
+- kxss.py — check XSS reflection (Python: aiohttp canary injection)
+- gf_tool.py — pattern-based URL filtering (Python: 8 regex pattern sets)
+- uro.py — URL deduplication/noise reduction (Python: template normalization)
+- unfurl.py — extract URL components: keys, values, paths, domains (Python: urlparse)
+- anew.py — append unique lines to file (Python: set-based dedup)
+
+**Pipeline engine (bughound/tools/oneliners/pipeline.py):**
+9 pipelines that chain tools for fast pre-filtering:
+1. xss_reflection_check — gf(xss) → uro → kxss
+2. sqli_candidates_from_urls — gf(sqli) → uro → qsreplace(probe)
+3. ssrf_quick_test — gf(ssrf) → uro → qsreplace(metadata URL)
+4. redirect_quick_test — gf(redirect) → uro → qsreplace(evil.com)
+5. lfi_quick_test — gf(lfi) → uro → qsreplace(traversal)
+6. xss_quick_test — gf(xss) → uro → kxss
+7. js_secret_extract — filter(.js) → uro → unfurl(paths)
+8. param_bruteforce — uro → unfurl(keys)
+9. crlf_quick_test — uro → qsreplace(crlf_payload)
+
+**Stage 4 integration (Phase 4D-pre):**
+- Pre-filter runs before deep injection testing
+- Maps vuln classes to pipelines automatically
+- Pipeline candidates inform which URLs to test deeply
+
+**MCP tools (2 new):**
+- bughound_run_pipeline — run any of the 9 pipelines
+- bughound_list_pipelines — list all pipelines + tool status
+
+**Tool coverage update:**
+- oneliner_tools category in bughound_check_tool_coverage
+- Install hints in tool_runner.py for all 6 tools
+
+### Stats
+- 91 Python files, ~25K LOC
+- 21 MCP tools
+- 16 testing techniques + 9 one-liner pipelines
+- 5/6 one-liner tools installed natively (kxss uses Python fallback)
+
+### What's Next
+- Phase 4 Day 9: Stage 5 (Validate) + Stage 6 (Report)
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

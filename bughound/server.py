@@ -825,6 +825,30 @@ async def bughound_check_tool_coverage() -> str:
     lines.append(f"  - Discovery: {disc_avail}/{len(discovery_tools)}")
     lines.append(f"  - Scanning: {scan_avail}/{len(scanning_tools)}")
 
+    # One-liner tools (all have Python fallbacks)
+    oneliner_tools_info = {
+        "qsreplace": "go install github.com/tomnomnom/qsreplace@latest",
+        "kxss": "go install github.com/Emoe/kxss@latest",
+        "gf": "go install github.com/tomnomnom/gf@latest",
+        "uro": "pip install uro",
+        "unfurl": "go install github.com/tomnomnom/unfurl@latest",
+        "anew": "go install github.com/tomnomnom/anew@latest",
+    }
+    oneliner_avail = []
+    oneliner_missing = []
+    for t, cmd in sorted(oneliner_tools_info.items()):
+        if tool_runner.is_available(t):
+            oneliner_avail.append(t)
+        else:
+            oneliner_missing.append((t, cmd))
+
+    lines.append(f"  - One-liners: {len(oneliner_avail)}/{len(oneliner_tools_info)} "
+                 f"(all have Python fallbacks)")
+    if oneliner_missing:
+        lines.append("\n**One-liner tools (optional, faster with native binary):**")
+        for t, cmd in oneliner_missing:
+            lines.append(f"  - **{t}**: `{cmd}`")
+
     return "\n".join(lines) + "\n"
 
 
@@ -908,6 +932,59 @@ async def bughound_list_techniques() -> str:
 
     lines.append(f"\n**Total:** {len(techs)} techniques, "
                  f"{sum(1 for t in techs if t['available'])} available")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# One-liner Pipelines
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_run_pipeline",
+    description=(
+        "Run a one-liner pipeline for fast pre-filtering of URLs. Chains tools "
+        "like gf, qsreplace, kxss, uro for quick candidate identification. "
+        "Pipelines: xss_reflection_check, sqli_candidates_from_urls, ssrf_quick_test, "
+        "redirect_quick_test, lfi_quick_test, xss_quick_test, js_secret_extract, "
+        "param_bruteforce, crlf_quick_test. All have Python fallbacks. Stage 4."
+    ),
+)
+async def bughound_run_pipeline(workspace_id: str, pipeline_id: str) -> str:
+    """Run a one-liner pipeline."""
+    from bughound.tools.oneliners.pipeline import run_pipeline
+
+    result = await run_pipeline(pipeline_id, workspace_id)
+    return _format_pipeline_result(result)
+
+
+@mcp.tool(
+    name="bughound_list_pipelines",
+    description=(
+        "List all available one-liner pipelines with descriptions and tool chain. "
+        "Shows which tools are native vs Python fallback. Stage 4."
+    ),
+)
+async def bughound_list_pipelines() -> str:
+    """List available one-liner pipelines."""
+    from bughound.tools.oneliners.pipeline import list_pipelines, _tools_used_summary
+
+    pipelines = list_pipelines()
+    tools = _tools_used_summary()
+
+    lines = ["# One-liner Pipelines\n"]
+    for p in pipelines:
+        lines.append(f"- **{p['id']}**: {p['description']}")
+        lines.append(f"  Steps: `{p['steps']}`")
+        lines.append(f"  Vuln class: {p['vuln_class']}")
+        lines.append("")
+
+    lines.append("## Tool Status\n")
+    for tool_name, status in tools.items():
+        indicator = "native" if status == "native" else "Python fallback"
+        lines.append(f"- **{tool_name}**: {indicator}")
+
+    lines.append(f"\n**Total:** {len(pipelines)} pipelines")
     return "\n".join(lines)
 
 
@@ -1561,6 +1638,46 @@ def _format_test_results(result: dict[str, Any]) -> str:
         lines.append("")
 
     lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_pipeline_result(result: dict[str, Any]) -> str:
+    """Format pipeline execution result."""
+    if result.get("status") == "error":
+        return f"Error [{result.get('error_type', '?')}]: {result['message']}"
+
+    lines = [
+        f"## Pipeline: {result.get('pipeline_name', '?')}\n",
+        f"**Description:** {result.get('description', '')}",
+        f"**Steps:** `{result.get('steps', '?')}`",
+        f"**Input URLs:** {result.get('input_urls', 0)}",
+        f"**Candidates Found:** {result.get('candidates_found', 0)}",
+        f"**Execution Time:** {result.get('execution_time_seconds', 0)}s\n",
+    ]
+
+    tools = result.get("tools_used", {})
+    if tools:
+        lines.append("**Tools:**")
+        for t, status in tools.items():
+            lines.append(f"  - {t}: {status}")
+        lines.append("")
+
+    candidates = result.get("candidates", [])
+    if candidates:
+        lines.append("### Candidates\n")
+        for c in candidates[:20]:
+            if isinstance(c, dict):
+                url = c.get("url", c.get("path", c.get("param", "?")))
+                ctype = c.get("type", "candidate")
+                lines.append(f"  - `{url}` [{ctype}]")
+            else:
+                lines.append(f"  - `{c}`")
+
+        if len(candidates) > 20:
+            lines.append(f"  - ... and {len(candidates) - 20} more")
+        lines.append("")
+
+    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
     return "\n".join(lines) + "\n"
 
 

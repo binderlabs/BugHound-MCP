@@ -37,12 +37,13 @@ Workspace:   bughound_init, bughound_workspace_list, bughound_workspace_get, bug
 Jobs:        bughound_job_status, bughound_job_results, bughound_job_cancel
 Recon:       bughound_enumerate, bughound_enumerate_deep, bughound_discover
 Analysis:    bughound_get_attack_surface, bughound_submit_scan_plan
-Testing:     bughound_execute_tests, bughound_test_single
+Testing:     bughound_execute_tests, bughound_test_single, bughound_list_techniques
+Pipelines:   bughound_run_pipeline, bughound_list_pipelines
 Validation:  bughound_validate_finding
 Reporting:   bughound_generate_report
 ```
 
-~15 tools total. Clean, purposeful, no bloat.
+~21 tools total. Clean, purposeful, no bloat.
 
 ## Project Structure
 
@@ -84,7 +85,9 @@ BugHound/
 │   │   ├── base.py            # Unified base tool
 │   │   ├── recon/             # subfinder, httpx, crtsh, etc.
 │   │   ├── scanning/          # nuclei, ffuf, dalfox, sqlmap, etc.
-│   │   └── discovery/         # gospider, jsluice, arjun, etc.
+│   │   ├── discovery/         # gospider, jsluice, arjun, etc.
+│   │   ├── testing/           # injection_tester, graphql, jwt testers
+│   │   └── oneliners/         # qsreplace, kxss, gf, uro, unfurl, anew + pipeline engine
 │   ├── schemas/
 │   │   └── models.py          # Pydantic models for all data formats
 │   └── utils/
@@ -126,7 +129,7 @@ BugHound/
 
 **Phase:** Phase 4 - Stage 5 + Stage 6 + Polish
 **Current task:** Day 9 - Stage 5 (Validate) + Stage 6 (Report)
-**Completed:** Stages 0-4 complete. 83 files, ~24K LOC, 19 MCP tools, 16 testing techniques. Stage 4 enhanced: 5-phase execution (nuclei → dirfuzz → param discovery → injection → tech-specific), pure-Python injection testers (SSRF, LFI, SSTI, CRLF, redirect, IDOR, header injection), GraphQL/JWT/WordPress/Spring testing.
+**Completed:** Stages 0-4 complete. 91 files, ~25K LOC, 21 MCP tools, 16 testing techniques, 9 one-liner pipelines. Stage 4 enhanced: 5-phase execution with pipeline pre-filtering (nuclei → dirfuzz → param discovery → pipeline pre-filter → injection → tech-specific), pure-Python injection testers, GraphQL/JWT/WordPress/Spring testing, 6 one-liner tool wrappers with Python fallbacks.
 **Next:** Build Stage 5 (sqlmap/dalfox validation) + Stage 6 (report generation)
 **Blockers:** None
 

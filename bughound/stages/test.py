@@ -456,9 +456,40 @@ async def _run_tests(
         phase_stats["4C_param_discovery"] = 0
 
     # =================================================================
-    # Phase 4D: Value Fuzzing / Injection Testing (45-88%)
+    # Phase 4D-pre: One-liner Pipeline Pre-filtering (45-48%)
     # =================================================================
-    await _progress(45, "Phase 4D: Injection testing", "injection_tester")
+    await _progress(45, "Phase 4D-pre: One-liner pre-filtering", "pipeline")
+
+    injection_classes = {
+        "sqli", "xss", "ssrf", "open_redirect", "lfi", "crlf",
+    }
+    active_injection_classes = [c for c in injection_classes if c in all_test_classes]
+
+    pipeline_candidates: dict[str, list] = {}
+    if active_injection_classes:
+        try:
+            from bughound.tools.oneliners.pipeline import run_prefilter
+
+            prefilter_result = await run_prefilter(workspace_id, active_injection_classes)
+            pipeline_candidates = prefilter_result.get("candidates_by_class", {})
+            total_prefiltered = prefilter_result.get("total_candidates", 0)
+            phase_stats["4D_pre_pipeline"] = total_prefiltered
+
+            if total_prefiltered > 0:
+                await _progress(
+                    47, f"Pre-filter: {total_prefiltered} candidates across "
+                    f"{len(pipeline_candidates)} classes", "pipeline",
+                )
+        except Exception as exc:
+            warnings.append(f"Pipeline pre-filter error: {exc}")
+            phase_stats["4D_pre_pipeline"] = 0
+    else:
+        phase_stats["4D_pre_pipeline"] = 0
+
+    # =================================================================
+    # Phase 4D: Value Fuzzing / Injection Testing (48-88%)
+    # =================================================================
+    await _progress(48, "Phase 4D: Injection testing", "injection_tester")
 
     injection_techniques = [
         ("sqli", "sqli_param_fuzz", 45, 55),

@@ -319,6 +319,12 @@ _INSTALL_HINTS: dict[str, str] = {
     "trufflehog": "go install -v github.com/trufflesecurity/trufflehog@latest",
     "arjun": "pip install arjun",
     "interactsh-client": "go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest",
+    "qsreplace": "go install github.com/tomnomnom/qsreplace@latest",
+    "kxss": "go install github.com/Emoe/kxss@latest",
+    "gf": "go install github.com/tomnomnom/gf@latest",
+    "uro": "pip install uro",
+    "unfurl": "go install github.com/tomnomnom/unfurl@latest",
+    "anew": "go install github.com/tomnomnom/anew@latest",
 }
 
 

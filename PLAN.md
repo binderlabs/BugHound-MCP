@@ -209,6 +209,15 @@ Target: Black Hat Arsenal demo-ready by Day 10
 - [x] bughound_list_techniques: new MCP tool showing all 16 techniques + availability
 - [x] Git commit: "stage 4: technique library"
 
+**Day 8.9 — One-liner Pipeline Engine:**
+- [x] bughound/tools/oneliners/ — 6 tool wrappers (qsreplace, kxss, gf_tool, uro, unfurl, anew) with Python fallbacks
+- [x] bughound/tools/oneliners/pipeline.py — 9 pipelines (xss_reflection_check, sqli_candidates, ssrf/redirect/lfi/crlf quick tests, js_secret_extract, param_bruteforce)
+- [x] Phase 4D-pre integration in test.py — fast pre-filtering before deep injection testing
+- [x] bughound_run_pipeline + bughound_list_pipelines MCP tools (21 tools total)
+- [x] Tool coverage checker updated with oneliner_tools category
+- [x] Install hints for one-liner tools in tool_runner.py
+- [x] Git commit: "one-liner pipeline engine"
+
 **Day 8 Checkpoint:** full pipeline works: target -> recon -> AI analysis -> vulnerability scanning
 
 ## Phase 4: Stage 5 + Stage 6 + Polish (Days 9-10)
