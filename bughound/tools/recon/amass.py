@@ -1,8 +1,11 @@
 """Amass passive subdomain enumeration wrapper.
 
-v5 changed the CLI: passive is now the default, -json flag removed.
-Output is plain text (one subdomain per line) to stdout.
-Uses -timeout 1 (minutes) and -nocolor to keep execution brief.
+Amass v5 is a two-step process:
+  1. `amass enum -d target` — enumerates and stores results in its OAM database
+  2. `amass subs -d target -names` — extracts subdomain names from the database
+
+stdout is empty during enum (results go to DB), so we run both steps.
+Only used in deep enumeration — too slow for light mode.
 """
 
 from __future__ import annotations
@@ -19,29 +22,42 @@ def is_available() -> bool:
 
 
 async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
-    """Run amass enum against a domain (passive by default in v5).
+    """Run amass enum + subs to discover subdomains.
 
     Only called from deep enumeration — amass is too slow for light mode.
-    Uses -timeout 4 (minutes, amass internal) so it finishes before our process timeout.
+    Step 1: enum populates the OAM database (up to 10 min).
+    Step 2: subs extracts names from the database to stdout.
     """
-    result = await tool_runner.run(
+    # Step 1: enumerate (results go to internal DB, stdout is empty)
+    enum_result = await tool_runner.run(
         BINARY,
         ["enum", "-d", target, "-nocolor", "-timeout", "10"],
         target=target,
         timeout=timeout,
     )
 
-    if not result.success:
-        return result
+    # enum may exit non-zero but still populate the DB — always try step 2
+    # Step 2: extract subdomains from DB
+    subs_result = await tool_runner.run(
+        BINARY,
+        ["subs", "-d", target, "-names"],
+        target=target,
+        timeout=60,
+    )
 
-    # v5 outputs plain text: one subdomain per line
+    if not subs_result.success and not enum_result.success:
+        return enum_result  # both failed, return the enum error
+
+    # Parse plain text output: one subdomain per line
     subdomains: set[str] = set()
-    for line in result.results:
+    for line in subs_result.results:
         line = line.strip().lower()
         if line and "." in line and not line.startswith("#"):
             subdomains.add(line)
 
-    deduped = sorted(subdomains)
-    result.results = deduped
-    result.result_count = len(deduped)
+    # Use subs_result as the return value, override with parsed data
+    result = subs_result if subs_result.success else enum_result
+    result.success = True
+    result.results = sorted(subdomains)
+    result.result_count = len(subdomains)
     return result
