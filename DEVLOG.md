@@ -295,6 +295,58 @@ Enhanced Stage 2 discover pipeline with parameter classification (gf-style) and 
 
 ---
 
+## 2026-03-13 - Day 8.75: Enhanced Stage 4 — Technique Library
+
+### Overview
+Rebuilt Stage 4 with a 16-technique library, 5-phase execution engine, and pure-Python injection testers. Migrated sqlmap/dalfox/ffuf wrappers to tool_runner pattern.
+
+### What Was Built
+
+**Tool Wrappers Migrated** (sqlmap.py, dalfox.py, ffuf.py):
+- All rewritten from old BaseTool class to tool_runner.run() pattern
+- sqlmap: --batch, --technique=BEU, parse injectable params + DB type + payloads
+- dalfox: JSON output parsing, XSS type classification (reflected/stored/DOM)
+- ffuf: wordlist discovery, JSON output, technology-aware wordlist selection
+
+**injection_tester.py** (new, ~450 lines):
+- Pure aiohttp injection testing — no external binaries
+- 7 testers: test_ssrf, test_open_redirect, test_lfi, test_crlf, test_ssti, test_header_injection, test_idor
+- URL parameter replacement (qsreplace logic), baseline comparison, indicator regex matching
+- SSRF: 10 cloud metadata + internal IP payloads
+- LFI: Linux + Windows traversal payloads
+- Header injection: Host poisoning, X-Forwarded-For bypass, X-Original-URL path override
+
+**graphql_tester.py** (new, ~160 lines):
+- 5 tests: introspection, depth limits, batch queries, field suggestions, unauthorized mutations
+- Full schema extraction when introspection enabled
+
+**jwt_tester.py** (new, ~200 lines):
+- 5 tests: alg none bypass, alg confusion (RS256→HS256), empty signature, expiry enforcement, KID injection
+- Pure base64url manipulation, no external JWT library
+
+**techniques.py** (new, ~650 lines):
+- 16-technique registry with availability checking
+- Generic batch runner for injection_tester functions with concurrency control
+- Per-technique execution: scope filtering to approved hosts, candidate limiting
+- WordPress: xmlrpc, user enum, debug.log checks
+- Spring Boot: actuator env/heapdump/mappings/configprops checks
+
+**test.py** (rewritten, ~500 lines):
+- 5-phase execution: 4A nuclei → 4B dirfuzz → 4C param discovery → 4D injection → 4E tech-specific
+- test_single: now routes to tool= (nuclei/sqlmap/dalfox/ffuf) or technique= (any of 16 techniques)
+- Phase stats, tool counts, vuln class counts in output
+- bughound_list_techniques: new MCP tool (19 total now)
+
+### Stats
+- 83 Python files, ~24K LOC
+- 19 MCP tools
+- 16 testing techniques (all 16 available with current tool installs)
+
+### What's Next
+- Phase 4 Day 9: Stage 5 (Validate) + Stage 6 (Report)
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

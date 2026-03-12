@@ -1,67 +1,166 @@
-from typing import Dict, Any, List
+"""ffuf directory fuzzer wrapper.
+
+Used in Stage 4 for deep directory brute-forcing with large wordlists.
+Technology-aware wordlist selection.
+"""
+
+from __future__ import annotations
+
 import json
-import os
 import tempfile
-from ..base_tool import BaseTool, ToolResult
+from pathlib import Path
+from typing import Any
 
-class FFuFTool(BaseTool):
-    def __init__(self):
-        super().__init__("ffuf", timeout=1800)
+from bughound.core import tool_runner
+from bughound.schemas.models import ToolResult
 
-    async def execute(self, target: str, options: Dict[str, Any]) -> ToolResult:
-        try:
-            # FFuF needs a wordlist. We assume one is provided or we use a default.
-            # Target should contain FUZZ keyword or we append it.
-            
-            wordlist = options.get("wordlist", "/usr/share/wordlists/dirb/common.txt")
-            if not os.path.exists(wordlist):
-                # Fallback or error
-                return ToolResult(success=False, error=f"Wordlist not found: {wordlist}")
+BINARY = "ffuf"
+TIMEOUT = 600
 
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
-                output_file = tmp_file.name
+# Common wordlist locations (checked in order)
+_WORDLISTS = {
+    "small": [
+        "/usr/share/wordlists/dirb/common.txt",
+        "/usr/share/seclists/Discovery/Web-Content/common.txt",
+    ],
+    "medium": [
+        "/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt",
+        "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
+    ],
+    "large": [
+        "/usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt",
+        "/usr/share/wordlists/dirbuster/directory-list-2.3-big.txt",
+    ],
+}
 
-            cmd = self._build_command(target, options, output_file, wordlist)
-            raw_output = await self._run_command(cmd)
-            
-            parsed_data = self._parse_output_file(output_file)
-            
-            if os.path.exists(output_file):
-                os.remove(output_file)
-                
-            return ToolResult(success=True, data=parsed_data, raw_output=raw_output)
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
 
-    def _build_command(self, target: str, options: Dict[str, Any], output_file: str, wordlist: str) -> List[str]:
-        # ffuf -u https://example.com/FUZZ -w wordlist.txt -o output.json -of json
-        
-        url = target
-        if "FUZZ" not in url:
-            if not url.endswith("/"):
-                url += "/"
-            url += "FUZZ"
-            
-        cmd = ["ffuf", "-u", url, "-w", wordlist, "-o", output_file, "-of", "json"]
-        
-        # Extensions
-        if "extensions" in options:
-            cmd.extend(["-e", options["extensions"]])
-            
-        return cmd
+def is_available() -> bool:
+    return tool_runner.is_available(BINARY)
 
-    def _parse_output_file(self, file_path: str) -> Dict[str, Any]:
-        try:
-            with open(file_path, 'r') as f:
-                data = json.load(f)
-                
-            results = data.get("results", [])
-            return {
-                "results": results,
-                "count": len(results)
-            }
-        except Exception:
-            return {"results": [], "count": 0}
 
-    def _parse_output(self, raw_output: str) -> Dict[str, Any]:
-        return {}
+def find_wordlist(size: str = "medium") -> str | None:
+    """Find the first available wordlist for the given size."""
+    for path in _WORDLISTS.get(size, _WORDLISTS["medium"]):
+        if Path(path).is_file():
+            return path
+    # Fallback to any available list
+    for paths in _WORDLISTS.values():
+        for path in paths:
+            if Path(path).is_file():
+                return path
+    return None
+
+
+async def execute(
+    target_url: str,
+    *,
+    wordlist: str | None = None,
+    wordlist_size: str = "medium",
+    match_codes: str = "200,301,302,401,403,405",
+    filter_size: str | None = None,
+    extensions: str | None = None,
+    timeout: int = TIMEOUT,
+) -> ToolResult:
+    """Run ffuf against a target URL.
+
+    target_url: base URL (FUZZ keyword appended if missing).
+    wordlist: explicit wordlist path (overrides wordlist_size).
+    wordlist_size: "small", "medium", or "large".
+    match_codes: HTTP status codes to match.
+    filter_size: filter responses of this size (removes false positives).
+    extensions: comma-separated extensions to append (e.g. ".php,.html").
+    timeout: overall execution timeout.
+
+    Returns ToolResult with discovered paths.
+    """
+    # Resolve wordlist
+    wl = wordlist or find_wordlist(wordlist_size)
+    if not wl:
+        result = ToolResult(
+            tool=BINARY, target=target_url, success=False,
+            error=tool_runner.ToolError(
+                error_type=tool_runner.ToolErrorType.EXECUTION,
+                message="No wordlist found. Install seclists: apt install seclists",
+            ),
+        )
+        return result
+
+    # Ensure FUZZ keyword
+    url = target_url
+    if "FUZZ" not in url:
+        url = url.rstrip("/") + "/FUZZ"
+
+    # Temp output file
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", delete=False, prefix="bughound_ffuf_",
+    )
+    tmp.close()
+    output_file = Path(tmp.name)
+
+    args = [
+        "-u", url,
+        "-w", wl,
+        "-o", str(output_file),
+        "-of", "json",
+        "-mc", match_codes,
+        "-t", "50",
+        "-timeout", "10",
+        "-noninteractive",
+        "-s",  # silent
+    ]
+
+    if filter_size:
+        args.extend(["-fs", filter_size])
+
+    if extensions:
+        args.extend(["-e", extensions])
+
+    try:
+        result = await tool_runner.run(
+            BINARY, args, target=target_url, timeout=timeout,
+        )
+    finally:
+        findings = _parse_output_file(output_file)
+        if output_file.exists():
+            output_file.unlink(missing_ok=True)
+
+    # ffuf may exit non-zero but still write results
+    result.success = True
+    result.results = findings
+    result.result_count = len(findings)
+    return result
+
+
+def _parse_output_file(output_file: Path) -> list[dict[str, Any]]:
+    """Parse ffuf JSON output."""
+    if not output_file.exists():
+        return []
+
+    try:
+        text = output_file.read_text().strip()
+        if not text:
+            return []
+
+        data = json.loads(text)
+        raw_results = data.get("results", [])
+
+        findings: list[dict[str, Any]] = []
+        for item in raw_results:
+            if not isinstance(item, dict):
+                continue
+            findings.append({
+                "path": "/" + item.get("input", {}).get("FUZZ", ""),
+                "url": item.get("url", ""),
+                "status_code": item.get("status", 0),
+                "content_length": item.get("length", 0),
+                "content_words": item.get("words", 0),
+                "content_lines": item.get("lines", 0),
+                "redirect_location": item.get("redirectlocation", ""),
+            })
+
+        # Sort by status code
+        findings.sort(key=lambda x: (x["status_code"], x["path"]))
+        return findings
+
+    except (json.JSONDecodeError, OSError):
+        return []

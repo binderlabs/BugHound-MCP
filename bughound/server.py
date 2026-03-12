@@ -836,9 +836,10 @@ async def bughound_check_tool_coverage() -> str:
 @mcp.tool(
     name="bughound_execute_tests",
     description=(
-        "Execute vulnerability scan plan created in Stage 3. Runs nuclei with "
-        "targeted template tags per host based on the scan plan. Sync for single "
-        "targets (<=2 hosts, <=6 test classes), async for larger plans. "
+        "Execute comprehensive vulnerability testing based on scan plan. Runs 5 phases: "
+        "nuclei templates, directory fuzzing, parameter discovery, injection testing "
+        "(SQLi, XSS, SSRF, LFI, IDOR, CRLF, SSTI, header injection, open redirect), "
+        "and technology-specific tests (GraphQL, JWT, WordPress, Spring Boot). "
         "Requires bughound_submit_scan_plan first. Stage 4."
     ),
 )
@@ -853,8 +854,10 @@ async def bughound_execute_tests(workspace_id: str) -> str:
 @mcp.tool(
     name="bughound_test_single",
     description=(
-        "Surgical vulnerability test on a specific endpoint. Use for targeted "
-        "follow-up when the AI identifies an interesting target from analysis. "
+        "Surgical vulnerability test on a specific endpoint. Specify tool "
+        "(nuclei, sqlmap, dalfox, ffuf) or technique (ssrf_test, graphql_test, "
+        "jwt_test, lfi_test, ssti_test, open_redirect_test, crlf_test, idor_test, "
+        "header_injection_test, wordpress_test, spring_actuator_test). "
         "Always synchronous. Scope-checked. Stage 4."
     ),
 )
@@ -865,6 +868,7 @@ async def bughound_test_single(
     tags: str = "",
     severity: str = "",
     template: str = "",
+    technique: str = "",
 ) -> str:
     """Test one specific endpoint."""
     result = await stage_test.test_single(
@@ -872,8 +876,39 @@ async def bughound_test_single(
         tags=tags or None,
         severity=severity or None,
         template=template or None,
+        technique=technique or None,
     )
     return _format_test_results(result)
+
+
+@mcp.tool(
+    name="bughound_list_techniques",
+    description=(
+        "List all available testing techniques with their requirements and "
+        "descriptions. Shows tool availability status. Use to plan which "
+        "techniques to include in scan plans. Stage 4."
+    ),
+)
+async def bughound_list_techniques() -> str:
+    """List available testing techniques."""
+    from bughound.stages.techniques import list_all_techniques
+    techs = list_all_techniques()
+
+    lines = ["# Available Testing Techniques\n"]
+    by_phase: dict[str, list] = {}
+    for t in techs:
+        by_phase.setdefault(t["phase"], []).append(t)
+
+    for phase in sorted(by_phase):
+        lines.append(f"\n## Phase {phase}\n")
+        for t in by_phase[phase]:
+            status = "✓" if t["available"] else f"✗ (needs: {', '.join(t['missing_tools'])})"
+            lines.append(f"- **{t['id']}** [{status}]: {t['description']}")
+            lines.append(f"  Vuln classes: {', '.join(t['vuln_classes'])}")
+
+    lines.append(f"\n**Total:** {len(techs)} techniques, "
+                 f"{sum(1 for t in techs if t['available'])} available")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

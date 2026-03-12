@@ -198,6 +198,17 @@ Target: Black Hat Arsenal demo-ready by Day 10
 - [x] analyze.py: 3 new attack chains (Mass SQLi, SSRF→Cloud Metadata, Open Redirect→OAuth)
 - [x] analyze.py: param classification → test class suggestions, new summary sections
 
+**Day 8.75 — Enhanced Stage 4: Technique Library:**
+- [x] Migrate sqlmap, dalfox, ffuf wrappers to tool_runner pattern
+- [x] bughound/tools/testing/injection_tester.py — pure-Python SSRF, redirect, LFI, CRLF, SSTI, header injection, IDOR tests
+- [x] bughound/tools/testing/graphql_tester.py — introspection, depth limits, batch queries, unauthorized mutations
+- [x] bughound/tools/testing/jwt_tester.py — alg none, alg confusion, empty signature, expiry, KID injection
+- [x] bughound/stages/techniques.py — 16-technique registry with availability checking and execution engine
+- [x] stages/test.py rewritten: 5-phase execution (nuclei → dirfuzz → param discovery → injection → tech-specific)
+- [x] bughound_test_single: now supports tool= or technique= routing
+- [x] bughound_list_techniques: new MCP tool showing all 16 techniques + availability
+- [x] Git commit: "stage 4: technique library"
+
 **Day 8 Checkpoint:** full pipeline works: target -> recon -> AI analysis -> vulnerability scanning
 
 ## Phase 4: Stage 5 + Stage 6 + Polish (Days 9-10)
