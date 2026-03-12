@@ -72,16 +72,16 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 ### Day 3: Stage 0 (Initialize)
 
-- [ ] core/target_classifier.py
+- [x] core/target_classifier.py
   - Detect: BROAD_DOMAIN, SINGLE_HOST, SINGLE_ENDPOINT, URL_LIST
   - Return classification with stages_to_run
-- [ ] Register MCP tools in server.py:
-  - [ ] bughound_init (classify + create workspace)
-  - [ ] bughound_workspace_list
-  - [ ] bughound_workspace_get
-  - [ ] bughound_workspace_delete
-- [ ] Test end-to-end: create workspace for each target type
-- [ ] Git commit: "stage 0 - initialize"
+- [x] Register MCP tools in server.py:
+  - [x] bughound_init (classify + create workspace)
+  - [x] bughound_workspace_list
+  - [x] bughound_workspace_get
+  - [x] bughound_workspace_delete
+- [x] Test end-to-end: create workspace for each target type
+- [x] Git commit: "stage 0 - initialize"
 
 ### Day 4: Stage 1 (Enumerate)
 
