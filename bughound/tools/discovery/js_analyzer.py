@@ -4,6 +4,8 @@ Downloads JS files via aiohttp and applies regex patterns to find:
 - API keys, tokens, passwords, private keys, Firebase, S3 buckets, internal IPs
 - API endpoints and internal paths
 No external binary needed — pure Python.
+
+Secrets are confidence-scored: HIGH / MEDIUM / LOW.
 """
 
 from __future__ import annotations
@@ -19,51 +21,106 @@ import structlog
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# Secret patterns: (name, compiled regex, description)
+# Secret patterns: (name, compiled regex, description, confidence)
+# HIGH  = structural pattern (AWS key format, Slack token prefix, etc.)
+# MEDIUM = variable-length key/token with reasonable entropy heuristics
+# LOW   = generic keyword match — noisy, needs human review
 # ---------------------------------------------------------------------------
 
-_SECRET_PATTERNS: list[tuple[str, re.Pattern, str]] = [
-    ("AWS_ACCESS_KEY", re.compile(r"AKIA[0-9A-Z]{16}"), "AWS Access Key ID"),
-    ("AWS_SECRET_KEY", re.compile(r"""(?:aws_secret|secret_?access_?key)['":\s=]+([A-Za-z0-9/+=]{40})""", re.I), "AWS Secret Key"),
-    ("GOOGLE_API", re.compile(r"AIza[0-9A-Za-z\-_]{35}"), "Google API Key"),
-    ("SLACK_TOKEN", re.compile(r"xox[bpors]-[0-9a-zA-Z-]{10,}"), "Slack Token"),
-    ("PRIVATE_KEY", re.compile(r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----"), "Private Key"),
-    ("API_KEY", re.compile(r"""(?:api[_-]?key|apikey|api[_-]?secret)[\s:="']+([A-Za-z0-9_\-]{16,})""", re.I), "API Key"),
-    ("BEARER_TOKEN", re.compile(r"""(?:token|bearer|authorization|auth[_-]?token)[\s:="']+([A-Za-z0-9_\-\.]{20,})""", re.I), "Bearer/Auth Token"),
-    ("GENERIC_SECRET", re.compile(r"""(?:secret|password|passwd|pwd)[\s:="']+([^\s"']{8,64})""", re.I), "Generic Secret/Password"),
-    ("GITHUB_TOKEN", re.compile(r"gh[pousr]_[A-Za-z0-9_]{36,}"), "GitHub Token"),
-    ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"), "JSON Web Token"),
-    ("FIREBASE", re.compile(r"[a-z0-9-]+\.firebaseio\.com"), "Firebase Database URL"),
-    ("S3_BUCKET", re.compile(r"[a-z0-9.-]+\.s3\.amazonaws\.com"), "AWS S3 Bucket"),
-    ("INTERNAL_IP", re.compile(
-        r"(?:^|[\"'\s,;=])("
-        r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
-        r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
-        r"|192\.168\.\d{1,3}\.\d{1,3}"
-        r")(?:[\"'\s,;:]|$)"
-    ), "Internal/Private IP Address"),
+_SECRET_PATTERNS: list[tuple[str, re.Pattern, str, str]] = [
+    # ── HIGH confidence ──────────────────────────────────────────────────────
+    ("AWS_ACCESS_KEY",  re.compile(r"AKIA[0-9A-Z]{16}"),                                                          "AWS Access Key ID",          "HIGH"),
+    ("AWS_SECRET_KEY",  re.compile(r"""(?:aws_secret|secret_?access_?key)['":\s=]+([A-Za-z0-9/+=]{40})""", re.I), "AWS Secret Key",              "HIGH"),
+    ("GOOGLE_API",      re.compile(r"AIza[0-9A-Za-z\-_]{35}"),                                                    "Google API Key",              "HIGH"),
+    ("SLACK_TOKEN",     re.compile(r"xox[bpors]-[0-9a-zA-Z-]{10,}"),                                              "Slack Token",                 "HIGH"),
+    ("GITHUB_TOKEN",    re.compile(r"gh[pousr]_[A-Za-z0-9_]{36,}"),                                               "GitHub Token",                "HIGH"),
+    ("PRIVATE_KEY",     re.compile(r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----"),                              "Private Key",                 "HIGH"),
+    ("JWT",             re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),            "JSON Web Token",              "HIGH"),
+    ("FIREBASE",        re.compile(r"[a-z0-9-]+\.firebaseio\.com"),                                                "Firebase Database URL",       "HIGH"),
+    ("S3_BUCKET",       re.compile(r"[a-z0-9.-]+\.s3\.amazonaws\.com"),                                            "AWS S3 Bucket",               "HIGH"),
+    # ── MEDIUM confidence ────────────────────────────────────────────────────
+    ("API_KEY",         re.compile(r"""(?:api[_-]?key|apikey|api[_-]?secret)[\s:="']+([A-Za-z0-9_\-]{20,})""", re.I),           "API Key",      "MEDIUM"),
+    ("BEARER_TOKEN",    re.compile(r"""(?:bearer|authorization|auth[_-]?token)[\s:="']+([A-Za-z0-9_\-\.]{30,})""", re.I),        "Bearer Token", "MEDIUM"),
+    ("INTERNAL_IP",     re.compile(
+        r"""(?:^|[\"'\s,;=])(10\.\d{1,3}\.\d{1,3}\.\d{1,3}"""
+        r"""|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"""
+        r"""|192\.168\.\d{1,3}\.\d{1,3})(?:[\"'\s,;:]|$)"""
+    ),                                                                                                              "Internal IP",                 "MEDIUM"),
+    # ── LOW confidence ───────────────────────────────────────────────────────
+    ("GENERIC_SECRET",  re.compile(r"""(?:secret|password|passwd|pwd)[\s:="']+([^\s"']{12,64})""", re.I),          "Generic Secret/Password",     "LOW"),
 ]
+
+# ---------------------------------------------------------------------------
+# False-positive filters for LOW-confidence generic secrets
+# ---------------------------------------------------------------------------
+
+# Values that are obviously not real secrets
+_FP_VALUES: frozenset[str] = frozenset({
+    "null", "undefined", "true", "false", "none", "empty", "required",
+    "your_password_here", "changeme", "placeholder", "enter_password",
+    "your_secret", "xxxxxxxx", "password123", "12345678", "00000000",
+})
+
+# Looks like minified JS: contains JS punctuation or is a code fragment
+_FP_CODE_RE = re.compile(
+    r"[{}()\[\];,!]"           # JS syntax chars
+    r"|^\!0$|^\!1$"            # minified booleans
+    r"|^[a-z]\."               # method call like "n.foo"
+    r"|placeholder"            # common placeholder word
+    r"|\.\.\."                 # truncated value
+    r"|required:!0"            # React/minified prop
+    r"|onChange:"              # React event handler
+    r"|className"              # JSX prop
+    r"|value:b\."              # minified state access
+    , re.I
+)
+
+# Source files inside known library paths → skip entirely for LOW patterns
+_LIB_PATH_RE = re.compile(
+    r"node_modules|vendor|webpack|chunks?/|runtime\.|polyfill\.|jquery",
+    re.I,
+)
+
+
+def _is_fp_value(value: str, source_file: str, confidence: str) -> bool:
+    """Return True if this match is likely a false positive."""
+    if confidence != "LOW":
+        return False  # Only filter LOW confidence
+
+    v = value.strip().lower()
+
+    # Too short (< 12 chars already enforced by regex, but double-check)
+    if len(v) < 12:
+        return True
+
+    # Known placeholder strings
+    if v in _FP_VALUES:
+        return True
+
+    # Looks like a code fragment, not a secret
+    if _FP_CODE_RE.search(value):
+        return True
+
+    # Source file is a known library path
+    if _LIB_PATH_RE.search(source_file):
+        return True
+
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Endpoint patterns
 # ---------------------------------------------------------------------------
 
 _ENDPOINT_PATTERNS: list[re.Pattern] = [
-    # fetch/axios/jQuery ajax calls
     re.compile(r"""(?:fetch|axios|\.get|\.post|\.put|\.delete|\.patch)\s*\(\s*['"](\/[^'"]{2,}?)['"]"""),
-    # XMLHttpRequest .open("METHOD", "/url")
     re.compile(r"""\.open\s*\(\s*["'][A-Z]+["']\s*,\s*["'](\/[^"']+)["']"""),
-    # /api/... paths in strings
     re.compile(r"""["'](\/api\/[^"']+)["']"""),
-    # /v1/... /v2/... versioned paths
     re.compile(r"""["'](\/v[0-9]+\/[a-zA-Z0-9/_\-\.]{2,}?)["']"""),
-    # Generic multi-segment paths in strings
     re.compile(r"""["'](\/[a-zA-Z0-9_\-]+\/[a-zA-Z0-9/_\-\.]{2,}?)["']"""),
-    # url/endpoint/path/href assignments
     re.compile(r"""(?:url|endpoint|path|href|action)\s*[:=]\s*["'](\/[^"']{2,}?)["']""", re.I),
 ]
 
-# Filter out common non-interesting paths
 _ENDPOINT_IGNORE = re.compile(
     r"^/(favicon|static|assets|css|img|images|fonts|vendor|node_modules|\.)",
     re.I,
@@ -83,9 +140,13 @@ async def analyze_js_files(
 ) -> dict[str, Any]:
     """Download and analyze JS files for secrets and endpoints.
 
+    Secrets include a 'confidence' field: HIGH / MEDIUM / LOW.
+    LOW confidence secrets are filtered more aggressively for false positives.
+
     Returns:
         {
-            "secrets": [...],
+            "secrets": [...],        # all passing secrets
+            "secrets_by_confidence": {"HIGH": N, "MEDIUM": N, "LOW": N},
             "endpoints": [...],
             "files_analyzed": N,
             "files_failed": N,
@@ -107,7 +168,6 @@ async def analyze_js_files(
                 failed += 1
                 return
             analyzed += 1
-
             secrets = _extract_secrets(content, url)
             endpoints = _extract_endpoints(content, url, target_domain)
             all_secrets.extend(secrets)
@@ -124,8 +184,14 @@ async def analyze_js_files(
             seen_paths.add(ep["path"])
             unique_endpoints.append(ep)
 
+    # Count by confidence
+    by_conf: dict[str, int] = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for s in all_secrets:
+        by_conf[s["confidence"]] = by_conf.get(s["confidence"], 0) + 1
+
     return {
         "secrets": all_secrets,
+        "secrets_by_confidence": by_conf,
         "endpoints": unique_endpoints,
         "files_analyzed": analyzed,
         "files_failed": failed,
@@ -139,7 +205,6 @@ async def analyze_js_files(
 
 
 async def _download_js(url: str, timeout: int) -> str | None:
-    """Download a JS file. Returns content or None on failure."""
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -159,17 +224,27 @@ async def _download_js(url: str, timeout: int) -> str | None:
 
 
 def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
-    """Extract secrets from JS content using regex patterns."""
     secrets: list[dict[str, Any]] = []
 
-    for name, pattern, description in _SECRET_PATTERNS:
+    for name, pattern, description, confidence in _SECRET_PATTERNS:
         for match in pattern.finditer(content):
             value = match.group(1) if match.lastindex else match.group(0)
-            display_value = value.strip()[:60] + ("..." if len(value.strip()) > 60 else "")
+            value = value.strip()
+
+            # Skip empty or obviously too-short values
+            if len(value) < 8:
+                continue
+
+            # Apply false-positive filter
+            if _is_fp_value(value, source_file, confidence):
+                continue
+
+            display = value[:60] + ("..." if len(value) > 60 else "")
             secrets.append({
                 "type": name,
-                "value": display_value,
+                "value": display,
                 "description": description,
+                "confidence": confidence,
                 "source_file": source_file,
                 "match_position": match.start(),
             })
@@ -177,27 +252,18 @@ def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
     return secrets
 
 
-def _extract_endpoints(
-    content: str,
-    source_file: str,
-    target_domain: str,
-) -> list[dict[str, Any]]:
-    """Extract API endpoints from JS content."""
+def _extract_endpoints(content: str, source_file: str, target_domain: str) -> list[dict[str, Any]]:
     endpoints: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    # Standard path patterns
     for pattern in _ENDPOINT_PATTERNS:
         for match in pattern.finditer(content):
             path = match.group(1) if match.lastindex else match.group(0)
             _add_endpoint(path, match, content, source_file, endpoints, seen)
 
-    # Full URLs matching target domain
     if target_domain:
         domain_pattern = re.compile(
-            r"""["'](https?://[^"']*"""
-            + re.escape(target_domain)
-            + r"""[^"']*)["']"""
+            r"""["'](https?://[^"']*""" + re.escape(target_domain) + r"""[^"']*)["']"""
         )
         for match in domain_pattern.finditer(content):
             full_url = match.group(1).strip()
@@ -219,7 +285,6 @@ def _add_endpoint(
     endpoints: list[dict[str, Any]],
     seen: set[str],
 ) -> None:
-    """Add an endpoint if it passes filters."""
     path = path.strip()
     if not path or path in seen:
         return
@@ -230,7 +295,6 @@ def _add_endpoint(
 
     seen.add(path)
 
-    # Detect HTTP method from surrounding context
     method = "GET"
     ctx_start = max(0, match.start() - 60)
     context = content[ctx_start : match.start()].lower()
@@ -243,8 +307,4 @@ def _add_endpoint(
     elif ".patch" in context:
         method = "PATCH"
 
-    endpoints.append({
-        "path": path,
-        "method": method,
-        "source_file": source_file,
-    })
+    endpoints.append({"path": path, "method": method, "source_file": source_file})

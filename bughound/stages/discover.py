@@ -355,6 +355,7 @@ async def _run_discover(
     js_secrets: list[dict[str, Any]] = []
     js_endpoints: list[dict[str, Any]] = []
     hidden_endpoints: list[dict[str, Any]] = []
+    secrets_by_conf: dict[str, int] = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
 
     if js_urls:
         if progress_cb:
@@ -367,6 +368,7 @@ async def _run_discover(
 
         js_secrets = js_result.get("secrets", [])
         js_endpoints = js_result.get("endpoints", [])
+        secrets_by_conf = js_result.get("secrets_by_confidence", {})
 
         # Cross-reference: endpoints in JS but not in crawled URLs = hidden
         crawled_paths = set()
@@ -381,13 +383,23 @@ async def _run_discover(
             if ep["path"] not in crawled_paths:
                 hidden_endpoints.append({**ep, "reason": "Found in JS but not in crawl results"})
 
-        # Write 2C results
+        # Write 2C results — separate HIGH/MEDIUM from LOW for easier AI triage
         if js_secrets:
+            high_med = [s for s in js_secrets if s.get("confidence") in ("HIGH", "MEDIUM")]
+            low = [s for s in js_secrets if s.get("confidence") == "LOW"]
+
             await workspace.write_data(
                 workspace_id, "secrets/js_secrets.json", js_secrets,
                 generated_by="js_analyzer", target=target_label,
             )
             files_written.append("secrets/js_secrets.json")
+
+            if high_med:
+                await workspace.write_data(
+                    workspace_id, "secrets/js_secrets_confirmed.json", high_med,
+                    generated_by="js_analyzer", target=target_label,
+                )
+                files_written.append("secrets/js_secrets_confirmed.json")
 
         if js_endpoints:
             await workspace.write_data(
@@ -604,6 +616,7 @@ async def _run_discover(
             "js_files_found": len(js_urls),
             "js_files_analyzed": min(len(js_urls), 100),
             "secrets_found": len(js_secrets),
+            "secrets_by_confidence": secrets_by_conf if js_urls else {},
             "secret_types": dict(secret_types.most_common(10)),
             "endpoints_from_js": len(js_endpoints),
             "hidden_endpoints": len(hidden_endpoints),

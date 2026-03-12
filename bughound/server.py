@@ -454,10 +454,17 @@ def _format_discover(result: dict[str, Any]) -> str:
                 lines.append(f"  - {tool}: {count} URLs")
     lines.append(f"**JS Files Found:** {data.get('js_files_found', 0)}")
 
-    # Secrets
+    # Secrets with confidence breakdown
     secrets = data.get("secrets_found", 0)
     if secrets:
-        lines.append(f"\n**Secrets Found:** {secrets}")
+        conf = data.get("secrets_by_confidence", {})
+        high = conf.get("HIGH", 0)
+        med = conf.get("MEDIUM", 0)
+        low = conf.get("LOW", 0)
+        lines.append(
+            f"\n**Secrets Found:** {secrets} "
+            f"(HIGH: {high}, MEDIUM: {med}, LOW: {low})"
+        )
         stypes = data.get("secret_types", {})
         if stypes:
             for stype, count in stypes.items():
