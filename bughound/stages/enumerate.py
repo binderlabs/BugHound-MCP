@@ -317,7 +317,13 @@ async def enumerate_deep(
     return {
         "status": "job_started",
         "job_id": job_id,
-        "message": f"Deep enumeration started for {target}. Poll with bughound_job_status.",
+        "message": (
+            f"Deep enumeration started for {target}. "
+            "DO NOT wait or poll in a loop. Proceed to bughound_discover now — "
+            "it will use the subdomains already found by light enumeration. "
+            "After discovery completes, check this job once with bughound_job_status. "
+            "If deep enum found new subdomains, run bughound_discover again on the updated list."
+        ),
         "workspace_id": workspace_id,
         "estimated_time": "5-15 minutes",
     }

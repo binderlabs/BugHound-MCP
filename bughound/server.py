@@ -1063,8 +1063,8 @@ def _format_job_started(result: dict[str, Any]) -> str:
         f"**Job ID:** `{result.get('job_id', '?')}`\n"
         f"**Message:** {result.get('message', '')}\n"
         f"**Estimated Time:** {result.get('estimated_time', 'unknown')}\n\n"
-        f"Use `bughound_job_status` with job_id `{result.get('job_id', '')}` to check progress.\n"
-        f"**IMPORTANT:** Wait at least 30 seconds between status checks. Do not poll rapidly.\n"
+        f"**IMPORTANT:** Do NOT poll in a loop. Continue with the next pipeline stage now. "
+        f"Check this job once later with `bughound_job_status`.\n"
     )
 
 
