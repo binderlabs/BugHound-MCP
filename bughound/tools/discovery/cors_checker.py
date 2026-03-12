@@ -123,7 +123,7 @@ def _classify_cors(
     if acao == "null" and origin == "null":
         if has_credentials:
             return "HIGH"
-        return "MEDIUM"
+        return "INFO"
 
     # Wildcard
     if acao == "*":
