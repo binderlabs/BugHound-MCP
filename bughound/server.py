@@ -26,9 +26,10 @@ structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
 )
 
-from bughound.core import target_classifier, workspace
+from bughound.core import target_classifier, tool_runner, workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import WorkspaceState
+from bughound.stages import analyze as stage_analyze
 from bughound.stages import discover as stage_discover
 from bughound.stages import enumerate as stage_enumerate
 
@@ -611,6 +612,158 @@ async def bughound_discover(workspace_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Stage 3: Analyze
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_get_attack_surface",
+    description=(
+        "Get comprehensive attack surface analysis with exploitability-scored targets, "
+        "attack chain detection, immediate reportable wins, technology-specific playbooks, "
+        "and cross-stage correlations. This is the intelligence brain of BugHound. "
+        "Use after discovery to plan testing or generate reports for immediate wins. "
+        "Stage 3, read-only, sync."
+    ),
+)
+async def bughound_get_attack_surface(workspace_id: str) -> str:
+    """Analyze full attack surface from Stage 2 data."""
+    result = await stage_analyze.get_attack_surface(workspace_id)
+    return _format_attack_surface(result)
+
+
+@mcp.tool(
+    name="bughound_submit_scan_plan",
+    description=(
+        "Submit testing strategy after reviewing attack surface. Validates targets "
+        "against scope and checks tool availability. Required before "
+        "bughound_execute_tests. The scan_plan parameter is a JSON string with "
+        "'targets' array and optional 'global_settings'. Stage 3, sync."
+    ),
+)
+async def bughound_submit_scan_plan(workspace_id: str, scan_plan: str) -> str:
+    """Validate and store scan plan."""
+    try:
+        parsed = json.loads(scan_plan)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return f"Error: Invalid JSON in scan_plan: {exc}"
+    result = await stage_analyze.submit_scan_plan(workspace_id, parsed)
+    return _format_scan_plan_result(result)
+
+
+@mcp.tool(
+    name="bughound_enrich_target",
+    description=(
+        "Get complete intelligence dossier on a single host. All fingerprint data, "
+        "flags, URLs, parameters, secrets, sensitive paths, CORS results, attack "
+        "chains. Use when drilling into a high-interest target from the attack "
+        "surface analysis. Stage 3, sync."
+    ),
+)
+async def bughound_enrich_target(workspace_id: str, host: str) -> str:
+    """Get all workspace intelligence for one host."""
+    result = await stage_analyze.enrich_target(workspace_id, host)
+    return _format_enrich_target(result)
+
+
+@mcp.tool(
+    name="bughound_scope_check",
+    description=(
+        "Verify if a target is within workspace scope before testing. Returns "
+        "in_scope boolean. Use to confirm targets before manual testing. Sync."
+    ),
+)
+async def bughound_scope_check(workspace_id: str, target: str) -> str:
+    """Check scope for a target."""
+    if not workspace.workspace_exists(workspace_id):
+        return f"Error: Workspace '{workspace_id}' not found."
+    in_scope = await workspace.is_in_scope(workspace_id, target)
+    cfg = await workspace.get_config(workspace_id)
+    scope_rules = ""
+    if cfg:
+        scope_rules = (
+            f"\n**Scope rules:**\n"
+            f"  - Include: {', '.join(cfg.scope.include) or 'all'}\n"
+            f"  - Exclude: {', '.join(cfg.scope.exclude) or 'none'}"
+        )
+    status = "IN SCOPE" if in_scope else "OUT OF SCOPE"
+    return f"## Scope Check\n\n**Target:** {target}\n**Result:** {status}{scope_rules}\n"
+
+
+@mcp.tool(
+    name="bughound_check_tool_coverage",
+    description=(
+        "Check which security tools are installed on this system. Returns available "
+        "and missing tools with install commands. Use to understand testing "
+        "capabilities before submitting a scan plan. Sync."
+    ),
+)
+async def bughound_check_tool_coverage() -> str:
+    """Check installed security tools."""
+    tools_info = {
+        "subfinder": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+        "httpx": "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
+        "nuclei": "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        "ffuf": "go install github.com/ffuf/ffuf/v2@latest",
+        "sqlmap": "pip install sqlmap",
+        "dalfox": "go install github.com/hahwul/dalfox/v2@latest",
+        "katana": "go install github.com/projectdiscovery/katana/cmd/katana@latest",
+        "gospider": "go install github.com/jaeles-project/gospider@latest",
+        "wafw00f": "pip install wafw00f",
+        "amass": "go install -v github.com/owasp-amass/amass/v4/...@master",
+        "gau": "go install github.com/lc/gau/v2/cmd/gau@latest",
+        "waybackurls": "go install github.com/tomnomnom/waybackurls@latest",
+        "puredns": "go install github.com/d3mondev/puredns/v2@latest",
+        "gotator": "go install github.com/Josue87/gotator@latest",
+        "subjack": "go install github.com/haccer/subjack@latest",
+        "arjun": "pip install arjun",
+        "interactsh-client": "go install -v github.com/projectdiscovery/interactsh/cmd/interactsh-client@latest",
+        "trufflehog": "pip install trufflehog",
+        "findomain": "apt install findomain",
+        "assetfinder": "go install github.com/tomnomnom/assetfinder@latest",
+    }
+
+    available: list[str] = []
+    missing: list[tuple[str, str]] = []
+    for tool_name, install_cmd in sorted(tools_info.items()):
+        if tool_runner.is_available(tool_name):
+            available.append(tool_name)
+        else:
+            missing.append((tool_name, install_cmd))
+
+    lines = [
+        "## Tool Coverage\n",
+        f"**Available:** {len(available)}/{len(tools_info)}\n",
+    ]
+
+    if available:
+        lines.append("**Installed:**")
+        for t in available:
+            lines.append(f"  - {t}")
+        lines.append("")
+
+    if missing:
+        lines.append("**Missing (with install commands):**")
+        for t, cmd in missing:
+            lines.append(f"  - **{t}**: `{cmd}`")
+        lines.append("")
+
+    # Coverage by category
+    recon_tools = {"subfinder", "assetfinder", "findomain", "amass", "httpx", "wafw00f"}
+    discovery_tools = {"gau", "waybackurls", "katana", "gospider"}
+    scanning_tools = {"nuclei", "ffuf", "sqlmap", "dalfox"}
+    recon_avail = len(recon_tools & set(available))
+    disc_avail = len(discovery_tools & set(available))
+    scan_avail = len(scanning_tools & set(available))
+    lines.append("**Coverage by category:**")
+    lines.append(f"  - Recon: {recon_avail}/{len(recon_tools)}")
+    lines.append(f"  - Discovery: {disc_avail}/{len(discovery_tools)}")
+    lines.append(f"  - Scanning: {scan_avail}/{len(scanning_tools)}")
+
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------
 
@@ -911,12 +1064,285 @@ def _format_job_started(result: dict[str, Any]) -> str:
     )
 
 
+def _format_attack_surface(result: dict[str, Any]) -> str:
+    """Format attack surface analysis as readable markdown."""
+    if result.get("status") == "error":
+        return f"Error: {result['message']}"
+
+    stats = result.get("stats", {})
+    lines = [
+        f"## Attack Surface Analysis\n",
+        f"**Target:** {result.get('target', '?')} ({result.get('target_type', '?')})\n",
+        "### Stats Overview",
+        f"| Metric | Count |",
+        f"|--------|-------|",
+        f"| Subdomains | {stats.get('total_subdomains', 0)} |",
+        f"| Live Hosts | {stats.get('live_hosts', 0)} |",
+        f"| URLs | {stats.get('total_urls', 0)} |",
+        f"| Parameters | {stats.get('total_parameters', 0)} |",
+        f"| JS Files | {stats.get('js_files', 0)} |",
+        f"| Secrets | {stats.get('secrets_found', 0)} |",
+        f"| Hidden Endpoints | {stats.get('hidden_endpoints', 0)} |",
+        f"| Sensitive Paths | {stats.get('sensitive_paths', 0)} |",
+        f"| CORS Issues | {stats.get('cors_issues', 0)} |",
+        f"| Takeover Candidates | {stats.get('takeover_candidates', 0)} |",
+        "",
+    ]
+
+    # Secrets by confidence
+    sbc = stats.get("secrets_by_confidence", {})
+    if any(sbc.values()):
+        lines.append(f"**Secrets:** HIGH: {sbc.get('HIGH', 0)}, MEDIUM: {sbc.get('MEDIUM', 0)}, LOW: {sbc.get('LOW', 0)}\n")
+
+    # Immediate wins (most important — show first)
+    wins = result.get("immediate_wins", [])
+    if wins:
+        lines.append(f"### Immediate Wins ({len(wins)}) — Report NOW\n")
+        for w in wins:
+            lines.append(f"**[{w.get('severity', '?')}] {w.get('type', '?')}** on `{w.get('host', '?')}`")
+            lines.append(f"  - Path: `{w.get('path', '?')}`")
+            lines.append(f"  - Bounty: {w.get('bounty_estimate', '?')}")
+            lines.append(f"  - Evidence: {w.get('evidence', '?')}")
+            lines.append(f"  - Reproduce: `{w.get('reproduction', '?')}`")
+            lines.append(f"  - Impact: {w.get('impact', '?')}")
+            lines.append("")
+
+    # Attack chains
+    chains = result.get("attack_chains", [])
+    if chains:
+        lines.append(f"### Attack Chains ({len(chains)})\n")
+        for c in chains:
+            lines.append(f"**[{c.get('severity', '?')}] {c.get('name', '?')}** (est. {c.get('bounty_estimate', '?')})")
+            lines.append(f"  - Hosts: {', '.join(c.get('affected_hosts', []))}")
+            ev = c.get("evidence", {})
+            lines.append(f"  - Trigger: {ev.get('trigger', '?')}")
+            lines.append(f"  - Supporting: {ev.get('supporting', '?')}")
+            steps = c.get("exploitation_steps", [])
+            if steps:
+                lines.append(f"  - Steps:")
+                for i, s in enumerate(steps, 1):
+                    lines.append(f"    {i}. {s}")
+            lines.append("")
+
+    # High-interest targets
+    targets = result.get("high_interest_targets", [])
+    if targets:
+        lines.append(f"### High-Interest Targets (top {len(targets)})\n")
+        for t in targets:
+            risk = t.get("risk_level", "?")
+            emoji_map = {"CRITICAL": "!!!", "HIGH": "!!", "MEDIUM": "!", "LOW": ""}
+            indicator = emoji_map.get(risk, "")
+            lines.append(f"**{t.get('host', '?')}** — Score: {t.get('score', 0)} [{risk}] {indicator}")
+            lines.append(f"  - URL: {t.get('url', '?')}")
+            if t.get("technologies"):
+                lines.append(f"  - Tech: {', '.join(t['technologies'][:5])}")
+            if t.get("flags"):
+                lines.append(f"  - Flags: {', '.join(t['flags'])}")
+            if t.get("secrets_on_host"):
+                for s in t["secrets_on_host"][:3]:
+                    lines.append(f"  - Secret: [{s.get('confidence')}] {s.get('type')} in {s.get('file')}")
+            if t.get("cors_issue"):
+                ci = t["cors_issue"]
+                lines.append(f"  - CORS: [{ci.get('severity')}] {ci.get('detail')}")
+            if t.get("sensitive_paths_found"):
+                lines.append(f"  - Sensitive: {', '.join(t['sensitive_paths_found'][:5])}")
+            lines.append(f"  - Endpoints: {t.get('hidden_endpoints_count', 0)} hidden, {t.get('api_endpoints_count', 0)} API")
+            lines.append(f"  - Params: {t.get('parameters_count', 0)} | URLs: {t.get('urls_count', 0)}")
+            if t.get("reasons"):
+                lines.append(f"  - Why:")
+                for r in t["reasons"]:
+                    lines.append(f"    - {r}")
+            lines.append("")
+
+    # Correlations
+    corrs = result.get("correlations", [])
+    if corrs:
+        lines.append(f"### Cross-Stage Correlations ({len(corrs)})\n")
+        for c in corrs:
+            lines.append(f"**[{c.get('priority', '?')}] {c.get('type', '?')}**")
+            lines.append(f"  - {c.get('description', '?')}")
+            lines.append(f"  - Significance: {c.get('significance', '?')}")
+            lines.append("")
+
+    # Technology playbooks
+    pbs = result.get("technology_playbooks", [])
+    if pbs:
+        lines.append(f"### Technology Playbooks\n")
+        for pb in pbs:
+            lines.append(f"**{pb.get('technology', '?')}:**")
+            for check in pb.get("checks", []):
+                if "path" in check:
+                    lines.append(f"  - `{check['path']}` — {check.get('purpose', '')}")
+                elif "query" in check:
+                    lines.append(f"  - Query: `{check['query'][:60]}...` — {check.get('purpose', '')}")
+                elif "test" in check:
+                    lines.append(f"  - Test: {check['test']} — {check.get('purpose', '')}")
+                elif "tool" in check:
+                    lines.append(f"  - Tool: `{check['tool']} {check.get('args', '')}` — {check.get('purpose', '')}")
+            lines.append("")
+
+    # Suggested test classes
+    tc = result.get("suggested_test_classes", [])
+    if tc:
+        lines.append(f"**Suggested test classes:** {', '.join(tc)}\n")
+
+    # Flags summary
+    flags_sum = result.get("flags_summary", {})
+    if flags_sum:
+        lines.append("**Flags distribution:**")
+        for flag, count in flags_sum.items():
+            lines.append(f"  - {flag}: {count}")
+        lines.append("")
+
+    lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_scan_plan_result(result: dict[str, Any]) -> str:
+    """Format scan plan submission result."""
+    if result.get("status") == "error":
+        return f"Error: {result['message']}"
+
+    if result.get("status") == "rejected":
+        lines = [
+            "## Scan Plan Rejected\n",
+            f"**{result.get('message', '')}**\n",
+            "**Reasons:**",
+        ]
+        for r in result.get("rejected_reasons", []):
+            lines.append(f"  - {r}")
+        lines.append("\nFix the issues and resubmit.")
+        return "\n".join(lines) + "\n"
+
+    # Approved
+    lines = [
+        "## Scan Plan Approved\n",
+        f"**{result.get('message', '')}**\n",
+        f"**Targets:** {result.get('targets_count', 0)}",
+        f"**Test Classes:** {result.get('test_classes_total', 0)}",
+    ]
+
+    tools_req = result.get("tools_required", [])
+    if tools_req:
+        lines.append(f"**Tools Required:** {', '.join(tools_req)}")
+
+    avail = result.get("tools_available", [])
+    if avail:
+        lines.append(f"**Tools Available:** {', '.join(avail)}")
+
+    missing = result.get("tools_missing", [])
+    if missing:
+        lines.append(f"**Tools Missing:** {', '.join(missing)} (install for full coverage)")
+
+    lines.append(f"\n**Next step:** {result.get('next_step', 'Continue.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_enrich_target(result: dict[str, Any]) -> str:
+    """Format target enrichment dossier."""
+    if result.get("status") == "error":
+        return f"Error: {result['message']}"
+
+    fp = result.get("fingerprint", {})
+    lines = [
+        f"## Target Dossier: `{result.get('host', '?')}`\n",
+        f"**Score:** {result.get('score', 0)} [{result.get('risk_level', '?')}]\n",
+        "### Fingerprint",
+        f"  - URL: {fp.get('url', '?')}",
+        f"  - Status: {fp.get('status_code', '?')}",
+        f"  - Title: {fp.get('title', '?')}",
+        f"  - Server: {fp.get('web_server', '?')}",
+        f"  - IP: {fp.get('ip', '?')}",
+        f"  - CDN: {fp.get('cdn') or 'None'}",
+        "",
+    ]
+
+    if result.get("flags"):
+        lines.append("### Flags")
+        for f in result["flags"]:
+            lines.append(f"  - {f}")
+        lines.append("")
+
+    if result.get("technologies"):
+        lines.append(f"### Technologies: {', '.join(result['technologies'])}\n")
+
+    waf = result.get("waf")
+    if waf:
+        lines.append(f"### WAF: {waf.get('waf', 'None')} ({'detected' if waf.get('detected') else 'not detected'})\n")
+
+    if result.get("reasons"):
+        lines.append("### Risk Factors")
+        for r in result["reasons"]:
+            lines.append(f"  - {r}")
+        lines.append("")
+
+    if result.get("secrets"):
+        lines.append(f"### Secrets ({len(result['secrets'])})")
+        for s in result["secrets"][:10]:
+            lines.append(f"  - [{s.get('confidence')}] {s.get('type')}: `{s.get('value', '?')}`")
+        lines.append("")
+
+    if result.get("sensitive_paths"):
+        lines.append(f"### Sensitive Paths ({len(result['sensitive_paths'])})")
+        for sp in result["sensitive_paths"][:10]:
+            lines.append(f"  - [{sp.get('category')}] `{sp.get('path')}` (status {sp.get('status_code', '?')})")
+        lines.append("")
+
+    if result.get("cors_results"):
+        lines.append(f"### CORS Issues ({len(result['cors_results'])})")
+        for c in result["cors_results"]:
+            lines.append(f"  - [{c.get('severity')}] origin {c.get('origin_tested', '?')} reflected")
+        lines.append("")
+
+    if result.get("hidden_endpoints"):
+        lines.append(f"### Hidden Endpoints ({len(result['hidden_endpoints'])})")
+        for ep in result["hidden_endpoints"][:15]:
+            lines.append(f"  - {ep.get('method', 'GET')} `{ep.get('path', '?')}`")
+        lines.append("")
+
+    if result.get("api_endpoints"):
+        lines.append(f"### API Endpoints ({len(result['api_endpoints'])})")
+        for ep in result["api_endpoints"][:15]:
+            lines.append(f"  - {ep.get('method', 'GET')} `{ep.get('path', '?')}`")
+        lines.append("")
+
+    if result.get("parameters"):
+        lines.append(f"### Parameters ({len(result['parameters'])} paths)")
+        for p in result["parameters"][:10]:
+            param_names = [pr.get("name", "?") for pr in p.get("params", [])]
+            lines.append(f"  - `{p.get('path', '?')}`: {', '.join(param_names)}")
+        lines.append("")
+
+    urls_total = result.get("urls_total", 0)
+    if urls_total:
+        lines.append(f"### URLs: {urls_total} total (showing first {len(result.get('urls', []))})")
+        for u in result.get("urls", [])[:20]:
+            lines.append(f"  - {u}")
+        lines.append("")
+
+    if result.get("attack_chains"):
+        lines.append(f"### Attack Chains Involving This Host")
+        for c in result["attack_chains"]:
+            lines.append(f"  - [{c.get('severity')}] {c.get('name')} (est. {c.get('bounty_estimate', '?')})")
+        lines.append("")
+
+    if result.get("dns_records"):
+        lines.append(f"### DNS Records")
+        for rec in result["dns_records"][:5]:
+            lines.append(f"  - {json.dumps(rec)}")
+        lines.append("")
+
+    return "\n".join(lines) + "\n"
+
+
 def _suggest_next(stages: list[int]) -> str:
     """Suggest the next tool to call based on stages_to_run."""
     if 1 in stages:
         return "Call `bughound_enumerate` to discover subdomains."
     if 2 in stages:
         return "Call `bughound_discover` to probe and discover the attack surface."
+    if 3 in stages:
+        return "Call `bughound_get_attack_surface` to analyze the attack surface."
     return "Call the next stage tool in the pipeline."
 
 

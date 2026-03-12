@@ -154,6 +154,67 @@ This was the biggest build. Stage 2 discovery now runs 7 phases with 15+ intelli
 
 ---
 
+## 2026-03-12 - Day 7: Stage 3 (Analyze / Decision Engine)
+
+### Overview
+Stage 3 is the intelligence brain of BugHound. Pure data aggregation and pattern matching — no AI calls. Scores targets by real exploitability, detects multi-finding attack chains, surfaces immediate reportable wins, and provides technology-specific playbooks.
+
+### What Was Built
+
+**bughound/stages/analyze.py** (780 lines) — 3 public functions:
+1. `get_attack_surface()` — reads all 18 Stage 2 workspace files, builds per-host index, scores exploitability, detects chains
+2. `submit_scan_plan()` — validates scope, tool availability, resource limits, stores plan
+3. `enrich_target()` — complete intelligence dossier for a single host
+
+**Exploitability Scoring (4-tier weights):**
+- CRITICAL (50pts): leaked cloud keys, confirmed takeover, exposed .git, exposed .env
+- HIGH (30pts): CORS+creds, Swagger, GraphQL, hidden endpoints, actuator, debug, admin
+- MEDIUM (15pts): NO_WAF, OLD_TECH, CORS no-creds, 10+ params, backup files
+- LOW (5pts): DEFAULT_PAGE, NON_CDN_IP, few params
+
+Risk levels: CRITICAL (80+), HIGH (50-79), MEDIUM (20-49), LOW (<20)
+
+**12 Attack Chain Patterns:**
+1. SOURCE_CODE_THEFT — .git exposed
+2. CLOUD_CREDENTIAL_ABUSE — leaked cloud key + cloud resources
+3. ACCOUNT_TAKEOVER_CORS — CORS+creds + auth endpoints
+4. API_ABUSE_VIA_DOCS — Swagger + hidden endpoints
+5. ENV_VARIABLE_LEAK — exposed .env file
+6. SUBDOMAIN_TAKEOVER — confirmed/high-confidence dangling DNS
+7. UNAUTH_API_INJECTION — hidden endpoints + no WAF
+8. DEBUG_INFO_DISCLOSURE — debug mode + actuator/phpinfo
+9. WORDPRESS_COMPROMISE — WordPress + old version/wp-admin + no WAF
+10. GRAPHQL_EXPLOITATION — GraphQL + no WAF/hidden endpoints
+11. INTERNAL_IP_ADMIN_BYPASS — leaked internal IP + 403 admin
+12. SHARED_INFRA_PIVOT — shared IP + vulnerability + high-value host
+
+**8 Immediate Win Types (report-ready):**
+Subdomain takeover, .git repo, .env file, cloud credentials, CORS critical, actuator, phpinfo, backup files
+
+**5 Technology Playbooks:**
+WordPress, GraphQL, Spring Boot, Node.js/Express, React/Angular SPA
+
+**7 Cross-Stage Correlation Types:**
+HIDDEN_ENDPOINT, SHARED_INFRASTRUCTURE, LEAKED_CREDENTIAL, TECH_MISMATCH, PARAMETER_HOTSPOT, ROBOTS_HIDDEN
+
+**5 New MCP Tools (16 total):**
+- bughound_get_attack_surface — full analysis with scoring, chains, wins, playbooks
+- bughound_submit_scan_plan — validate and store scan plan for Stage 4
+- bughound_enrich_target — per-host intelligence dossier
+- bughound_scope_check — verify target in scope
+- bughound_check_tool_coverage — installed tools + install commands
+
+### Current State
+- **92 Python files, ~21,600 LOC**
+- **16 MCP tools** on single FastMCP server
+- **15 tool wrappers** (unchanged from Stage 2)
+- **Stages 0-3 fully implemented**
+
+### What's Next
+- Phase 3 Day 8: Stage 4 (Test) — bughound_execute_tests + bughound_test_single
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->

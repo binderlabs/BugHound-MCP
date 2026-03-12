@@ -153,20 +153,29 @@ Target: Black Hat Arsenal demo-ready by Day 10
 
 ### Day 7: Stage 3 (Analyze / Decision Engine)
 
-- [ ] stages/analyze.py
-- [ ] Build attack surface summary aggregation:
-  - Read all Stage 2 data
+- [x] stages/analyze.py (780 lines — full intelligence engine)
+- [x] Build attack surface summary aggregation:
+  - Read all Stage 2 data (18 workspace files)
   - Compute stats (subdomain count, live hosts, tech inventory, etc.)
-  - Identify high-interest targets (simple heuristic: endpoints + params + secrets)
+  - Identify high-interest targets (exploitability scoring with 4-tier weights)
   - Format as clean JSON for AI consumption
-- [ ] Scan plan validation:
+- [x] Exploitability scoring: CRITICAL(50)/HIGH(30)/MEDIUM(15)/LOW(5) weighted scoring
+- [x] Attack chain detection: 12 deterministic chain patterns (source theft, CORS ATO, cloud cred abuse, etc.)
+- [x] Immediate wins: 8 report-ready finding types with reproduction steps
+- [x] Technology playbooks: WordPress, GraphQL, Spring Boot, Node.js, SPA
+- [x] Cross-stage correlations: 7 correlation types (hidden endpoints, shared infra, param hotspots, etc.)
+- [x] Scan plan validation:
   - Check targets against scope
   - Check referenced tools exist
   - Store approved plan in workspace
-- [ ] Register MCP tools:
-  - [ ] bughound_get_attack_surface
-  - [ ] bughound_submit_scan_plan
-- [ ] Git commit: "stage 3 - analyze"
+- [x] Target enrichment: complete per-host intelligence dossier
+- [x] Register MCP tools:
+  - [x] bughound_get_attack_surface
+  - [x] bughound_submit_scan_plan
+  - [x] bughound_enrich_target
+  - [x] bughound_scope_check
+  - [x] bughound_check_tool_coverage
+- [x] Git commit: "stage 3 - analyze"
 
 ### Day 8: Stage 4 (Test)
 
