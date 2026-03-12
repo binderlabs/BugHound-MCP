@@ -207,6 +207,156 @@ async def bughound_workspace_delete(workspace_id: str) -> str:
     return f"Error: Failed to delete workspace '{workspace_id}'."
 
 
+@mcp.tool(
+    name="bughound_workspace_results",
+    description=(
+        "View workspace results dashboard or drill into specific data categories. "
+        "Without a category, returns an overview of all collected data with counts. "
+        "With a category (subdomains, hosts, flags, technologies, urls, parameters, "
+        "secrets, hidden_endpoints, sensitive_paths, cors, takeover, vulnerabilities, "
+        "waf), returns the actual data. Use anytime to check recon progress or "
+        "review findings."
+    ),
+)
+async def bughound_workspace_results(workspace_id: str, category: str = "") -> str:
+    """View workspace data dashboard or drill into a specific category."""
+    meta = await workspace.get_workspace(workspace_id)
+    if meta is None:
+        return f"Error: Workspace '{workspace_id}' not found."
+
+    if not category:
+        return await _results_dashboard(workspace_id, meta)
+    return await _results_category(workspace_id, meta, category.strip().lower())
+
+
+async def _results_dashboard(workspace_id: str, meta: Any) -> str:
+    """Build a dashboard overview of all workspace data."""
+    # Category definitions: (label, file_path)
+    categories = [
+        ("subdomains", "subdomains/all.txt"),
+        ("dns_records", "dns/records.json"),
+        ("live_hosts", "hosts/live_hosts.json"),
+        ("technologies", "hosts/technologies.json"),
+        ("waf", "hosts/waf.json"),
+        ("flags", "hosts/flags.json"),
+        ("urls", "urls/crawled.json"),
+        ("parameters", "urls/parameters.json"),
+        ("js_secrets", "secrets/js_secrets.json"),
+        ("js_secrets_confirmed", "secrets/js_secrets_confirmed.json"),
+        ("hidden_endpoints", "endpoints/hidden_endpoints.json"),
+        ("api_endpoints", "endpoints/api_endpoints.json"),
+        ("sensitive_paths", "hosts/sensitive_paths.json"),
+        ("cors_results", "hosts/cors_results.json"),
+        ("takeover_candidates", "cloud/takeover_candidates.json"),
+        ("takeover_confirmed", "cloud/takeover_confirmed.json"),
+        ("vulnerabilities", "vulnerabilities/scan_results.json"),
+    ]
+
+    lines = [
+        f"## Workspace Dashboard: `{workspace_id}`\n",
+        f"**Target:** {meta.target}",
+        f"**State:** {meta.state.value}",
+        f"**Current Stage:** {meta.current_stage}\n",
+        "**Data Collected:**",
+    ]
+
+    for label, file_path in categories:
+        data = await workspace.read_data(workspace_id, file_path)
+        if data is None:
+            lines.append(f"  - {label}: —")
+        elif isinstance(data, list):
+            lines.append(f"  - **{label}**: {len(data)} entries  (`{file_path}`)")
+        elif isinstance(data, dict):
+            count = data.get("count", len(data.get("data", [])))
+            lines.append(f"  - **{label}**: {count} entries  (`{file_path}`)")
+
+    # Stages
+    completed = [e.stage for e in meta.stage_history if e.status == "completed"]
+    all_stages = meta.classification.get("stages_to_run", []) if meta.classification else list(range(7))
+    pending = [s for s in all_stages if s not in completed]
+
+    stage_names = {
+        0: "Initialize", 1: "Enumerate", 2: "Discover",
+        3: "Analyze", 4: "Test", 5: "Validate", 6: "Report",
+    }
+    completed_str = ", ".join(f"{s} ({stage_names.get(s, '?')})" for s in completed)
+    pending_str = ", ".join(f"{s} ({stage_names.get(s, '?')})" for s in pending)
+
+    lines.append(f"\n**Stages completed:** {completed_str or 'none'}")
+    lines.append(f"**Stages pending:** {pending_str or 'none'}")
+
+    # Available drill-down categories
+    lines.append(
+        "\n**Drill down:** call with category = subdomains | hosts | flags | "
+        "technologies | urls | parameters | secrets | hidden_endpoints | "
+        "sensitive_paths | cors | takeover | vulnerabilities | waf"
+    )
+
+    return "\n".join(lines) + "\n"
+
+
+# Category -> (file_path, truncate_limit or 0 for no truncation)
+_CATEGORY_MAP: dict[str, tuple[str, int]] = {
+    "subdomains": ("subdomains/all.txt", 100),
+    "hosts": ("hosts/live_hosts.json", 0),
+    "flags": ("hosts/flags.json", 0),
+    "technologies": ("hosts/technologies.json", 0),
+    "urls": ("urls/crawled.json", 100),
+    "parameters": ("urls/parameters.json", 0),
+    "secrets": ("secrets/js_secrets.json", 0),
+    "hidden_endpoints": ("endpoints/hidden_endpoints.json", 0),
+    "sensitive_paths": ("hosts/sensitive_paths.json", 0),
+    "cors": ("hosts/cors_results.json", 0),
+    "takeover": ("cloud/takeover_candidates.json", 0),
+    "vulnerabilities": ("vulnerabilities/scan_results.json", 0),
+    "waf": ("hosts/waf.json", 0),
+}
+
+
+async def _results_category(workspace_id: str, meta: Any, category: str) -> str:
+    """Return actual data for a specific category."""
+    if category not in _CATEGORY_MAP:
+        valid = ", ".join(sorted(_CATEGORY_MAP.keys()))
+        return f"Error: Unknown category '{category}'. Valid categories: {valid}"
+
+    file_path, truncate_limit = _CATEGORY_MAP[category]
+    data = await workspace.read_data(workspace_id, file_path)
+
+    if data is None:
+        return (
+            f"## {category} — No Data\n\n"
+            f"File `{file_path}` does not exist yet. "
+            f"This data is collected during a later pipeline stage."
+        )
+
+    lines = [f"## {category} — `{workspace_id}`\n"]
+
+    if isinstance(data, list):
+        # .txt file (subdomains)
+        total = len(data)
+        show = data[:truncate_limit] if truncate_limit else data
+        lines.append(f"**Total:** {total}\n")
+        for item in show:
+            lines.append(f"  - {item}")
+        if truncate_limit and total > truncate_limit:
+            lines.append(f"\n  ... and {total - truncate_limit} more (truncated)")
+    elif isinstance(data, dict):
+        # .json file with DataWrapper envelope
+        items = data.get("data", [])
+        total = data.get("count", len(items))
+        generated_by = data.get("generated_by", "unknown")
+        generated_at = data.get("generated_at", "unknown")
+
+        lines.append(f"**Total:** {total}  |  **Generated by:** {generated_by}  |  **At:** {generated_at}\n")
+
+        show = items[:truncate_limit] if truncate_limit else items
+        lines.append(f"```json\n{json.dumps(show, indent=2)}\n```")
+        if truncate_limit and total > truncate_limit:
+            lines.append(f"\n... and {total - truncate_limit} more (truncated)")
+
+    return "\n".join(lines) + "\n"
+
+
 # ---------------------------------------------------------------------------
 # Stage 1: Enumerate
 # ---------------------------------------------------------------------------
