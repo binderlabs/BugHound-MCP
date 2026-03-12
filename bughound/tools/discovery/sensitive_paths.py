@@ -123,17 +123,42 @@ async def check_host(
 ) -> list[dict[str, Any]]:
     """Check all sensitive paths on a single host.
 
+    Uses baseline comparison: requests a random nonexistent path first,
+    then filters out responses that match the baseline (catch-all routes).
+
     Returns list of found paths with metadata.
     """
     base = base_url.rstrip("/")
     sem = asyncio.Semaphore(concurrency)
     findings: list[dict[str, Any]] = []
 
+    # --- Baseline: request a random path to detect catch-all responses ---
+    import hashlib, time
+    random_slug = hashlib.md5(f"{base}{time.time()}".encode()).hexdigest()[:16]
+    baseline_status = 0
+    baseline_length = 0
+    baseline_body_hash = ""
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{base}/bughound_baseline_{random_slug}",
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                headers={"User-Agent": "Mozilla/5.0 BugHound/1.0"},
+                ssl=False,
+                allow_redirects=False,
+            ) as resp:
+                baseline_status = resp.status
+                body = await resp.text(errors="replace")
+                baseline_length = len(body)
+                baseline_body_hash = hashlib.md5(body[:5000].encode()).hexdigest()
+    except Exception:
+        pass
+
     # Build dynamic backup paths from hostname
     try:
         from urllib.parse import urlparse
         hostname = urlparse(base).hostname or ""
-        # e.g. "pro.odaha.io" -> "pro_odaha_io" and "pro.odaha"
         name_underscore = hostname.replace(".", "_")
         name_short = hostname.rsplit(".", 1)[0].replace(".", "_") if "." in hostname else hostname
     except Exception:
@@ -167,6 +192,26 @@ async def check_host(
                         clen = resp.content_length or len(body)
 
                         if clen < 10:
+                            return
+
+                        # Baseline comparison: if this response looks like the
+                        # catch-all/404 response, skip it (unless it has a validator)
+                        import hashlib as _hl
+                        body_hash = _hl.md5(body[:5000].encode()).hexdigest()
+                        if (
+                            baseline_status == 200
+                            and body_hash == baseline_body_hash
+                            and not entry.get("validate")
+                        ):
+                            return
+
+                        # Also filter by similar content length (within 5%)
+                        if (
+                            baseline_status == 200
+                            and baseline_length > 0
+                            and not entry.get("validate")
+                            and abs(clen - baseline_length) / max(baseline_length, 1) < 0.05
+                        ):
                             return
 
                         # Check for false positive (generic 404 page)
