@@ -90,6 +90,9 @@ def _parse_output_file(output_file: Path) -> list[dict[str, Any]]:
         for item in data:
             if not isinstance(item, dict):
                 continue
+            # Skip empty dicts — dalfox writes [{}] when no XSS found
+            if not item or not any(item.get(k) for k in ("data", "url", "payload", "param")):
+                continue
             findings.append({
                 "xss_type": _classify_xss_type(item),
                 "url": item.get("data", item.get("url", "")),
