@@ -110,6 +110,33 @@ SSTI_PARAMS: dict[str, Any] = {
     "patterns": ["*_template", "*_view", "*_render"],
 }
 
+DESERIALIZATION_PARAMS: dict[str, Any] = {
+    "exact": {
+        "data", "object", "payload", "serialized", "state", "viewstate",
+        "__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION",
+        "session", "token", "cache", "config", "preferences", "settings",
+        "profile", "userdata", "cart", "basket", "checkout",
+    },
+    "patterns": [
+        "*_data", "*_object", "*_state", "*_cache", "*_serialized",
+        "*_payload", "*_config",
+    ],
+}
+
+MASS_ASSIGNMENT_PARAMS: dict[str, Any] = {
+    "exact": {
+        "role", "is_admin", "isAdmin", "admin", "is_staff", "is_superuser",
+        "privilege", "permissions", "user_type", "userType", "access_level",
+        "group", "groups", "verified", "email_verified", "active", "approved",
+        "balance", "credits", "price", "discount", "status", "level",
+        "plan", "subscription", "tier",
+    },
+    "patterns": [
+        "*_role", "*_admin", "*_privilege", "*_permission", "*_level",
+        "*_status", "*_type",
+    ],
+}
+
 _ALL_VULN_TYPES = {
     "sqli": SQLI_PARAMS,
     "xss": XSS_PARAMS,
@@ -119,6 +146,8 @@ _ALL_VULN_TYPES = {
     "idor": IDOR_PARAMS,
     "rce": RCE_PARAMS,
     "ssti": SSTI_PARAMS,
+    "deserialization": DESERIALIZATION_PARAMS,
+    "mass_assignment": MASS_ASSIGNMENT_PARAMS,
 }
 
 
@@ -319,10 +348,38 @@ def classify_parameters(
     for vtype in _ALL_VULN_TYPES:
         stats[f"{vtype}_count"] = len(candidates[f"{vtype}_candidates"])
 
+    # Path-based IDOR candidates: URLs with numeric or UUID-like path segments
+    path_idor_candidates: list[dict[str, Any]] = []
+    _uuid_re = re.compile(
+        r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I,
+    )
+    _seen_path_idors: set[str] = set()
+    for item in urls_data:
+        url = item.get("url", item) if isinstance(item, dict) else str(item)
+        if not isinstance(url, str):
+            continue
+        parsed = urlparse(url)
+        parts = [p for p in parsed.path.split("/") if p]
+        for part in parts:
+            if part.isdigit() or _uuid_re.match(part):
+                if url not in _seen_path_idors:
+                    _seen_path_idors.add(url)
+                    path_idor_candidates.append({
+                        "url": url,
+                        "segment": part,
+                        "segment_type": "numeric" if part.isdigit() else "uuid",
+                    })
+                break
+
+    stats["path_idor_urls"] = len(path_idor_candidates)
+    stats["deserialization_count"] = len(candidates.get("deserialization_candidates", []))
+    stats["mass_assignment_count"] = len(candidates.get("mass_assignment_candidates", []))
+
     return {
         **candidates,
         "file_upload_candidates": file_upload_candidates,
         "post_endpoints": post_endpoints[:50],
+        "path_idor_candidates": path_idor_candidates[:50],
         "high_value_params": high_value[:30],
         "stats": stats,
     }

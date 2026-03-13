@@ -291,6 +291,19 @@ def _score_host(host: str, info: dict[str, Any]) -> dict[str, Any]:
         score += _W_MEDIUM
         reasons.append("Missing critical security headers")
 
+    # Auth-related scoring
+    if any("JWT_DETECTED" in f for f in flags_list):
+        score += _W_MEDIUM
+        reasons.append("JWT tokens detected — test for weak secret, alg confusion")
+
+    if any("INJECTABLE_COOKIES" in f for f in flags_list):
+        score += _W_HIGH
+        reasons.append("Injectable cookies (numeric, JSON, serialized) — test for SQLi/deserialization")
+
+    if any("INSECURE_COOKIES" in f for f in flags_list):
+        score += _W_LOW
+        reasons.append("Insecure cookie flags (missing HttpOnly/Secure/SameSite)")
+
     # --- LOW (5 each) ---
     if "DEFAULT_PAGE" in flags_set:
         score += _W_LOW
@@ -826,6 +839,164 @@ def _detect_attack_chains(
                 "Test for CSRF on state-changing POST endpoints",
                 "Check for mass assignment by adding extra params",
                 "Test content-type switching: JSON body on form endpoint",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 19: JWT Weakness Chain ---
+    auth_disc = data.get("auth_discovery", [])
+    jwt_hosts: list[str] = []
+    for ad in auth_disc:
+        if not isinstance(ad, dict):
+            continue
+        if ad.get("jwts"):
+            for jwt_info in ad["jwts"]:
+                if jwt_info.get("brute_candidate") or jwt_info.get("algorithm") in ("HS256", "HS384", "HS512"):
+                    jwt_hosts.append(_host_from_url(ad.get("target_url", "")))
+    if jwt_hosts:
+        chains.append({
+            "chain_id": "JWT_WEAKNESS_CHAIN",
+            "name": "JWT Weak Secret + Token Forgery",
+            "severity": "CRITICAL",
+            "bounty_estimate": "$1000-5000",
+            "affected_hosts": list(set(jwt_hosts))[:5],
+            "evidence": {
+                "trigger": f"HMAC-signed JWTs detected on {len(set(jwt_hosts))} hosts",
+                "supporting": "HS256/384/512 JWTs are brute-forceable with common secrets",
+            },
+            "exploitation_steps": [
+                "Extract JWT from cookies/response",
+                "Brute-force secret with common wordlist",
+                "If cracked: forge admin token with modified claims",
+                "Test alg:none bypass and algorithm confusion (RS→HS)",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 20: Cookie Injection Chain ---
+    injectable_hosts: list[str] = []
+    for ad in auth_disc:
+        if not isinstance(ad, dict):
+            continue
+        if ad.get("injectable_cookies"):
+            injectable_hosts.append(_host_from_url(ad.get("target_url", "")))
+    if injectable_hosts:
+        chains.append({
+            "chain_id": "COOKIE_INJECTION_CHAIN",
+            "name": "Injectable Cookies → SQLi/Deserialization",
+            "severity": "HIGH",
+            "bounty_estimate": "$500-5000",
+            "affected_hosts": list(set(injectable_hosts))[:5],
+            "evidence": {
+                "trigger": f"Injectable cookies on {len(set(injectable_hosts))} hosts",
+                "supporting": "Cookies with numeric IDs, JSON, serialized data, or base64 content",
+            },
+            "exploitation_steps": [
+                "Test numeric ID cookies for IDOR",
+                "Test JSON cookies for injection (SQLi, NoSQL)",
+                "Test serialized cookies for deserialization (PHP, Java, Python)",
+                "Test base64 cookies — decode, modify, re-encode",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 21: Broken Access Control Chain ---
+    auth_ep_hosts: list[str] = []
+    for ad in auth_disc:
+        if not isinstance(ad, dict):
+            continue
+        if ad.get("auth_endpoints"):
+            auth_ep_hosts.append(_host_from_url(ad.get("target_url", "")))
+    if auth_ep_hosts:
+        chains.append({
+            "chain_id": "BROKEN_ACCESS_CONTROL",
+            "name": "Broken Access Control + Rate Limit Bypass",
+            "severity": "HIGH",
+            "bounty_estimate": "$500-3000",
+            "affected_hosts": list(set(auth_ep_hosts))[:5],
+            "evidence": {
+                "trigger": f"Auth endpoints on {len(set(auth_ep_hosts))} hosts",
+                "supporting": "Test admin path bypass, verb tampering, and rate limiting",
+            },
+            "exploitation_steps": [
+                "Test admin endpoints without auth",
+                "Try path bypass: /Admin, /./admin, /%61dmin",
+                "Test verb tampering: POST/PUT/DELETE on 403 endpoints",
+                "Test rate limiting on login endpoints",
+                "Check X-HTTP-Method-Override bypass",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 22: Mass Assignment via POST ---
+    mass_assign_candidates = pc.get("mass_assignment_candidates", [])
+    if mass_assign_candidates and post_endpoints:
+        chains.append({
+            "chain_id": "MASS_ASSIGNMENT",
+            "name": "Mass Assignment Privilege Escalation",
+            "severity": "HIGH",
+            "bounty_estimate": "$500-5000",
+            "affected_hosts": list(set(_host_from_url(ep.get("url", "")) for ep in post_endpoints[:5])),
+            "evidence": {
+                "trigger": f"{len(mass_assign_candidates)} mass-assignment-prone params, {len(post_endpoints)} POST endpoints",
+                "supporting": "Parameters like role, is_admin, user_type found in forms",
+            },
+            "exploitation_steps": [
+                "Inject role=admin in registration/update forms",
+                "Add is_admin=true to profile update requests",
+                "Test with JSON body: add extra privilege fields",
+                "Check if price/balance fields are modifiable",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 23: Path IDOR Chain ---
+    path_idor_candidates = pc.get("path_idor_candidates", [])
+    if path_idor_candidates:
+        chains.append({
+            "chain_id": "PATH_IDOR",
+            "name": "Path-Based IDOR",
+            "severity": "MEDIUM",
+            "bounty_estimate": "$300-2000",
+            "affected_hosts": list(set(_host_from_url(c.get("url", "")) for c in path_idor_candidates[:5])),
+            "evidence": {
+                "trigger": f"{len(path_idor_candidates)} URLs with ID-like path segments",
+                "supporting": "Numeric/UUID segments in URL paths suggest direct object references",
+            },
+            "exploitation_steps": [
+                "Modify numeric path segments: /users/123 → /users/124",
+                "Modify UUID segments: change last character",
+                "Compare responses for data leakage between objects",
+                "Test with unauthenticated requests",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 24: Deserialization Attack ---
+    deser_candidates = pc.get("deserialization_candidates", [])
+    has_deser_cookies = any(
+        any(ic.get("injection_type") in ("php_serialized", "python_pickle", "java_serialized", "viewstate")
+            for ic in ad.get("injectable_cookies", []))
+        for ad in auth_disc if isinstance(ad, dict)
+    )
+    if deser_candidates or has_deser_cookies:
+        chains.append({
+            "chain_id": "DESERIALIZATION_ATTACK",
+            "name": "Insecure Deserialization → RCE",
+            "severity": "CRITICAL",
+            "bounty_estimate": "$2000-10000",
+            "affected_hosts": list(set(
+                _host_from_url(c.get("url", "")) for c in deser_candidates[:5]
+            )) or injectable_hosts[:3],
+            "evidence": {
+                "trigger": f"{len(deser_candidates)} deserialization params" + (", serialized cookies detected" if has_deser_cookies else ""),
+                "supporting": "Serialized data in parameters or cookies suggests unsafe deserialization",
+            },
+            "exploitation_steps": [
+                "Identify serialization format (PHP, Java, Python, .NET)",
+                "Test with format-specific probe payloads",
+                "Check for error messages revealing deserialization stack",
+                "If confirmed: use ysoserial (Java), phpggc (PHP), or pickle payloads",
             ],
             "report_ready": False,
         })
