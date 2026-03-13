@@ -586,6 +586,16 @@ async def _run_tests(
 
         # Final deduplication across all 4A sub-phases
         nuclei_findings = _deduplicate_nuclei_findings(nuclei_findings)
+
+        # Mark path traversal findings for validation
+        for f in nuclei_findings:
+            ep = f.get("endpoint", "")
+            tid = f.get("template_id", "")
+            if _is_path_traversal_candidate(tid, ep):
+                f["_traversal_check"] = True
+
+        # Validate path traversal findings (re-fetch to check for real content)
+        nuclei_findings = await _validate_traversal_findings(nuclei_findings)
         all_findings.extend(nuclei_findings)
         phase_stats["4A_nuclei_total"] = len(nuclei_findings)
     else:
@@ -915,13 +925,6 @@ def _process_nuclei_findings(
         host = raw.get("host", "")
         matched_at = raw.get("matched_at", "")
         severity = raw.get("severity", "info").lower()
-        response_body = raw.get("response_body", "")
-
-        # --- False positive filtering ---
-        # Path traversal CVEs: verify response actually contains file content
-        if _is_path_traversal_fp(template_id, matched_at, response_body):
-            continue
-
         hash_input = f"{template_id}:{host}:{matched_at}"
         hash8 = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         finding_id = f"finding_{severity}_{hash8}"
@@ -973,45 +976,77 @@ _PASSWD_INDICATORS = ("root:", "/bin/bash", "/bin/sh", "nobody:", "daemon:")
 _WINDOWS_INDICATORS = ("[boot loader]", "[operating systems]", "[fonts]")
 
 
-def _is_path_traversal_fp(
-    template_id: str, matched_at: str, response_body: str,
-) -> bool:
-    """Return True if a path traversal finding is a false positive.
-
-    Nuclei directory traversal templates match on HTTP 200, but many apps
-    return 200 for any path (soft 404). We check if the response actually
-    contains the expected file content.
-    """
-    # Only filter traversal-like findings
+def _is_path_traversal_candidate(template_id: str, matched_at: str) -> bool:
+    """Return True if the finding looks like a path traversal that needs validation."""
     matched_lower = (matched_at or "").lower()
     tid_lower = template_id.lower()
-    is_traversal = (
+    return (
         "/etc/passwd" in matched_lower
         or "/etc/shadow" in matched_lower
         or "win.ini" in matched_lower
         or "boot.ini" in matched_lower
         or "traversal" in tid_lower
-        or ".." in matched_lower
+        or (".." in matched_lower and ("etc" in matched_lower or "win" in matched_lower))
     )
-    if not is_traversal:
-        return False
 
-    # No response body captured — can't validate, mark as FP to be safe
-    if not response_body:
-        return True
 
-    body = response_body.lower()
+async def _validate_traversal_findings(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-fetch path traversal URLs and filter false positives.
 
-    # Check for actual file content
-    if "/etc/passwd" in matched_lower or "/etc/shadow" in matched_lower:
-        if any(ind.lower() in body for ind in _PASSWD_INDICATORS):
-            return False  # Real finding
-    elif "win.ini" in matched_lower or "boot.ini" in matched_lower:
-        if any(ind.lower() in body for ind in _WINDOWS_INDICATORS):
-            return False  # Real finding
+    Many apps return 200 for any path (soft 404). We verify the response
+    actually contains expected file content like root:/bin/bash.
+    """
+    import aiohttp
 
-    # Response is likely a soft 404 or HTML error page
-    return True
+    validated: list[dict[str, Any]] = []
+    to_check: list[dict[str, Any]] = []
+
+    for f in findings:
+        if f.get("_traversal_check"):
+            to_check.append(f)
+        else:
+            validated.append(f)
+
+    if not to_check:
+        return findings
+
+    timeout = aiohttp.ClientTimeout(total=10)
+    headers = {"User-Agent": "Mozilla/5.0 (BugHound Scanner)"}
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for f in to_check:
+            url = f.get("endpoint", "")
+            if not url:
+                continue
+            try:
+                async with session.get(url, ssl=False, timeout=timeout) as resp:
+                    body = await resp.text(errors="replace")
+                    matched_lower = url.lower()
+
+                    is_real = False
+                    if "/etc/passwd" in matched_lower or "/etc/shadow" in matched_lower:
+                        is_real = any(ind in body for ind in _PASSWD_INDICATORS)
+                    elif "win.ini" in matched_lower or "boot.ini" in matched_lower:
+                        is_real = any(ind in body for ind in _WINDOWS_INDICATORS)
+
+                    if is_real:
+                        f["confidence"] = "high"
+                        f["evidence"] = body[:500]
+                        validated.append(f)
+                    # else: drop the finding (false positive)
+            except Exception:
+                # Network error — keep finding but mark needs_validation
+                f["needs_validation"] = True
+                f["confidence"] = "low"
+                validated.append(f)
+
+    # Clean up internal marker
+    for f in validated:
+        f.pop("_traversal_check", None)
+
+    return validated
 
 
 def _classify_vuln(template_id: str, matcher_name: str) -> str:
