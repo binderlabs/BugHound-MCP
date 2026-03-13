@@ -375,6 +375,52 @@ def classify_parameters(
     stats["deserialization_count"] = len(candidates.get("deserialization_candidates", []))
     stats["mass_assignment_count"] = len(candidates.get("mass_assignment_candidates", []))
 
+    # Path-based redirect candidates: URLs whose path segments contain redirect keywords
+    # This catches endpoints like /api/redirect, /goto, /redir even without query params
+    _REDIRECT_PATH_KEYWORDS = {
+        "redirect", "redir", "goto", "forward", "return", "callback",
+        "logout", "login", "sso", "oauth",
+    }
+    _seen_path_redirects: set[str] = set()
+    redirect_key = "redirect_candidates"
+    redirect_seen = seen[redirect_key]
+    all_url_sources = list(urls_data)
+    for ep in (hidden_endpoints or []):
+        if isinstance(ep, dict) and ep.get("path"):
+            all_url_sources.append(ep)
+    for item in all_url_sources:
+        url = item.get("url", item.get("path", item)) if isinstance(item, dict) else str(item)
+        if not isinstance(url, str):
+            continue
+        parsed = urlparse(url)
+        path_lower = parsed.path.lower()
+        path_parts = [p for p in path_lower.split("/") if p]
+        for part in path_parts:
+            if part in _REDIRECT_PATH_KEYWORDS and url not in _seen_path_redirects:
+                _seen_path_redirects.add(url)
+                # Infer likely param name from common redirect param patterns
+                inferred_param = "url"
+                if parsed.query:
+                    # If already has query params, use the first redirect-matching one
+                    qs = parse_qs(parsed.query, keep_blank_values=True)
+                    for pname in qs:
+                        if _matches_vuln_type(pname, REDIRECT_PARAMS):
+                            inferred_param = pname
+                            break
+                dedup_key = f"{url}:{inferred_param}"
+                if dedup_key not in redirect_seen:
+                    redirect_seen.add(dedup_key)
+                    candidates[redirect_key].append({
+                        "url": url,
+                        "param": inferred_param,
+                        "sample_value": "",
+                        "method": "GET",
+                        "source": "path_keyword",
+                    })
+                break
+
+    stats["redirect_count"] = len(candidates.get("redirect_candidates", []))
+
     return {
         **candidates,
         "file_upload_candidates": file_upload_candidates,
