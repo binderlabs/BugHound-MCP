@@ -206,8 +206,10 @@ async def execute_tests(
             "job_id": job_id,
             "message": (
                 f"Testing started for {len(targets)} targets with {total_classes} "
-                "test classes across 5 phases. Do NOT poll in a loop. Check once "
-                "with bughound_job_status after a few minutes."
+                "test classes across 5 phases. "
+                "IMPORTANT: Do NOT call bughound_job_status yourself. Do NOT poll or loop. "
+                "STOP HERE and tell the user the job is running. The USER will check status "
+                "manually when they are ready."
             ),
             "workspace_id": workspace_id,
             "estimated_time": f"{len(targets) * 3}-{len(targets) * 8} minutes",

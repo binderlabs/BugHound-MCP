@@ -668,7 +668,8 @@ async def bughound_enumerate_deep(workspace_id: str) -> str:
         "detect WAF/CDN, crawl URLs, analyze JavaScript for secrets and hidden "
         "endpoints, check 70+ sensitive paths, detect subdomain takeovers, test "
         "CORS misconfigurations, harvest parameters. Returns intelligence flags per "
-        "host for AI reasoning. Sync for single hosts, async for broad domains."
+        "host for AI reasoning. Always async — returns job_id. Do NOT poll status "
+        "automatically; tell the user the job is running and wait for them to ask."
     ),
 )
 async def bughound_discover(workspace_id: str) -> str:
@@ -1570,10 +1571,10 @@ def _format_job_started(result: dict[str, Any]) -> str:
     return (
         f"## Background Job Started\n\n"
         f"**Job ID:** `{result.get('job_id', '?')}`\n"
-        f"**Message:** {result.get('message', '')}\n"
         f"**Estimated Time:** {result.get('estimated_time', 'unknown')}\n\n"
-        f"**IMPORTANT:** Do NOT poll in a loop. Continue with the next pipeline stage now. "
-        f"Check this job once later with `bughound_job_status`.\n"
+        f"STOP. Do NOT call bughound_job_status. Do NOT poll, loop, or wait. "
+        f"Tell the user: \"Job `{result.get('job_id', '?')}` is running in the background. "
+        f"When you're ready, ask me to check the status.\" Then WAIT for the user to respond.\n"
     )
 
 
