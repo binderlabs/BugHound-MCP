@@ -29,6 +29,8 @@ async def execute(
     severity: str | None = None,
     template_path: str | None = None,
     rate_limit: int = 150,
+    concurrency: int = 25,
+    no_interactsh: bool = False,
     timeout: int = TIMEOUT,
 ) -> ToolResult:
     """Run nuclei against one or more targets.
@@ -38,14 +40,21 @@ async def execute(
     severity: comma-separated severity filter (e.g. "critical,high,medium").
     template_path: specific template file/dir path.
     rate_limit: requests per second.
+    concurrency: max concurrent template executions.
+    no_interactsh: disable interactsh-based templates.
     timeout: overall execution timeout in seconds.
 
     Returns ToolResult with results as list of parsed finding dicts.
     """
     args = ["-jsonl", "-silent", "-no-color", "-disable-update-check"]
 
-    # Rate limit
+    # Rate limit and concurrency
     args.extend(["-rate-limit", str(rate_limit)])
+    args.extend(["-concurrency", str(concurrency)])
+
+    # Interactsh control
+    if no_interactsh:
+        args.append("-no-interactsh")
 
     # Severity filter
     if severity:

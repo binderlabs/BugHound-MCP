@@ -1,5 +1,24 @@
 # BugHound Development Log
 
+## 2026-03-13 - Enhanced Nuclei Execution (4 scan phases)
+
+### Problem
+Nuclei was only being fed host-level root URLs. With 4500 discovered URLs from Stage 2 crawling, nuclei's URL-testing templates (sqli-error-based, open-redirect-detect, ssrf-detect, lfi-linux-fuzz, xss-reflected-double-quote) were never getting to test actual endpoints with parameters.
+
+### Fixed
+- **Phase 4A-1 (URL-level scan):** Collects ALL URLs from crawled.json, forms.json (GET form testable_url), hidden_endpoints.json. Pipes through urldedupe if available. Runs nuclei with vuln-detection tags (sqli, xss, ssrf, lfi, redirect, rce, ssti, crlf, idor).
+- **Phase 4A-2 (host misconfig):** Root URLs only. Tags: exposure, misconfig, cve, default-login. Catches .git, .env, debug endpoints, missing headers, admin panels.
+- **Phase 4A-3 (tech-specific):** Groups hosts by detected technology (WordPress, nginx, Apache, Spring, Node, PHP, GraphQL, IIS/ASP.NET). Only runs templates for technologies actually detected.
+- **Phase 4A-4 (CVE scan):** Only runs on hosts with version numbers detected. Tags: cve, severity: critical,high.
+- **Deduplication:** template_id + host + path dedup to prevent duplicate findings from URL variants.
+- **Rate limiting:** Configurable via scan_plan global_settings (nuclei_rate_limit, nuclei_concurrency, stealth mode). No-interactsh flag if interactsh-client not installed.
+- **nuclei.py wrapper:** Added concurrency and no_interactsh parameters.
+
+### Stats
+- test.py: 930 → 1,336 lines (+406)
+- nuclei.py: +3 new params (concurrency, no_interactsh, timeout per-phase)
+- 5 new helper functions: _collect_all_urls, _dedupe_urls, _deduplicate_nuclei_findings, _group_hosts_by_technology, _get_versioned_hosts
+
 ## 2026-03-13 - Day 9: Stage 5 Validation Engine
 
 ### Built

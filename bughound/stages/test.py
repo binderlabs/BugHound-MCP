@@ -1,10 +1,14 @@
-"""Stage 4: Execute scan plan — 5-phase testing with technique library.
+"""Stage 4: Execute scan plan — multi-phase testing with technique library.
 
-Phase 4A: Nuclei template scan
+Phase 4A-1: URL-level nuclei scan (all discovered URLs with params)
+Phase 4A-2: Host-level misconfig scan (root URLs, exposure/misconfig/CVE templates)
+Phase 4A-3: Technology-specific nuclei scan (WP, nginx, apache, spring, etc.)
+Phase 4A-4: CVE-specific scan (version-detected hosts only)
 Phase 4B: Deep directory fuzzing (ffuf)
 Phase 4C: Deep parameter discovery (arjun)
 Phase 4D: Value fuzzing / injection testing (sqlmap, dalfox, injection_tester)
 Phase 4E: Technology-specific tests (GraphQL, JWT, WordPress, Spring Boot)
+Phase 4F: Insecure cookie configuration findings
 
 No decision-making happens here. Tools run exactly what the scan plan says.
 The AI client handles the feedback loop (find → re-recon → test more).
@@ -16,6 +20,7 @@ import hashlib
 import json
 from collections import Counter
 from typing import Any
+from urllib.parse import urlparse
 
 import aiofiles
 import structlog
@@ -63,6 +68,41 @@ _NEEDS_VALIDATION_CLASSES = {
 
 # Tool → needs_validation override (some tools are definitive)
 _TOOL_DEFINITIVE = {"sqlmap", "dalfox", "graphql_tester"}
+
+# Technology keyword → nuclei tag groups for Phase 4A-3
+_TECH_NUCLEI_TAGS: dict[str, list[str]] = {
+    "wordpress": ["wordpress"],
+    "wp-": ["wordpress"],
+    "nginx": ["nginx"],
+    "apache": ["apache"],
+    "spring": ["spring", "java"],
+    "java": ["java"],
+    "tomcat": ["tomcat", "java"],
+    "node": ["nodejs"],
+    "express": ["nodejs"],
+    "next.js": ["nodejs"],
+    "php": ["php"],
+    "laravel": ["php"],
+    "symfony": ["php"],
+    "graphql": ["graphql"],
+    "iis": ["iis", "aspnet"],
+    "asp.net": ["iis", "aspnet"],
+    ".net": ["aspnet"],
+    "django": ["python"],
+    "flask": ["python"],
+    "ruby": ["ruby"],
+    "rails": ["ruby"],
+}
+
+# URL-level scan tags (templates that test URL params for vulns)
+_URL_LEVEL_TAGS = [
+    "sqli", "xss", "ssrf", "lfi", "redirect", "rce", "ssti", "crlf", "idor",
+]
+
+# Host-level misconfig tags (templates for root-URL scanning)
+_HOST_MISCONFIG_TAGS = [
+    "exposure", "misconfig", "cve", "default-login",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -356,79 +396,208 @@ async def _run_tests(
         if job_manager and job_id:
             await job_manager.update_progress(job_id, pct, msg, module)
 
+    # Nuclei settings from scan plan
+    nuclei_rate = global_settings.get("nuclei_rate_limit", 100)
+    nuclei_concurrency = global_settings.get("nuclei_concurrency", 25)
+    nuclei_timeout = global_settings.get("nuclei_timeout", 600)
+    stealth_mode = global_settings.get("stealth", False)
+    if stealth_mode:
+        nuclei_rate = min(nuclei_rate, 10)
+        nuclei_concurrency = min(nuclei_concurrency, 5)
+
+    # Check if interactsh is available (for OOB templates)
+    no_interactsh = not tool_runner.is_available("interactsh-client")
+
+    # Collect test class tags from scan plan
+    plan_tags: set[str] = set()
+    has_cve_specific = False
+    for t in sorted_targets:
+        for tc in t.get("test_classes", []):
+            mapped = _TEST_CLASS_TAGS.get(tc, [])
+            plan_tags.update(mapped)
+            if tc == "cve_specific":
+                has_cve_specific = True
+
     # =================================================================
-    # Phase 4A: Nuclei Template Scan (0-30%)
+    # Phase 4A-1: URL-level Nuclei Scan (0-15%)
     # =================================================================
-    await _progress(1, "Phase 4A: Nuclei template scanning", "nuclei")
+    await _progress(1, "Phase 4A-1: URL-level nuclei scan", "nuclei")
 
     nuclei_available = nuclei.is_available()
     nuclei_findings: list[dict[str, Any]] = []
 
     if nuclei_available:
-        for idx, plan_target in enumerate(sorted_targets):
-            host = plan_target.get("host", "")
-            test_classes = plan_target.get("test_classes", [])
-            specific_endpoints = plan_target.get("specific_endpoints", [])
+        # Gather ALL discovered URLs from workspace
+        all_urls = await _collect_all_urls(workspace_id)
+        url_level_tags = [t for t in _URL_LEVEL_TAGS if t in plan_tags or not plan_tags]
 
-            if not host or not test_classes:
-                continue
+        if all_urls and url_level_tags:
+            # Deduplicate URLs with urldedupe if available
+            deduped_urls = await _dedupe_urls(all_urls)
+            phase_stats["4A1_urls_total"] = len(all_urls)
+            phase_stats["4A1_urls_deduped"] = len(deduped_urls)
 
-            pct = int(1 + (idx / max(len(sorted_targets), 1)) * 28)
-            await _progress(pct, f"Nuclei: testing {host}", "nuclei")
-
-            all_tags: list[str] = []
-            has_cve_specific = False
-            for tc in test_classes:
-                mapped = _TEST_CLASS_TAGS.get(tc, [])
-                all_tags.extend(mapped)
-                if tc == "cve_specific":
-                    has_cve_specific = True
-
-            all_tags = sorted(set(all_tags)) if all_tags else []
-
-            if specific_endpoints:
-                scan_targets: str | list[str] = specific_endpoints
-            else:
-                host_url = host_url_map.get(host)
-                if host_url:
-                    scan_targets = host_url
-                elif host.startswith(("http://", "https://")):
-                    scan_targets = host
-                else:
-                    scan_targets = f"https://{host}"
-
-            effective_severity = nuclei_severity
-            if has_cve_specific and not all_tags:
-                effective_severity = "critical,high"
+            await _progress(
+                3, f"Phase 4A-1: Scanning {len(deduped_urls)} URLs "
+                f"(from {len(all_urls)} total)", "nuclei",
+            )
 
             try:
                 result = await nuclei.execute(
-                    scan_targets,
-                    tags=all_tags if all_tags else None,
-                    severity=effective_severity,
-                    timeout=timeout_per_target,
+                    deduped_urls,
+                    tags=url_level_tags,
+                    severity=nuclei_severity,
+                    rate_limit=nuclei_rate,
+                    concurrency=nuclei_concurrency,
+                    no_interactsh=no_interactsh,
+                    timeout=nuclei_timeout,
                 )
                 if result.success and result.results:
                     raw = result.results if isinstance(result.results, list) else []
-                    processed = _process_nuclei_findings(raw, workspace_id, test_classes)
+                    processed = _process_nuclei_findings(raw, workspace_id)
+                    processed = _deduplicate_nuclei_findings(processed)
                     nuclei_findings.extend(processed)
                 elif not result.success:
                     err = result.error.message if result.error else "unknown"
-                    warnings.append(f"nuclei failed for {host}: {err}")
+                    warnings.append(f"nuclei URL-level scan failed: {err}")
             except Exception as exc:
-                warnings.append(f"nuclei error for {host}: {exc}")
+                warnings.append(f"nuclei URL-level scan error: {exc}")
 
+            phase_stats["4A1_url_scan"] = len(nuclei_findings)
+        else:
+            if not all_urls:
+                warnings.append("No URLs found for URL-level nuclei scan (run bughound_discover first).")
+            phase_stats["4A1_url_scan"] = 0
+            phase_stats["4A1_urls_total"] = 0
+            phase_stats["4A1_urls_deduped"] = 0
+
+        # =================================================================
+        # Phase 4A-2: Host-level Misconfig Scan (15-22%)
+        # =================================================================
+        await _progress(15, "Phase 4A-2: Host misconfig scan", "nuclei")
+
+        host_urls = list(host_url_map.values())
+        # Also add hosts from scan plan that aren't in the map
+        for plan_target in sorted_targets:
+            h = plan_target.get("host", "")
+            if h and h not in host_url_map:
+                if h.startswith(("http://", "https://")):
+                    host_urls.append(h)
+                else:
+                    host_urls.append(f"https://{h}")
+
+        host_urls = sorted(set(host_urls))
+        misconfig_findings_before = len(nuclei_findings)
+
+        if host_urls:
+            try:
+                result = await nuclei.execute(
+                    host_urls,
+                    tags=_HOST_MISCONFIG_TAGS,
+                    severity="critical,high,medium,low",
+                    rate_limit=nuclei_rate,
+                    concurrency=nuclei_concurrency,
+                    no_interactsh=no_interactsh,
+                    timeout=nuclei_timeout,
+                )
+                if result.success and result.results:
+                    raw = result.results if isinstance(result.results, list) else []
+                    processed = _process_nuclei_findings(raw, workspace_id)
+                    processed = _deduplicate_nuclei_findings(processed)
+                    nuclei_findings.extend(processed)
+                elif not result.success:
+                    err = result.error.message if result.error else "unknown"
+                    warnings.append(f"nuclei host-misconfig scan failed: {err}")
+            except Exception as exc:
+                warnings.append(f"nuclei host-misconfig error: {exc}")
+
+        phase_stats["4A2_host_misconfig"] = len(nuclei_findings) - misconfig_findings_before
+
+        # =================================================================
+        # Phase 4A-3: Technology-specific Nuclei Scan (22-30%)
+        # =================================================================
+        await _progress(22, "Phase 4A-3: Tech-specific nuclei scan", "nuclei")
+
+        tech_findings_before = len(nuclei_findings)
+        tech_groups = await _group_hosts_by_technology(workspace_id, host_url_map)
+
+        for tech_tag_group, tech_hosts in tech_groups.items():
+            if not tech_hosts:
+                continue
+            tech_tags = tech_tag_group.split(",")
+            await _progress(
+                25, f"Phase 4A-3: {tech_tags[0]} templates ({len(tech_hosts)} hosts)",
+                "nuclei",
+            )
+            try:
+                result = await nuclei.execute(
+                    tech_hosts,
+                    tags=tech_tags,
+                    severity="critical,high,medium,low",
+                    rate_limit=nuclei_rate,
+                    concurrency=nuclei_concurrency,
+                    no_interactsh=no_interactsh,
+                    timeout=nuclei_timeout,
+                )
+                if result.success and result.results:
+                    raw = result.results if isinstance(result.results, list) else []
+                    processed = _process_nuclei_findings(raw, workspace_id)
+                    processed = _deduplicate_nuclei_findings(processed)
+                    nuclei_findings.extend(processed)
+            except Exception as exc:
+                warnings.append(f"nuclei tech-specific ({tech_tags[0]}) error: {exc}")
+
+        phase_stats["4A3_tech_specific"] = len(nuclei_findings) - tech_findings_before
+
+        # =================================================================
+        # Phase 4A-4: CVE-specific Scan (30-35%)
+        # =================================================================
+        if has_cve_specific:
+            await _progress(30, "Phase 4A-4: CVE scan (versioned hosts)", "nuclei")
+
+            cve_findings_before = len(nuclei_findings)
+            versioned_hosts = await _get_versioned_hosts(workspace_id, host_url_map)
+
+            if versioned_hosts:
+                try:
+                    result = await nuclei.execute(
+                        versioned_hosts,
+                        tags=["cve"],
+                        severity="critical,high",
+                        rate_limit=nuclei_rate,
+                        concurrency=nuclei_concurrency,
+                        no_interactsh=no_interactsh,
+                        timeout=nuclei_timeout,
+                    )
+                    if result.success and result.results:
+                        raw = result.results if isinstance(result.results, list) else []
+                        processed = _process_nuclei_findings(raw, workspace_id)
+                        processed = _deduplicate_nuclei_findings(processed)
+                        nuclei_findings.extend(processed)
+                except Exception as exc:
+                    warnings.append(f"nuclei CVE scan error: {exc}")
+
+            phase_stats["4A4_cve_scan"] = len(nuclei_findings) - cve_findings_before
+        else:
+            phase_stats["4A4_cve_scan"] = 0
+
+        # Final deduplication across all 4A sub-phases
+        nuclei_findings = _deduplicate_nuclei_findings(nuclei_findings)
         all_findings.extend(nuclei_findings)
-        phase_stats["4A_nuclei"] = len(nuclei_findings)
+        phase_stats["4A_nuclei_total"] = len(nuclei_findings)
     else:
-        warnings.append("nuclei not installed — skipping Phase 4A template scan.")
-        phase_stats["4A_nuclei"] = 0
+        warnings.append("nuclei not installed — skipping Phase 4A template scans.")
+        phase_stats["4A_nuclei_total"] = 0
+        phase_stats["4A1_url_scan"] = 0
+        phase_stats["4A2_host_misconfig"] = 0
+        phase_stats["4A3_tech_specific"] = 0
+        phase_stats["4A4_cve_scan"] = 0
 
     # =================================================================
-    # Phase 4B: Deep Directory Fuzzing (30-40%)
+    # Phase 4B: Deep Directory Fuzzing (35-40%)
     # =================================================================
     if "content_discovery" in all_test_classes:
-        await _progress(30, "Phase 4B: Deep directory fuzzing", "ffuf")
+        await _progress(35, "Phase 4B: Deep directory fuzzing", "ffuf")
         try:
             dirfuzz_findings = await techniques.execute_technique(
                 "deep_dirfuzz", workspace_id, sorted_targets,
@@ -450,6 +619,7 @@ async def _run_tests(
     # =================================================================
     if "param_discovery" in all_test_classes:
         await _progress(40, "Phase 4C: Deep parameter discovery", "arjun")
+
         # arjun integration deferred — runs in Stage 2 already
         phase_stats["4C_param_discovery"] = 0
     else:
@@ -524,25 +694,25 @@ async def _run_tests(
     await _progress(48, "Phase 4D: Injection testing", "injection_tester")
 
     injection_techniques = [
-        ("sqli", "sqli_param_fuzz", 45, 50),
-        ("sqli", "cookie_sqli", 50, 52),
-        ("sqli", "post_sqli", 52, 54),
-        ("xss", "xss_param_fuzz", 54, 58),
-        ("xss", "stored_xss", 58, 60),
-        ("xss", "dom_xss", 60, 62),
-        ("xss", "cookie_xss", 62, 63),
-        ("ssrf", "ssrf_test", 63, 66),
+        ("sqli", "sqli_param_fuzz", 50, 54),
+        ("sqli", "cookie_sqli", 54, 55),
+        ("sqli", "post_sqli", 55, 57),
+        ("xss", "xss_param_fuzz", 57, 60),
+        ("xss", "stored_xss", 60, 62),
+        ("xss", "dom_xss", 62, 63),
+        ("xss", "cookie_xss", 63, 64),
+        ("ssrf", "ssrf_test", 64, 66),
         ("open_redirect", "open_redirect_test", 66, 68),
         ("lfi", "lfi_test", 68, 70),
         ("rce", "rce_test", 70, 72),
-        ("rce", "post_rce", 72, 74),
-        ("idor", "idor_test", 74, 76),
-        ("idor", "path_idor_test", 76, 78),
-        ("crlf", "crlf_test", 78, 80),
-        ("ssti", "ssti_test", 80, 81),
-        ("ssti", "post_ssti", 81, 82),
-        ("deserialization", "cookie_deserialization", 82, 84),
-        ("header_injection", "header_injection_test", 84, 88),
+        ("rce", "post_rce", 72, 73),
+        ("idor", "idor_test", 73, 75),
+        ("idor", "path_idor_test", 75, 77),
+        ("crlf", "crlf_test", 77, 78),
+        ("ssti", "ssti_test", 78, 79),
+        ("ssti", "post_ssti", 79, 80),
+        ("deserialization", "cookie_deserialization", 80, 82),
+        ("header_injection", "header_injection_test", 82, 85),
     ]
 
     for test_class, technique_id, pct_start, pct_end in injection_techniques:
@@ -581,13 +751,13 @@ async def _run_tests(
     # Phase 4E: Technology-Specific Tests (88-99%)
     # =================================================================
     tech_specific = [
-        ("graphql", "graphql_test", 88, 90),
-        ("jwt", "jwt_test", 90, 91),
-        ("wordpress", "wordpress_test", 91, 93),
-        ("spring", "spring_actuator_test", 93, 94),
-        ("bac", "broken_access_control", 94, 96),
-        ("rate_limiting", "rate_limit_test", 96, 97),
-        ("mass_assignment", "mass_assignment_test", 97, 99),
+        ("graphql", "graphql_test", 85, 87),
+        ("jwt", "jwt_test", 87, 88),
+        ("wordpress", "wordpress_test", 88, 90),
+        ("spring", "spring_actuator_test", 90, 91),
+        ("bac", "broken_access_control", 91, 93),
+        ("rate_limiting", "rate_limit_test", 93, 94),
+        ("mass_assignment", "mass_assignment_test", 94, 95),
     ]
 
     for test_class, technique_id, pct_start, pct_end in tech_specific:
@@ -829,6 +999,244 @@ def _make_finding_id(finding: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Nuclei URL collection + deduplication
+# ---------------------------------------------------------------------------
+
+
+async def _collect_all_urls(workspace_id: str) -> list[str]:
+    """Collect all discovered URLs from workspace for URL-level nuclei scanning.
+
+    Sources: crawled URLs, form action URLs (GET forms), hidden endpoints.
+    """
+    urls: set[str] = set()
+
+    # 1. Crawled URLs (main source)
+    crawled = await workspace.read_data(workspace_id, "urls/crawled.json")
+    if isinstance(crawled, dict):
+        crawled_data = crawled.get("data", [])
+    elif isinstance(crawled, list):
+        crawled_data = crawled
+    else:
+        crawled_data = []
+
+    for item in crawled_data:
+        if isinstance(item, str) and item.startswith("http"):
+            urls.add(item)
+        elif isinstance(item, dict):
+            url = item.get("url", item.get("endpoint", ""))
+            if url and url.startswith("http"):
+                urls.add(url)
+
+    # 2. Form action URLs (GET forms are directly testable)
+    forms = await workspace.read_data(workspace_id, "urls/forms.json")
+    if isinstance(forms, dict):
+        forms_data = forms.get("data", [])
+    elif isinstance(forms, list):
+        forms_data = forms
+    else:
+        forms_data = []
+
+    for form in forms_data:
+        if not isinstance(form, dict):
+            continue
+        testable = form.get("testable_url", "")
+        if testable and testable.startswith("http"):
+            urls.add(testable)
+        # Also add the action URL for POST forms
+        action = form.get("action", "")
+        if action and action.startswith("http"):
+            urls.add(action)
+
+    # 3. Hidden endpoints from JS analysis
+    hidden = await workspace.read_data(workspace_id, "endpoints/hidden_endpoints.json")
+    if isinstance(hidden, dict):
+        hidden_data = hidden.get("data", [])
+    elif isinstance(hidden, list):
+        hidden_data = hidden
+    else:
+        hidden_data = []
+
+    for ep in hidden_data:
+        if isinstance(ep, str) and ep.startswith("http"):
+            urls.add(ep)
+        elif isinstance(ep, dict):
+            url = ep.get("url", ep.get("endpoint", ""))
+            if url and url.startswith("http"):
+                urls.add(url)
+
+    return sorted(urls)
+
+
+async def _dedupe_urls(urls: list[str]) -> list[str]:
+    """Deduplicate URLs using urldedupe if available, otherwise basic dedup.
+
+    urldedupe removes URLs that differ only by parameter values,
+    keeping one representative URL per unique path+param-set.
+    """
+    if len(urls) <= 1:
+        return urls
+
+    if tool_runner.is_available("urldedupe"):
+        import tempfile
+        from pathlib import Path
+
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, prefix="bughound_urls_",
+        )
+        for u in urls:
+            tmp.write(f"{u}\n")
+        tmp.close()
+        tmp_path = Path(tmp.name)
+
+        try:
+            result = await tool_runner.run(
+                "urldedupe", ["-u", tmp.name, "-s"], target="url_dedupe", timeout=30,
+            )
+            if result.success and result.results:
+                deduped = [u for u in result.results if u.strip().startswith("http")]
+                if deduped:
+                    return deduped
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+    # Fallback: dedupe by (host, path, sorted param names)
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for url in urls:
+        try:
+            parsed = urlparse(url)
+            # Key: host + path + sorted param names (ignore values)
+            params = sorted(parsed.query.split("&")) if parsed.query else []
+            param_names = tuple(p.split("=")[0] for p in params if "=" in p)
+            key = f"{parsed.netloc}{parsed.path}:{param_names}"
+            if key not in seen:
+                seen.add(key)
+                deduped.append(url)
+        except Exception:
+            deduped.append(url)
+
+    return deduped
+
+
+def _deduplicate_nuclei_findings(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Deduplicate nuclei findings by template_id + host + parameter.
+
+    When scanning URL lists, nuclei can find the same vuln via multiple URL
+    variants (e.g., same SQLi on /search?q=1 and /search?q=2). Keep the
+    finding with the most specific URL (longest path).
+    """
+    # Group by (template_id, host_root)
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for f in findings:
+        template_id = f.get("template_id", "")
+        host = f.get("host", "")
+        # Extract host root (strip path)
+        try:
+            parsed = urlparse(host if host.startswith("http") else f"https://{host}")
+            host_root = parsed.netloc or host
+        except Exception:
+            host_root = host
+
+        # Extract param from endpoint
+        endpoint = f.get("endpoint", "")
+        try:
+            parsed_ep = urlparse(endpoint)
+            param_key = parsed_ep.path
+        except Exception:
+            param_key = endpoint
+
+        key = f"{template_id}:{host_root}:{param_key}"
+        groups.setdefault(key, []).append(f)
+
+    # Keep the finding with the longest/most specific endpoint
+    deduped: list[dict[str, Any]] = []
+    for group in groups.values():
+        if len(group) == 1:
+            deduped.append(group[0])
+        else:
+            # Pick the one with the most specific (longest) endpoint
+            best = max(group, key=lambda f: len(f.get("endpoint", "")))
+            deduped.append(best)
+
+    return deduped
+
+
+async def _group_hosts_by_technology(
+    workspace_id: str,
+    host_url_map: dict[str, str],
+) -> dict[str, list[str]]:
+    """Group hosts by detected technology for tech-specific nuclei scans.
+
+    Returns: {comma-separated tags: [host_urls]}
+    Only includes groups where at least one host was detected.
+    """
+    live_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    if not live_hosts:
+        return {}
+
+    items = live_hosts.get("data", []) if isinstance(live_hosts, dict) else live_hosts
+
+    # Map: tag_group -> set of host URLs
+    tag_groups: dict[str, set[str]] = {}
+
+    for host_data in items:
+        if not isinstance(host_data, dict):
+            continue
+        techs = host_data.get("technologies") or []
+        host_url = host_data.get("url", "")
+        if not host_url:
+            hostname = host_data.get("host", "")
+            host_url = host_url_map.get(hostname, f"https://{hostname}" if hostname else "")
+        if not host_url:
+            continue
+
+        techs_lower = " ".join(str(t) for t in techs).lower()
+        server = (host_data.get("web_server") or "").lower()
+        combined = f"{techs_lower} {server}"
+
+        for keyword, nuclei_tags in _TECH_NUCLEI_TAGS.items():
+            if keyword in combined:
+                tag_key = ",".join(sorted(set(nuclei_tags)))
+                tag_groups.setdefault(tag_key, set()).add(host_url)
+
+    return {k: sorted(v) for k, v in tag_groups.items()}
+
+
+async def _get_versioned_hosts(
+    workspace_id: str,
+    host_url_map: dict[str, str],
+) -> list[str]:
+    """Get hosts with version-detected software for CVE-specific scanning."""
+    live_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    if not live_hosts:
+        return []
+
+    items = live_hosts.get("data", []) if isinstance(live_hosts, dict) else live_hosts
+
+    versioned: set[str] = set()
+    import re
+    version_re = re.compile(r"\d+\.\d+")
+
+    for host_data in items:
+        if not isinstance(host_data, dict):
+            continue
+        techs = host_data.get("technologies") or []
+        for tech in techs:
+            if version_re.search(str(tech)):
+                host_url = host_data.get("url", "")
+                if not host_url:
+                    hostname = host_data.get("host", "")
+                    host_url = host_url_map.get(hostname, f"https://{hostname}" if hostname else "")
+                if host_url:
+                    versioned.add(host_url)
+                break
+
+    return sorted(versioned)
+
+
+# ---------------------------------------------------------------------------
 # Workspace I/O
 # ---------------------------------------------------------------------------
 
@@ -907,7 +1315,6 @@ def _build_host_url_map(live_hosts: Any) -> dict[str, str]:
 
 def _host_from_url(url: str) -> str:
     """Extract hostname from URL."""
-    from urllib.parse import urlparse
     try:
         return (urlparse(url).hostname or "").lower()
     except Exception:
