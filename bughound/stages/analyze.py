@@ -1564,6 +1564,8 @@ def _suggest_test_classes(
         "MASS_SQLI_PARAMS": "sqli",
         "SSRF_CLOUD_METADATA": "ssrf",
         "REDIRECT_OAUTH_THEFT": "open_redirect",
+        "BROKEN_ACCESS_CONTROL": "bac",
+        "COOKIE_INJECTION_CHAIN": "deserialization",
     }
     for chain in chains:
         cls = chain_to_class.get(chain.get("chain_id", ""))
@@ -1597,7 +1599,7 @@ def _suggest_test_classes(
             "idor_count": "idor",
         }
         for stat_key, test_class in param_to_class.items():
-            if stats.get(stat_key, 0) >= 2:
+            if stats.get(stat_key, 0) >= 1:
                 classes.add(test_class)
 
     # Always include generic classes

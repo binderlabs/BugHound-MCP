@@ -857,6 +857,22 @@ async def _exec_jwt(
             if token and token.count(".") == 2:
                 jwt_tokens.append((token, source))
 
+    # Also check auth_discovery for JWT tokens from login responses
+    if not jwt_tokens:
+        raw_auth = await workspace.read_data(workspace_id, "hosts/auth_discovery.json")
+        auth_items = _extract_items(raw_auth)
+        for auth in auth_items:
+            token = auth.get("auth_token", "")
+            if token and token.startswith("eyJ") and token.count(".") == 2:
+                host = auth.get("host", "")
+                jwt_tokens.append((token, host))
+            # Also check cookies for JWT-like values
+            for cookie in auth.get("cookies", []):
+                val = cookie.get("value", "")
+                if val and val.startswith("eyJ") and val.count(".") == 2:
+                    host = auth.get("host", "")
+                    jwt_tokens.append((val, host))
+
     if not jwt_tokens:
         return []
 

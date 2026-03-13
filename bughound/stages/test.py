@@ -139,7 +139,7 @@ _URL_LEVEL_TAGS = [
 
 # Host-level misconfig tags (templates for root-URL scanning)
 _HOST_MISCONFIG_TAGS = [
-    "exposure", "misconfig", "cve", "default-login",
+    "exposure", "misconfig", "cve", "default-login", "security-headers",
 ]
 
 
@@ -434,6 +434,20 @@ async def _run_tests(
     for t in sorted_targets:
         all_test_classes.update(t.get("test_classes", []))
 
+    # Auto-populate test_classes if empty (AI client forgot to include them)
+    if not all_test_classes:
+        logger.warning("scan_plan.test_classes_empty", msg="Auto-populating from attack surface")
+        attack_surface = await _read_attack_surface(workspace_id)
+        if attack_surface:
+            suggested = attack_surface.get("suggested_test_classes", [])
+            all_test_classes.update(suggested)
+        # Always include these high-value, low-cost test classes
+        all_test_classes.update([
+            "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
+            "crlf", "idor", "header_injection", "rce",
+            "graphql", "jwt", "misconfig", "default_creds",
+        ])
+
     async def _progress(pct: int, msg: str, module: str) -> None:
         if job_manager and job_id:
             await job_manager.update_progress(job_id, pct, msg, module)
@@ -450,15 +464,13 @@ async def _run_tests(
     # Check if interactsh is available (for OOB templates)
     no_interactsh = not tool_runner.is_available("interactsh-client")
 
-    # Collect test class tags from scan plan
+    # Collect test class tags from scan plan (includes any auto-populated classes)
     plan_tags: set[str] = set()
     has_cve_specific = False
-    for t in sorted_targets:
-        for tc in t.get("test_classes", []):
-            mapped = _TEST_CLASS_TAGS.get(tc, [])
-            plan_tags.update(mapped)
-            if tc == "cve_specific":
-                has_cve_specific = True
+    for tc in all_test_classes:
+        plan_tags.update(_TEST_CLASS_TAGS.get(tc, []))
+        if tc == "cve_specific":
+            has_cve_specific = True
 
     # =================================================================
     # Phase 4A-1: URL-level Nuclei Scan (0-15%)
@@ -550,7 +562,7 @@ async def _run_tests(
                 result = await nuclei.execute(
                     host_urls,
                     tags=_HOST_MISCONFIG_TAGS,
-                    severity="critical,high,medium,low",
+                    severity="critical,high,medium,low,info",
                     rate_limit=nuclei_rate,
                     concurrency=nuclei_concurrency,
                     no_interactsh=no_interactsh,
@@ -1211,6 +1223,42 @@ async def _collect_all_urls(workspace_id: str) -> list[str]:
             if url and url.startswith("http"):
                 urls.add(url)
 
+    # 4. OpenAPI spec endpoints — generate parameterized URLs
+    import re
+    oas_data = await workspace.read_data(workspace_id, "endpoints/openapi_specs.json")
+    oas_items = oas_data.get("data", []) if isinstance(oas_data, dict) else (oas_data or [])
+    for spec in oas_items:
+        if not isinstance(spec, dict):
+            continue
+        host_url = spec.get("host_url", "")
+        for ep in spec.get("endpoints", []):
+            if not isinstance(ep, dict):
+                continue
+            method = (ep.get("method") or "GET").upper()
+            if method != "GET":
+                continue  # nuclei only tests GET URLs
+            # Prefer the pre-built url field; fall back to host_url + path
+            raw_url = ep.get("url", "")
+            if not raw_url:
+                path = ep.get("path", "")
+                if not path:
+                    continue
+                raw_url = f"{host_url}{path}"
+            if not raw_url.startswith("http"):
+                continue
+            # Replace path params {id}, {order_id} etc. with example value
+            url_resolved = re.sub(r"\{[^}]+\}", "1", raw_url)
+            # Build query string from query parameters
+            query_params = []
+            for p in ep.get("parameters", []):
+                if isinstance(p, dict) and p.get("in") == "query":
+                    query_params.append(f"{p['name']}=FUZZ")
+            if query_params:
+                full_url = f"{url_resolved}?{'&'.join(query_params)}"
+            else:
+                full_url = url_resolved
+            urls.add(full_url)
+
     return sorted(urls)
 
 
@@ -1416,6 +1464,18 @@ async def _get_versioned_hosts(
 async def _read_scan_plan(workspace_id: str) -> dict[str, Any] | None:
     """Read scan_plan.json from workspace."""
     fpath = WORKSPACE_BASE_DIR / workspace_id / "scan_plan.json"
+    if not fpath.exists():
+        return None
+    try:
+        async with aiofiles.open(fpath) as f:
+            return json.loads(await f.read())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+async def _read_attack_surface(workspace_id: str) -> dict[str, Any] | None:
+    """Read cached attack surface analysis."""
+    fpath = WORKSPACE_BASE_DIR / workspace_id / "analysis" / "attack_surface.json"
     if not fpath.exists():
         return None
     try:
