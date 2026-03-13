@@ -401,14 +401,28 @@ async def _filter_to_scope(
     """Filter candidates to approved scan plan hosts, with limit."""
     from urllib.parse import urlparse
 
+    # Normalize approved_hosts: strip scheme/port, keep just hostname
+    normalized_hosts: set[str] = set()
+    for h in approved_hosts:
+        h_clean = h.lower().strip()
+        if "://" in h_clean:
+            parsed_h = urlparse(h_clean)
+            normalized_hosts.add(parsed_h.hostname or h_clean)
+        elif ":" in h_clean:
+            # host:port — take just the host part
+            normalized_hosts.add(h_clean.split(":")[0])
+        else:
+            normalized_hosts.add(h_clean)
+
     filtered: list[dict[str, Any]] = []
     for c in candidates:
         url = c.get("url", "")
         try:
-            host = urlparse(url).hostname or ""
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
         except Exception:
             continue
-        if host.lower() in approved_hosts:
+        if host in normalized_hosts:
             filtered.append(c)
             if len(filtered) >= limit:
                 break
@@ -599,7 +613,7 @@ async def _run_injection_batch(
     technique_id: str,
     severity: str,
     concurrency: int = 5,
-    limit: int = 10,
+    limit: int = 20,
     result_key: str = "vulnerable",
 ) -> list[dict[str, Any]]:
     """Generic batch runner for injection_tester functions."""
@@ -717,10 +731,62 @@ async def _exec_ssti(
     workspace_id: str, approved_hosts: set[str], concurrency: int,
 ) -> list[dict[str, Any]]:
     from bughound.tools.testing.injection_tester import test_ssti
-    return await _run_injection_batch(
+
+    # Primary: ssti_candidates
+    findings = await _run_injection_batch(
         workspace_id, approved_hosts, "ssti_candidates",
         test_ssti, "ssti", "ssti_test", "critical", concurrency,
     )
+
+    # Cross-classify: XSS params also accept user input, try SSTI on them
+    if not findings:
+        pc = await _load_param_classification(workspace_id)
+        xss_candidates = _get_param_candidates(pc, "xss_candidates")
+        ssti_seen = {
+            f"{c.get('url')}:{c.get('param')}"
+            for c in _get_param_candidates(pc, "ssti_candidates")
+        }
+        # Filter out candidates already tested as ssti
+        extra = [
+            c for c in xss_candidates
+            if f"{c.get('url')}:{c.get('param')}" not in ssti_seen
+        ]
+        if extra:
+            scoped = await _filter_to_scope(extra, approved_hosts, limit=5)
+            sem = asyncio.Semaphore(concurrency)
+
+            async def _test(c: dict[str, Any]) -> dict[str, Any] | None:
+                url, param = c.get("url", ""), c.get("param", "")
+                sample = c.get("sample_value", "")
+                if not url or not param:
+                    return None
+                async with sem:
+                    try:
+                        result = await test_ssti(url, param, sample)
+                        if result.get("vulnerable"):
+                            return {
+                                "vulnerability_class": "ssti",
+                                "tool": "injection_tester",
+                                "technique_id": "ssti_test",
+                                "host": _host_from_url(url),
+                                "endpoint": result.get("url", url),
+                                "severity": "critical",
+                                "description": f"SSTI detected in param '{param}' (cross-classified from XSS)",
+                                "evidence": result.get("evidence", str(result)),
+                                "payload_used": result.get("payload", ""),
+                                "confidence": "medium",
+                                "needs_validation": True,
+                            }
+                    except Exception:
+                        pass
+                    return None
+
+            results = await asyncio.gather(*[_test(c) for c in scoped], return_exceptions=True)
+            for r in results:
+                if isinstance(r, dict):
+                    findings.append(r)
+
+    return findings
 
 
 async def _exec_header_injection(

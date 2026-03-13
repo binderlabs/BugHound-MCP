@@ -989,8 +989,11 @@ def _process_nuclei_findings(
         template_id = raw.get("template_id", "unknown")
         host = raw.get("host", "")
         matched_at = raw.get("matched_at", "")
+        matcher_name = raw.get("matcher_name", "")
         severity = raw.get("severity", "info").lower()
-        hash_input = f"{template_id}:{host}:{matched_at}"
+        # Include matcher_name in hash so multi-matcher templates
+        # (e.g. http-missing-security-headers) produce separate findings
+        hash_input = f"{template_id}:{host}:{matched_at}:{matcher_name}"
         hash8 = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
         finding_id = f"finding_{severity}_{hash8}"
 
