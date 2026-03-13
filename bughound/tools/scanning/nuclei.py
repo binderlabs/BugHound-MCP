@@ -46,7 +46,7 @@ async def execute(
 
     Returns ToolResult with results as list of parsed finding dicts.
     """
-    args = ["-jsonl", "-silent", "-no-color", "-disable-update-check"]
+    args = ["-jsonl", "-silent", "-no-color", "-disable-update-check", "-include-rr"]
 
     # Rate limit and concurrency
     args.extend(["-rate-limit", str(rate_limit)])
@@ -105,6 +105,10 @@ async def execute(
             continue
 
         info = obj.get("info", {})
+        # Capture response body (truncated) for FP validation
+        response_body = ""
+        if isinstance(obj.get("response"), str):
+            response_body = obj["response"][:2000]
         finding = {
             "template_id": obj.get("template-id", "unknown"),
             "template_name": info.get("name", "Unknown"),
@@ -116,6 +120,7 @@ async def execute(
             "curl_command": obj.get("curl-command", ""),
             "matcher_name": obj.get("matcher-name", ""),
             "type": obj.get("type", "http"),
+            "response_body": response_body,
         }
         findings.append(finding)
 

@@ -915,6 +915,12 @@ def _process_nuclei_findings(
         host = raw.get("host", "")
         matched_at = raw.get("matched_at", "")
         severity = raw.get("severity", "info").lower()
+        response_body = raw.get("response_body", "")
+
+        # --- False positive filtering ---
+        # Path traversal CVEs: verify response actually contains file content
+        if _is_path_traversal_fp(template_id, matched_at, response_body):
+            continue
 
         hash_input = f"{template_id}:{host}:{matched_at}"
         hash8 = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
@@ -926,6 +932,10 @@ def _process_nuclei_findings(
 
         vuln_class = _classify_vuln(template_id, raw.get("matcher_name", ""))
         needs_val = vuln_class in _NEEDS_VALIDATION_CLASSES
+
+        # CVE-specific findings should always need validation
+        if vuln_class == "cve_specific":
+            needs_val = True
 
         if vuln_class in _DEFINITIVE_CLASSES:
             confidence = "high"
@@ -956,6 +966,52 @@ def _process_nuclei_findings(
         findings.append(finding)
 
     return findings
+
+
+# Indicators that a path traversal response is real (not a soft 404)
+_PASSWD_INDICATORS = ("root:", "/bin/bash", "/bin/sh", "nobody:", "daemon:")
+_WINDOWS_INDICATORS = ("[boot loader]", "[operating systems]", "[fonts]")
+
+
+def _is_path_traversal_fp(
+    template_id: str, matched_at: str, response_body: str,
+) -> bool:
+    """Return True if a path traversal finding is a false positive.
+
+    Nuclei directory traversal templates match on HTTP 200, but many apps
+    return 200 for any path (soft 404). We check if the response actually
+    contains the expected file content.
+    """
+    # Only filter traversal-like findings
+    matched_lower = (matched_at or "").lower()
+    tid_lower = template_id.lower()
+    is_traversal = (
+        "/etc/passwd" in matched_lower
+        or "/etc/shadow" in matched_lower
+        or "win.ini" in matched_lower
+        or "boot.ini" in matched_lower
+        or "traversal" in tid_lower
+        or ".." in matched_lower
+    )
+    if not is_traversal:
+        return False
+
+    # No response body captured — can't validate, mark as FP to be safe
+    if not response_body:
+        return True
+
+    body = response_body.lower()
+
+    # Check for actual file content
+    if "/etc/passwd" in matched_lower or "/etc/shadow" in matched_lower:
+        if any(ind.lower() in body for ind in _PASSWD_INDICATORS):
+            return False  # Real finding
+    elif "win.ini" in matched_lower or "boot.ini" in matched_lower:
+        if any(ind.lower() in body for ind in _WINDOWS_INDICATORS):
+            return False  # Real finding
+
+    # Response is likely a soft 404 or HTML error page
+    return True
 
 
 def _classify_vuln(template_id: str, matcher_name: str) -> str:
