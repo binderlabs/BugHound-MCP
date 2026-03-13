@@ -71,27 +71,65 @@ _TOOL_DEFINITIVE = {"sqlmap", "dalfox", "graphql_tester"}
 
 # Technology keyword → nuclei tag groups for Phase 4A-3
 _TECH_NUCLEI_TAGS: dict[str, list[str]] = {
+    # CMS / Frameworks
     "wordpress": ["wordpress"],
     "wp-": ["wordpress"],
+    "joomla": ["joomla"],
+    "drupal": ["drupal"],
+    "magento": ["magento"],
+    # Web servers
     "nginx": ["nginx"],
     "apache": ["apache"],
+    "iis": ["iis", "aspnet"],
+    "openresty": ["nginx"],
+    "caddy": ["caddy"],
+    # Java ecosystem
     "spring": ["spring", "java"],
     "java": ["java"],
     "tomcat": ["tomcat", "java"],
+    "jetty": ["java"],
+    "wildfly": ["java"],
+    "jboss": ["java"],
+    # Node.js ecosystem
     "node": ["nodejs"],
     "express": ["nodejs"],
     "next.js": ["nodejs"],
+    "nuxt": ["nodejs"],
+    "koa": ["nodejs"],
+    # PHP ecosystem
     "php": ["php"],
     "laravel": ["php"],
     "symfony": ["php"],
-    "graphql": ["graphql"],
-    "iis": ["iis", "aspnet"],
-    "asp.net": ["iis", "aspnet"],
-    ".net": ["aspnet"],
+    "codeigniter": ["php"],
+    # Python ecosystem — httpx reports "Python", "Uvicorn", "Gunicorn", etc.
+    "python": ["python"],
     "django": ["python"],
     "flask": ["python"],
+    "uvicorn": ["python"],
+    "gunicorn": ["python"],
+    "fastapi": ["python"],
+    "tornado": ["python"],
+    # .NET ecosystem
+    "asp.net": ["iis", "aspnet"],
+    ".net": ["aspnet"],
+    # Ruby ecosystem
     "ruby": ["ruby"],
     "rails": ["ruby"],
+    "puma": ["ruby"],
+    # GraphQL
+    "graphql": ["graphql"],
+    # CDN / WAF — useful for bypass templates
+    "cloudflare": ["cloudflare"],
+    "akamai": ["akamai"],
+    # Other
+    "jenkins": ["jenkins"],
+    "gitlab": ["gitlab"],
+    "grafana": ["grafana"],
+    "kibana": ["kibana"],
+    "elasticsearch": ["elasticsearch"],
+    "minio": ["minio"],
+    "docker": ["docker"],
+    "kubernetes": ["kubernetes"],
 }
 
 # URL-level scan tags (templates that test URL params for vulns)
@@ -445,26 +483,40 @@ async def _run_tests(
                 f"(from {len(all_urls)} total)", "nuclei",
             )
 
-            try:
-                result = await nuclei.execute(
-                    deduped_urls,
-                    tags=url_level_tags,
-                    severity=nuclei_severity,
-                    rate_limit=nuclei_rate,
-                    concurrency=nuclei_concurrency,
-                    no_interactsh=no_interactsh,
-                    timeout=nuclei_timeout,
-                )
-                if result.success and result.results:
-                    raw = result.results if isinstance(result.results, list) else []
-                    processed = _process_nuclei_findings(raw, workspace_id)
-                    processed = _deduplicate_nuclei_findings(processed)
-                    nuclei_findings.extend(processed)
-                elif not result.success:
-                    err = result.error.message if result.error else "unknown"
-                    warnings.append(f"nuclei URL-level scan failed: {err}")
-            except Exception as exc:
-                warnings.append(f"nuclei URL-level scan error: {exc}")
+            # Batch large URL sets to avoid timeouts
+            _BATCH_SIZE = 50
+            url_batches = [
+                deduped_urls[i:i + _BATCH_SIZE]
+                for i in range(0, len(deduped_urls), _BATCH_SIZE)
+            ] if len(deduped_urls) > _BATCH_SIZE else [deduped_urls]
+
+            for batch_idx, url_batch in enumerate(url_batches):
+                if len(url_batches) > 1:
+                    await _progress(
+                        3 + (12 * batch_idx // len(url_batches)),
+                        f"Phase 4A-1: Batch {batch_idx + 1}/{len(url_batches)} "
+                        f"({len(url_batch)} URLs)", "nuclei",
+                    )
+                try:
+                    result = await nuclei.execute(
+                        url_batch,
+                        tags=url_level_tags,
+                        severity=nuclei_severity,
+                        rate_limit=nuclei_rate,
+                        concurrency=nuclei_concurrency,
+                        no_interactsh=no_interactsh,
+                        timeout=nuclei_timeout,
+                    )
+                    if result.success and result.results:
+                        raw = result.results if isinstance(result.results, list) else []
+                        processed = _process_nuclei_findings(raw, workspace_id)
+                        processed = _deduplicate_nuclei_findings(processed)
+                        nuclei_findings.extend(processed)
+                    elif not result.success:
+                        err = result.error.message if result.error else "unknown"
+                        warnings.append(f"nuclei URL-level batch {batch_idx + 1} failed: {err}")
+                except Exception as exc:
+                    warnings.append(f"nuclei URL-level batch {batch_idx + 1} error: {exc}")
 
             phase_stats["4A1_url_scan"] = len(nuclei_findings)
         else:
@@ -1302,32 +1354,57 @@ async def _get_versioned_hosts(
     workspace_id: str,
     host_url_map: dict[str, str],
 ) -> list[str]:
-    """Get hosts with version-detected software for CVE-specific scanning."""
+    """Get hosts with version-detected software for CVE-specific scanning.
+
+    Checks technologies list, web_server header, and flags for version strings.
+    Falls back to all hosts with recognized technologies if no explicit versions found.
+    """
     live_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
     if not live_hosts:
         return []
 
     items = live_hosts.get("data", []) if isinstance(live_hosts, dict) else live_hosts
 
-    versioned: set[str] = set()
     import re
     version_re = re.compile(r"\d+\.\d+")
+
+    versioned: set[str] = set()
+    has_tech: set[str] = set()
 
     for host_data in items:
         if not isinstance(host_data, dict):
             continue
+
+        host_url = host_data.get("url", "")
+        if not host_url:
+            hostname = host_data.get("host", "")
+            host_url = host_url_map.get(hostname, f"https://{hostname}" if hostname else "")
+        if not host_url:
+            continue
+
         techs = host_data.get("technologies") or []
-        for tech in techs:
-            if version_re.search(str(tech)):
-                host_url = host_data.get("url", "")
-                if not host_url:
-                    hostname = host_data.get("host", "")
-                    host_url = host_url_map.get(hostname, f"https://{hostname}" if hostname else "")
-                if host_url:
-                    versioned.add(host_url)
+        server = host_data.get("web_server") or ""
+
+        # Check technologies, web_server, and flags for version strings
+        all_strings = [str(t) for t in techs] + [server]
+        for flag in (host_data.get("flags") or []):
+            all_strings.append(str(flag))
+
+        for s in all_strings:
+            if version_re.search(s):
+                versioned.add(host_url)
                 break
 
-    return sorted(versioned)
+        # Track hosts with any recognized technology (for fallback)
+        techs_lower = " ".join(str(t) for t in techs).lower() + " " + server.lower()
+        for keyword in _TECH_NUCLEI_TAGS:
+            if keyword in techs_lower:
+                has_tech.add(host_url)
+                break
+
+    # If we found explicit versions, use those; otherwise fall back to
+    # all hosts with recognized tech (CVE templates still find unversioned vulns)
+    return sorted(versioned or has_tech)
 
 
 # ---------------------------------------------------------------------------
