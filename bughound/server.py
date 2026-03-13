@@ -703,29 +703,44 @@ async def bughound_get_attack_surface(workspace_id: str) -> str:
     description=(
         "Submit testing strategy after reviewing attack surface. Validates targets "
         "against scope and checks tool availability. Required before "
-        "bughound_execute_tests. The scan_plan parameter is a JSON string with "
+        "bughound_execute_tests. Pass scan_plan as a JSON object (not a string) with "
         "'targets' array and optional 'global_settings'. Stage 3, sync."
     ),
 )
-async def bughound_submit_scan_plan(workspace_id: str, scan_plan: str | dict) -> str:
+async def bughound_submit_scan_plan(workspace_id: str, scan_plan: dict | str) -> str:
     """Validate and store scan plan."""
+    # Accept dict (native MCP/FastMCP), JSON string, or Python dict string
     if isinstance(scan_plan, dict):
-        # MCP framework already parsed it
         parsed = scan_plan
     elif isinstance(scan_plan, str):
-        # Try JSON first, then fall back to ast.literal_eval for Python-style dicts
+        # Try strict JSON first
         try:
             parsed = json.loads(scan_plan)
         except (json.JSONDecodeError, TypeError):
+            # Try fixing single quotes → double quotes (common AI client issue)
             try:
-                import ast
-                parsed = ast.literal_eval(scan_plan)
-            except (ValueError, SyntaxError) as exc:
-                return f"Error: Invalid scan_plan — must be valid JSON or dict: {exc}"
+                parsed = json.loads(scan_plan.replace("'", '"'))
+            except (json.JSONDecodeError, TypeError):
+                # Last resort: Python literal eval
+                try:
+                    import ast
+                    parsed = ast.literal_eval(scan_plan)
+                except (ValueError, SyntaxError):
+                    return json.dumps({
+                        "status": "error",
+                        "message": "Could not parse scan_plan. Send as JSON object with double quotes.",
+                        "example": '{"targets": [{"host": "example.com", "techniques": ["nuclei_scan"]}]}',
+                    })
     else:
-        return f"Error: scan_plan must be a JSON string or dict, got {type(scan_plan).__name__}"
+        return json.dumps({
+            "status": "error",
+            "message": f"scan_plan must be a JSON object or string, got {type(scan_plan).__name__}",
+        })
     if not isinstance(parsed, dict):
-        return f"Error: scan_plan must be a JSON object/dict, got {type(parsed).__name__}"
+        return json.dumps({
+            "status": "error",
+            "message": f"scan_plan must be a JSON object/dict, got {type(parsed).__name__}",
+        })
     result = await stage_analyze.submit_scan_plan(workspace_id, parsed)
     return _format_scan_plan_result(result)
 
