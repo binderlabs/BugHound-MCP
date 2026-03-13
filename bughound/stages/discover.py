@@ -18,7 +18,7 @@ from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, WorkspaceState
 from bughound.tools.discovery import (
     auth_analyzer, cors_checker, dir_scanner, form_extractor, js_analyzer,
-    katana, param_classifier, sensitive_paths, takeover_checker,
+    katana, openapi_parser, param_classifier, sensitive_paths, takeover_checker,
 )
 from bughound.core import tool_runner
 from bughound.tools.recon import gau, gospider, httpx, wafw00f, waybackurls
@@ -563,6 +563,51 @@ async def _run_discover(
         )
         files_written.append("hosts/sensitive_paths.json")
 
+    # ===================================================================
+    # Phase 2D: OpenAPI/Swagger spec parsing
+    # ===================================================================
+    # If sensitive paths found swagger/openapi endpoints, parse them for endpoints
+    openapi_results: list[dict[str, Any]] = []
+    _SWAGGER_CATS = {"SWAGGER_EXPOSED"}
+    swagger_hosts: dict[str, list[str]] = {}  # host_url -> list of spec paths
+    for host_url, findings in sensitive_findings.items():
+        for f in findings:
+            if f.get("category") in _SWAGGER_CATS and f.get("path"):
+                swagger_hosts.setdefault(host_url, []).append(f["path"])
+
+    for host_url, spec_paths in swagger_hosts.items():
+        try:
+            result = await openapi_parser.discover_and_parse(
+                host_url, known_spec_paths=spec_paths,
+            )
+            if result and result.get("endpoints"):
+                result["host_url"] = host_url
+                openapi_results.append(result)
+
+                # Add discovered endpoints to hidden_endpoints for param classification
+                for ep in result["endpoints"]:
+                    ep_url = ep.get("url", f"{host_url.rstrip('/')}{ep['path']}")
+                    # Build query string from params for classification
+                    query_params = [p for p in ep.get("parameters", []) if p.get("in") == "query"]
+                    if query_params:
+                        qs = "&".join(f"{p['name']}=test" for p in query_params)
+                        ep_url = f"{ep_url}?{qs}"
+
+                logger.info(
+                    "discover.openapi_parsed",
+                    host=host_url,
+                    endpoints=result["stats"]["total_endpoints"],
+                )
+        except Exception as exc:
+            warnings.append(f"OpenAPI parsing failed for {host_url}: {exc}")
+
+    if openapi_results:
+        await workspace.write_data(
+            workspace_id, "endpoints/openapi_specs.json", openapi_results,
+            generated_by="openapi_parser", target=target_label,
+        )
+        files_written.append("endpoints/openapi_specs.json")
+
     # Re-write flags.json with updated flags
     hosts_with_flags = [h for h in flagged_hosts if h.get("flags")]
     if hosts_with_flags:
@@ -791,6 +836,30 @@ async def _run_discover(
         # Read forms data
         forms_data = await workspace.read_data(workspace_id, "urls/forms.json")
         forms_items = forms_data.get("data", []) if isinstance(forms_data, dict) else (forms_data or [])
+
+        # Inject OpenAPI-discovered endpoints into hidden_ep_items for classification
+        for oa_result in openapi_results:
+            host_url = oa_result.get("host_url", "")
+            for ep in oa_result.get("endpoints", []):
+                ep_url = ep.get("url", f"{host_url.rstrip('/')}{ep['path']}")
+                query_params = [p for p in ep.get("parameters", []) if p.get("in") in ("query", "body")]
+                if query_params:
+                    qs = "&".join(f"{p['name']}=test" for p in query_params if p.get("in") == "query")
+                    full_url = f"{ep_url}?{qs}" if qs else ep_url
+                    hidden_ep_items.append({
+                        "path": full_url,
+                        "method": ep.get("method", "GET"),
+                        "source": "openapi_spec",
+                    })
+                    # Also add body params as separate entries
+                    for p in query_params:
+                        if p.get("in") == "body":
+                            hidden_ep_items.append({
+                                "path": ep_url,
+                                "method": ep.get("method", "POST"),
+                                "source": "openapi_spec",
+                                "params": [{"name": p["name"], "value": ""}],
+                            })
 
         param_classification = param_classifier.classify_parameters(
             urls_items, params_items, hidden_ep_items, forms_items,
