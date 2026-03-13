@@ -401,6 +401,23 @@ async def validate_immediate_wins(
         win_type = win.get("type", win.get("vulnerability_class", "unknown"))
         host = win.get("host", "")
 
+        # analyze.py stores immediate wins with "path" (e.g. "/.env"), not "url"
+        # Reconstruct full URL from host + path
+        if not win_url and host and win.get("path"):
+            path = win["path"]
+            if path.startswith("http"):
+                win_url = path
+            else:
+                win_url = f"https://{host}{path}"
+
+        # Also try extracting URL from reproduction command
+        if not win_url and win.get("reproduction"):
+            repro = win["reproduction"]
+            for token in repro.split():
+                if token.startswith("http"):
+                    win_url = token
+                    break
+
         if not win_url:
             results.append({
                 "type": win_type,
@@ -1352,6 +1369,8 @@ async def _verify_immediate_win(
     host: str,
 ) -> dict[str, Any]:
     """Verify a single immediate win finding."""
+    # Normalize type from analyze.py format (EXPOSED_ENV_FILE -> exposed_env_file)
+    wt = win_type.lower()
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
@@ -1368,14 +1387,15 @@ async def _verify_immediate_win(
                     }
 
                 # Type-specific content validation
-                if win_type in ("exposed_git", "git_config"):
+                # wt is lowercased; analyze.py uses EXPOSED_GIT_REPO, EXPOSED_ENV_FILE, etc.
+                if "git" in wt:
                     if "[core]" in body or "[remote" in body or "repositoryformatversion" in body:
                         return _confirmed_win(
                             win_type, url, host, body,
                             "Git config exposed — repository metadata leak",
                         )
 
-                elif win_type in ("exposed_env", "env_file"):
+                elif "env" in wt:
                     if "=" in body and any(
                         k in body.upper() for k in ["DB_", "API_KEY", "SECRET", "PASSWORD", "TOKEN"]
                     ):
@@ -1383,11 +1403,20 @@ async def _verify_immediate_win(
                             win_type, url, host, body,
                             ".env file exposed — credentials leak",
                         )
+                    # If .env returns HTML or non-env content, it's a false positive
+                    if body.strip().startswith(("<!doctype", "<html", "<!DOCTYPE")):
+                        return {
+                            "type": win_type, "host": host, "url": url,
+                            "status": LIKELY_FALSE_POSITIVE,
+                            "reason": "URL returns HTML, not an .env file",
+                        }
 
-                elif win_type in ("exposed_credentials", "credentials"):
-                    return _confirmed_win(win_type, url, host, body, "Credentials file exposed")
+                elif "credential" in wt or "leaked" in wt:
+                    # Check for actual credential-like content
+                    if any(k in body.upper() for k in ["KEY", "SECRET", "PASSWORD", "TOKEN", "AKIA"]):
+                        return _confirmed_win(win_type, url, host, body, "Credentials file exposed")
 
-                elif win_type == "cors_misconfiguration":
+                elif "cors" in wt:
                     hdrs = {**_HEADERS, "Origin": "https://evil.com"}
                     async with session.get(
                         url, headers=hdrs, ssl=False, timeout=_TIMEOUT,
@@ -1399,40 +1428,47 @@ async def _verify_immediate_win(
                                 f"ACAO: {acao}", "CORS allows arbitrary origin",
                             )
 
-                elif win_type == "subdomain_takeover":
+                elif "takeover" in wt:
                     return {
                         "type": win_type, "host": host, "url": url,
                         "status": NEEDS_MANUAL_REVIEW,
                         "reason": "Subdomain takeover needs DNS verification and claim attempt",
                     }
 
-                elif win_type in ("exposed_actuator", "actuator"):
-                    if "beans" in body or "env" in body or "health" in body:
+                elif "actuator" in wt:
+                    if any(k in body for k in ["beans", "env", "health", "mappings", "configprops"]):
                         return _confirmed_win(
                             win_type, url, host, body,
                             "Spring Boot Actuator exposed — info leak",
                         )
 
-                elif win_type in ("exposed_phpinfo", "phpinfo"):
+                elif "phpinfo" in wt:
                     if "PHP Version" in body or "phpinfo()" in body:
                         return _confirmed_win(
                             win_type, url, host, body,
                             "phpinfo() exposed — server information leak",
                         )
 
-                elif win_type in ("exposed_backup", "backup"):
-                    if len(body) > 100:
+                elif "backup" in wt:
+                    # Backup files shouldn't be HTML pages
+                    if len(body) > 100 and not body.strip().startswith(("<!doctype", "<html", "<!DOCTYPE")):
                         return _confirmed_win(
                             win_type, url, host, body, "Backup file accessible",
                         )
 
-                # Generic: file exists and has content
-                if len(body) > 50:
+                # Generic: file exists and has meaningful content (not just an HTML error page)
+                if len(body) > 50 and not body.strip().startswith(("<!doctype", "<html", "<!DOCTYPE")):
                     return {
                         "type": win_type, "host": host, "url": url,
                         "status": CONFIRMED,
                         "evidence": f"Accessible: {len(body)} bytes",
                         "curl_command": f"curl -sk '{url}'",
+                    }
+                elif len(body) > 50:
+                    return {
+                        "type": win_type, "host": host, "url": url,
+                        "status": LIKELY_FALSE_POSITIVE,
+                        "reason": f"URL returns HTML page ({len(body)} bytes), not expected file content",
                     }
 
     except Exception as exc:
@@ -1453,6 +1489,8 @@ def _confirmed_win(
     win_type: str, url: str, host: str, body: str, impact: str,
 ) -> dict[str, Any]:
     """Build a confirmed immediate win result."""
+    # Normalize type for CVSS lookup (EXPOSED_ENV_FILE -> exposed_env_file -> exposed_env)
+    cvss_key = _normalize_win_type(win_type)
     return {
         "type": win_type,
         "host": host,
@@ -1461,8 +1499,37 @@ def _confirmed_win(
         "evidence": body[:500],
         "curl_command": f"curl -sk '{url}'",
         "impact": impact,
-        "cvss_score": CVSS_SCORES.get(win_type, 5.0),
+        "cvss_score": CVSS_SCORES.get(cvss_key, CVSS_SCORES.get(win_type, 5.0)),
     }
+
+
+def _normalize_win_type(win_type: str) -> str:
+    """Normalize analyze.py win types to CVSS_SCORES keys.
+
+    EXPOSED_ENV_FILE -> exposed_env
+    EXPOSED_GIT_REPO -> exposed_git
+    CRITICAL_CORS -> cors_misconfiguration
+    LEAKED_CLOUD_CREDENTIAL -> exposed_credentials
+    SUBDOMAIN_TAKEOVER -> subdomain_takeover
+    """
+    wt = win_type.lower()
+    if "env" in wt:
+        return "exposed_env"
+    if "git" in wt:
+        return "exposed_git"
+    if "cors" in wt:
+        return "cors_misconfiguration"
+    if "credential" in wt or "leaked" in wt:
+        return "exposed_credentials"
+    if "takeover" in wt:
+        return "subdomain_takeover"
+    if "actuator" in wt:
+        return "exposed_actuator"
+    if "phpinfo" in wt:
+        return "exposed_phpinfo"
+    if "backup" in wt:
+        return "exposed_backup"
+    return wt
 
 
 # ---------------------------------------------------------------------------
@@ -1664,15 +1731,21 @@ def _win_to_finding(
 ) -> dict[str, Any]:
     """Convert an immediate win + verification into a finding dict."""
     win_type = win.get("type", "unknown")
+    # Resolve URL from url/endpoint/path+host
+    win_url = win.get("url", win.get("endpoint", ""))
+    if not win_url and win.get("host") and win.get("path"):
+        path = win["path"]
+        win_url = path if path.startswith("http") else f"https://{win['host']}{path}"
+    win_url = win_url or verification.get("url", "")
     return {
-        "finding_id": f"finding_immediate_{hashlib.sha256(win.get('url', '').encode()).hexdigest()[:8]}",
+        "finding_id": f"finding_immediate_{hashlib.sha256(win_url.encode()).hexdigest()[:8]}",
         "host": win.get("host", ""),
-        "endpoint": win.get("url", win.get("endpoint", "")),
+        "endpoint": win_url,
         "vulnerability_class": win_type,
-        "severity": "high" if "credential" in win_type or "env" in win_type else "medium",
+        "severity": "high" if "credential" in win_type.lower() or "env" in win_type.lower() else "medium",
         "tool": "validator",
         "technique_id": "immediate_win_verification",
-        "description": win.get("description", ""),
+        "description": win.get("description", win.get("evidence", "")),
         "evidence": verification.get("evidence", ""),
         "curl_command": verification.get("curl_command", ""),
         "confidence": "high",
@@ -1680,9 +1753,9 @@ def _win_to_finding(
         "validated": True,
         "validation_status": CONFIRMED,
         "validation_tool": "curl",
-        "cvss_score": CVSS_SCORES.get(win_type, 5.0),
-        "impact": verification.get("impact", ""),
-        "poc_request": f"GET {win.get('url', '')}",
+        "cvss_score": CVSS_SCORES.get(_normalize_win_type(win_type), CVSS_SCORES.get(win_type, 5.0)),
+        "impact": verification.get("impact", win.get("impact", "")),
+        "poc_request": f"GET {win_url}",
         "poc_response": verification.get("evidence", "")[:1000],
         "reproduction_steps": [f"1. Access {win.get('url', '')}"],
     }
