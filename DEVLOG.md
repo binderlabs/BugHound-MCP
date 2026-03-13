@@ -482,6 +482,87 @@ Each wrapper has BINARY, is_available(), execute() + Python fallback:
 
 ---
 
+## 2026-03-13 - Day 9.5: Massive Vulnerability Gap Closure (12-Section Patch)
+
+### What Was Built
+
+**Section A: Enhanced auth_analyzer.py**
+- More cookie patterns: connect.sid, laravel_session, rack.session, ci_session, etc.
+- More auth token names: csrf_token, remember_me, authenticated
+- More tracking: _fbp, hubspot, intercom, amplitude, segment
+- UUID/hex/Java serialized/ViewState injectable cookie detection
+- 30 auth endpoint paths (was 12), including API versioned paths + SSO
+- target_domain parameter, form-encoded registration fallback
+
+**Section B: Enhanced cookie injection tests**
+- SQLi: 8 payloads (was 4), including WAITFOR and CONVERT
+- Deserialization: 8 probe payloads (PHP serialize, Java, Python pickle, .NET BinaryFormatter, YAML)
+- XSS: 5 payloads (was 1), including img/svg/javascript: vectors
+- Expanded SQL/deserialization error indicator regexes
+
+**Section C: NEW post_tester.py (280 lines)**
+- POST-based SQL injection (form-encoded, JSON, multipart)
+- Stored XSS with unique marker verification on listing pages
+- POST SSTI with 4 template engine probes
+- POST RCE (time-based + output-based)
+
+**Section D: Enhanced test_rce**
+- %0a/%0a%0d newline payloads for filter bypass
+- Windows output payloads: whoami, ipconfig, type win.ini
+- Windows indicator regex: [extensions], Windows IP Configuration, AUTHORITY
+
+**Section E: NEW dom_xss_tester.py (245 lines)**
+- Playwright-based DOM XSS: hash injection, param injection, postMessage
+- Dialog event capture, title change detection
+- Lite fallback: DOM sink/source pattern analysis, dangerous flow detection
+
+**Section F: NEW test_path_idor in injection_tester.py**
+- Path segment IDOR testing (numeric, UUID, hex, mixed)
+- extract_path_segments() helper
+- Comparison-based detection with hash diffing
+
+**Section G: NEW mass_assignment_tester.py (210 lines)**
+- 21 privilege escalation fields (role, is_admin, permissions, balance, price, etc.)
+- Individual and batch injection testing
+- Severity classification: critical (role), high (verified), high (money)
+
+**Section H: Enhanced test_broken_access**
+- 15 path traversal bypass strategies (case, URL encoding, semicolons, double-dot)
+- X-HTTP-Method-Override header testing
+- Tests both 401 and 403 responses (was 403 only)
+
+**Section I: Enhanced JWT brute force**
+- 50+ static secrets (was 25): framework defaults, common passwords
+- Domain-based variations: uppercase, _SECRET_KEY, _JWT_SECRET, number suffixes
+- Forged admin token generation when secret is cracked (role=admin, is_admin=true)
+
+**Section J: Updated param_classifier**
+- DESERIALIZATION_PARAMS: viewstate, serialized, cart, checkout, etc.
+- MASS_ASSIGNMENT_PARAMS: role, is_admin, privilege, balance, tier, etc.
+- path_idor_candidates extraction from crawled URLs (numeric/UUID segments)
+
+**Section K: Updated analyze.py**
+- 6 new attack chains (19-24): JWT Weakness, Cookie Injection, Broken Access Control,
+  Mass Assignment, Path IDOR, Deserialization Attack
+- Expanded exploitability scoring for JWT, injectable cookies, insecure cookie flags
+
+**Section L: Updated test.py + techniques.py**
+- 29 techniques (was 21): 8 new techniques with execution handlers
+- Phase 4D: 19 injection techniques (was 12)
+- Phase 4E: 7 tech-specific techniques (was 6)
+
+### Stats
+- 100 Python files, ~30.3K LOC
+- 21 MCP tools
+- 29 testing techniques (was 21)
+- 17 one-liner pipelines
+- 3 new testing modules: post_tester, dom_xss_tester, mass_assignment_tester
+
+### What's Next
+- Stage 5 (Validate) + Stage 6 (Report) — demo prep
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->
