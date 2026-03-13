@@ -155,12 +155,14 @@ def classify_parameters(
     urls_data: list[Any],
     parameters_data: list[Any],
     hidden_endpoints: list[Any] | None = None,
+    forms_data: list[Any] | None = None,
 ) -> dict[str, Any]:
     """Classify all discovered parameters by vulnerability type.
 
     urls_data: items from urls/crawled.json
     parameters_data: items from urls/parameters.json
     hidden_endpoints: items from endpoints/hidden_endpoints.json
+    forms_data: items from urls/forms.json
 
     Returns dict with per-vuln-type candidate lists + stats.
     """
@@ -206,6 +208,59 @@ def classify_parameters(
                 ep_path, pname, pvals[0] if pvals else "",
                 ep.get("method", "GET"),
             ))
+
+    # From forms — extract input names with form context
+    file_upload_candidates: list[dict[str, Any]] = []
+    post_endpoints: list[dict[str, Any]] = []
+    _seen_uploads: set[str] = set()
+    _seen_posts: set[str] = set()
+
+    for form in (forms_data or []):
+        if not isinstance(form, dict):
+            continue
+        page_url = form.get("page_url", "")
+        form_method = form.get("method", "GET")
+        classification = form.get("classification", "")
+        testable = form.get("testable", {})
+        action_url = testable.get("url", page_url)
+
+        # Track POST endpoints
+        if form_method == "POST" and action_url not in _seen_posts:
+            _seen_posts.add(action_url)
+            post_endpoints.append({
+                "url": action_url,
+                "form_type": classification,
+                "page_url": page_url,
+                "params": [inp.get("name", "") for inp in form.get("inputs", []) if inp.get("name")],
+            })
+
+        for inp in form.get("inputs", []):
+            inp_name = inp.get("name", "")
+            inp_type = inp.get("type", "text")
+            if not inp_name:
+                continue
+
+            # File upload detection
+            if inp_type == "file":
+                dedup = f"{action_url}:{inp_name}"
+                if dedup not in _seen_uploads:
+                    _seen_uploads.add(dedup)
+                    file_upload_candidates.append({
+                        "url": action_url,
+                        "param": inp_name,
+                        "form_type": classification,
+                        "page_url": page_url,
+                        "method": form_method,
+                    })
+                continue
+
+            param_entries.append((action_url, inp_name, "", form_method))
+
+            # Form-context-aware classification boost
+            if classification == "login_form" and inp_name.lower() in (
+                "username", "user", "email", "login", "password", "passwd",
+            ):
+                param_entries.append((action_url, inp_name, "", "POST"))
 
     # Classify
     candidates: dict[str, list[dict[str, Any]]] = {
@@ -257,12 +312,17 @@ def classify_parameters(
             1 for p in unique_params if _classify_one_param(p)
         ),
         "total_unique_params": len(unique_params),
+        "forms_analyzed": len(forms_data or []),
+        "file_upload_forms": len(file_upload_candidates),
+        "post_endpoints": len(post_endpoints),
     }
     for vtype in _ALL_VULN_TYPES:
         stats[f"{vtype}_count"] = len(candidates[f"{vtype}_candidates"])
 
     return {
         **candidates,
+        "file_upload_candidates": file_upload_candidates,
+        "post_endpoints": post_endpoints[:50],
         "high_value_params": high_value[:30],
         "stats": stats,
     }

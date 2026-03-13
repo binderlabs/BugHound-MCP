@@ -103,6 +103,30 @@ NODE_PATHS: list[str] = [
     "/node_modules",
 ]
 
+DOTNET_PATHS: list[str] = [
+    "/elmah.axd", "/trace.axd", "/glimpse",
+    "/web.config", "/web.config.bak", "/web.config.old",
+    "/applicationhost.config",
+    "/_blazor", "/_framework/blazor.boot.json",
+    "/swagger/index.html", "/swagger/v1/swagger.json",
+    "/hangfire", "/hangfire/dashboard",
+    "/elmah", "/elmah.axd",
+    "/error.aspx", "/errorlog.axd",
+    "/bin/web.dll",
+]
+
+JAVA_PATHS: list[str] = [
+    "/manager/html", "/manager/status",  # Tomcat
+    "/host-manager/html",
+    "/solr/admin", "/solr/#/",  # Solr
+    "/jenkins", "/jenkins/login",  # Jenkins
+    "/jmx-console",  # JBoss
+    "/web-console",  # JBoss
+    "/invoker/JMXInvokerServlet",
+    "/h2-console", "/h2-console/",  # H2
+    "/jolokia", "/jolokia/list",  # Jolokia
+]
+
 # Interesting status codes (not 404)
 _INTERESTING_STATUSES = {200, 301, 302, 401, 403, 405}
 
@@ -158,6 +182,10 @@ async def scan_directories(
             paths.extend(SPRING_PATHS)
         if any(k in tech_str for k in ("node", "express", "next.js", "nuxt")):
             paths.extend(NODE_PATHS)
+        if any(k in tech_str for k in ("asp.net", ".net", "iis", "blazor")):
+            paths.extend(DOTNET_PATHS)
+        if any(k in tech_str for k in ("tomcat", "jboss", "wildfly", "solr", "jenkins", "jolokia")):
+            paths.extend(JAVA_PATHS)
 
         # Deduplicate
         paths = sorted(set(paths))

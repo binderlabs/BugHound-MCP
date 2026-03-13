@@ -80,6 +80,7 @@ async def _load_all_data(workspace_id: str) -> dict[str, Any]:
         "parameter_classification": "urls/parameter_classification.json",
         "dir_findings": "dirfuzz/light_results.json",
         "hidden_parameters": "urls/hidden_parameters.json",
+        "forms": "urls/forms.json",
     }
     result: dict[str, list[Any]] = {}
     for key, path in files.items():
@@ -753,6 +754,81 @@ def _detect_attack_chains(
             "report_ready": False,
         })
 
+    # --- Chain 16: File Upload Abuse ---
+    forms = data.get("forms", [])
+    upload_forms = [f for f in forms if f.get("classification") == "upload_form"]
+    if upload_forms:
+        affected = list(set(_host_from_url(f.get("page_url", "")) for f in upload_forms[:5]))
+        chains.append({
+            "chain_id": "FILE_UPLOAD_ABUSE",
+            "name": "File Upload to RCE/XSS",
+            "severity": "HIGH",
+            "bounty_estimate": "$500-5000",
+            "affected_hosts": affected,
+            "evidence": {
+                "trigger": f"{len(upload_forms)} upload forms found",
+                "supporting": "Forms with file input detected",
+            },
+            "exploitation_steps": [
+                "Upload PHP/JSP webshell with double extension: shell.php.jpg",
+                "Upload SVG with embedded XSS: <svg onload=alert(1)>",
+                "Test content-type bypass: change to image/png with PHP payload",
+                "Check if uploaded files are served from same origin",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 17: Login Form SQLi ---
+    login_forms = [f for f in forms if f.get("classification") == "login_form"]
+    if login_forms:
+        affected = list(set(_host_from_url(f.get("page_url", "")) for f in login_forms[:5]))
+        chains.append({
+            "chain_id": "LOGIN_FORM_SQLI",
+            "name": "Login Form SQL Injection",
+            "severity": "CRITICAL",
+            "bounty_estimate": "$1000-10000",
+            "affected_hosts": affected,
+            "evidence": {
+                "trigger": f"{len(login_forms)} login forms found",
+                "supporting": "POST login endpoints available for auth bypass testing",
+            },
+            "exploitation_steps": [
+                "Test username field: admin' OR '1'='1'--",
+                "Test password field with time-based blind: ' OR SLEEP(5)--",
+                "Test with common WAF bypasses: admin'/**/OR/**/1=1--",
+                "Check for error-based injection via verbose error messages",
+            ],
+            "report_ready": False,
+        })
+
+    # --- Chain 18: POST Endpoint Injection ---
+    pc = data.get("parameter_classification", [])
+    if isinstance(pc, list) and pc:
+        pc = pc[0] if isinstance(pc[0], dict) else {}
+    elif not isinstance(pc, dict):
+        pc = {}
+    post_endpoints = pc.get("post_endpoints", [])
+    if post_endpoints:
+        affected = list(set(_host_from_url(ep.get("url", "")) for ep in post_endpoints[:5]))
+        chains.append({
+            "chain_id": "POST_ENDPOINT_INJECTION",
+            "name": "POST Endpoint Parameter Injection",
+            "severity": "MEDIUM",
+            "bounty_estimate": "$300-3000",
+            "affected_hosts": affected,
+            "evidence": {
+                "trigger": f"{len(post_endpoints)} POST endpoints with injectable params",
+                "supporting": "Form-based POST submissions often lack input validation",
+            },
+            "exploitation_steps": [
+                "Fuzz POST body parameters with SQLi/XSS payloads",
+                "Test for CSRF on state-changing POST endpoints",
+                "Check for mass assignment by adding extra params",
+                "Test content-type switching: JSON body on form endpoint",
+            ],
+            "report_ready": False,
+        })
+
     # Deduplicate chains by chain_id + host
     seen: set[str] = set()
     unique: list[dict[str, Any]] = []
@@ -1311,6 +1387,32 @@ def _flags_summary(data: dict[str, list]) -> dict[str, int]:
     return dict(counter.most_common(20))
 
 
+def _summarize_forms(data: dict[str, list]) -> dict[str, Any]:
+    """Summarize discovered forms for attack surface output."""
+    forms = data.get("forms", [])
+    if not forms:
+        return {"available": False, "total": 0}
+
+    by_type: Counter[str] = Counter()
+    by_method: Counter[str] = Counter()
+    for f in forms:
+        by_type[f.get("classification", "unknown")] += 1
+        by_method[f.get("method", "GET")] += 1
+
+    # Highlight high-value forms
+    high_value = [f for f in forms if f.get("classification") in (
+        "login_form", "upload_form", "api_form", "registration_form",
+    )]
+
+    return {
+        "available": True,
+        "total": len(forms),
+        "by_classification": dict(by_type.most_common()),
+        "by_method": dict(by_method.most_common()),
+        "high_value_forms": high_value[:15],
+    }
+
+
 def _summarize_param_classification(data: dict[str, list]) -> dict[str, Any]:
     """Summarize parameter classification for attack surface output."""
     param_class = _extract_items(data.get("parameter_classification"))
@@ -1333,6 +1435,8 @@ def _summarize_param_classification(data: dict[str, list]) -> dict[str, Any]:
         "stats": stats,
         "high_value_params": high_value[:10],
         "top_candidates_by_type": top_by_type,
+        "file_upload_candidates": pc.get("file_upload_candidates", [])[:10],
+        "post_endpoints": pc.get("post_endpoints", [])[:10],
     }
 
 
@@ -1447,6 +1551,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "technology_distribution": tech_dist,
         "flags_summary": flags_sum,
         "suggested_test_classes": test_classes,
+        "forms_discovered": _summarize_forms(data),
         "parameter_classification": _summarize_param_classification(data),
         "directory_discovery": _summarize_dir_findings(data),
         "hidden_parameters": data.get("hidden_parameters", [])[:30],

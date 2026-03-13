@@ -17,8 +17,8 @@ from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, WorkspaceState
 from bughound.tools.discovery import (
-    cors_checker, dir_scanner, js_analyzer, katana, param_classifier,
-    sensitive_paths, takeover_checker,
+    cors_checker, dir_scanner, form_extractor, js_analyzer, katana,
+    param_classifier, sensitive_paths, takeover_checker,
 )
 from bughound.core import tool_runner
 from bughound.tools.recon import gau, gospider, httpx, wafw00f, waybackurls
@@ -262,18 +262,32 @@ async def _run_discover(
             url_tool_counts.setdefault(tool_name, 0)
             warnings.append(f"{tool_name}: {exc}")
 
-    # Active crawler — prefer katana, fallback to gospider
+    # Active crawler — katana light/deep by target type, fallback to gospider
     crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
+    katana_forms: list[dict[str, Any]] = []
+    use_deep_crawl = meta.target_type in (TargetType.SINGLE_HOST, TargetType.SINGLE_ENDPOINT)
+
     if katana.is_available():
         katana_count = 0
         for ct in crawl_targets:
             try:
-                cr = await katana.execute(ct, depth=2, timeout=60)
+                if use_deep_crawl:
+                    cr = await katana.execute_deep(ct, timeout=180)
+                else:
+                    cr = await katana.execute_light(ct, timeout=60)
                 if cr.success:
                     for entry in cr.results:
                         u = entry["url"] if isinstance(entry, dict) else str(entry)
                         all_urls.append({"url": u, "source": "katana"})
                         katana_count += 1
+                    # Extract forms from katana deep mode output
+                    for w in cr.warnings:
+                        if w.startswith("__forms__:"):
+                            import json as _json
+                            try:
+                                katana_forms.extend(_json.loads(w[10:]))
+                            except _json.JSONDecodeError:
+                                pass
             except Exception:
                 pass
         url_tool_counts["katana"] = katana_count
@@ -293,6 +307,38 @@ async def _run_discover(
     else:
         url_tool_counts["crawler"] = -1
         warnings.append("No crawler installed (katana or gospider) — active crawling skipped.")
+
+    # Form extraction — pure Python crawler for forms
+    extracted_forms: list[dict[str, Any]] = list(katana_forms)
+    form_targets = crawl_targets[:5] if use_deep_crawl else crawl_targets[:3]
+    if form_targets:
+        if progress_cb:
+            await progress_cb(35, "Extracting forms from pages", "form_extractor")
+        try:
+            py_forms = await form_extractor.extract_forms(
+                form_targets,
+                max_pages=30 if use_deep_crawl else 15,
+                depth=2 if use_deep_crawl else 1,
+                concurrency=5,
+            )
+            extracted_forms.extend(py_forms)
+        except Exception as exc:
+            warnings.append(f"Form extraction failed: {exc}")
+
+    # Deduplicate forms by (page_url, action, method)
+    seen_forms: set[str] = set()
+    unique_forms: list[dict[str, Any]] = []
+    for form in extracted_forms:
+        key = f"{form.get('page_url', '')}:{form.get('action', '')}:{form.get('method', '')}"
+        if key not in seen_forms:
+            seen_forms.add(key)
+            unique_forms.append(form)
+
+    # Merge form params into all_urls (GET forms produce URLs with params)
+    for form in unique_forms:
+        testable = form.get("testable", {})
+        if testable.get("method") == "GET" and testable.get("url"):
+            all_urls.append({"url": testable["url"], "source": "form_extractor"})
 
     # Robots.txt + sitemap.xml fetching
     robots_sitemap_data: list[dict[str, Any]] = []
@@ -350,6 +396,14 @@ async def _run_discover(
             generated_by="discover", target=target_label,
         )
         files_written.append("urls/robots_sitemap.json")
+
+    # Write forms data
+    if unique_forms:
+        await workspace.write_data(
+            workspace_id, "urls/forms.json", unique_forms,
+            generated_by="form_extractor", target=target_label,
+        )
+        files_written.append("urls/forms.json")
 
     await workspace.update_stats(workspace_id, urls_discovered=len(unique_urls))
 
@@ -692,8 +746,12 @@ async def _run_discover(
         hidden_ep_data = await workspace.read_data(workspace_id, "endpoints/hidden_endpoints.json")
         hidden_ep_items = hidden_ep_data.get("data", []) if isinstance(hidden_ep_data, dict) else (hidden_ep_data or [])
 
+        # Read forms data
+        forms_data = await workspace.read_data(workspace_id, "urls/forms.json")
+        forms_items = forms_data.get("data", []) if isinstance(forms_data, dict) else (forms_data or [])
+
         param_classification = param_classifier.classify_parameters(
-            urls_items, params_items, hidden_ep_items,
+            urls_items, params_items, hidden_ep_items, forms_items,
         )
 
         await workspace.write_data(
@@ -749,6 +807,7 @@ async def _run_discover(
             f"{len(takeover_results)} takeover candidates, "
             f"{len(cors_results)} CORS issues, "
             f"{sum(len(v) for v in dir_results.values())} directory findings, "
+            f"{len(unique_forms)} forms, "
             f"{len(hidden_params)} hidden param sets, "
             f"{param_classification.get('stats', {}).get('unique_params_matched', 0)} classified params."
         ),
@@ -767,6 +826,8 @@ async def _run_discover(
             "secret_types": dict(secret_types.most_common(10)),
             "endpoints_from_js": len(js_endpoints),
             "hidden_endpoints": len(hidden_endpoints),
+            "forms_discovered": len(unique_forms),
+            "form_types": dict(Counter(f.get("classification", "unknown") for f in unique_forms).most_common()),
             "parameters_harvested": total_params,
             "sensitive_paths_found": sum(len(v) for v in sensitive_findings.values()),
             "sensitive_path_categories": dict(sp_categories.most_common(10)),

@@ -225,3 +225,62 @@ class TargetClassification(BaseModel):
     stages_to_run: list[int]
     depth: str = "light"
     skip_reasons: dict[str, str] = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Form extraction models (Stage 2 - form_extractor)
+# ---------------------------------------------------------------------------
+
+
+class FormInput(BaseModel):
+    """A single input field within an HTML form."""
+
+    name: str
+    type: str = "text"
+    value: str = ""
+    placeholder: str = ""
+    required: bool = False
+    options: list[str] = Field(default_factory=list)
+
+
+class FormData(BaseModel):
+    """An extracted HTML form with classification and testable URL."""
+
+    page_url: str
+    action: str = ""
+    method: str = "GET"
+    enctype: str = ""
+    form_id: str = ""
+    form_name: str = ""
+    classification: str = "data_form"
+    inputs: list[FormInput] = Field(default_factory=list)
+    testable: dict[str, Any] = Field(default_factory=dict)
+    source: str = "form_extractor"
+
+
+class ParameterClassification(BaseModel):
+    """Classified parameters grouped by vulnerability type."""
+
+    sqli_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    xss_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    ssrf_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    redirect_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    lfi_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    idor_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    rce_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    ssti_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    file_upload_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    post_endpoints: list[dict[str, Any]] = Field(default_factory=list)
+    high_value_params: list[dict[str, Any]] = Field(default_factory=list)
+    stats: dict[str, Any] = Field(default_factory=dict)
+
+
+class DirectoryScanResult(BaseModel):
+    """A single directory/path discovery result."""
+
+    path: str
+    url: str
+    status_code: int
+    content_length: int = 0
+    redirect_location: str = ""
+    host: str = ""

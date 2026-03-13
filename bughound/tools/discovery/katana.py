@@ -1,7 +1,8 @@
 """Katana active web crawler wrapper (ProjectDiscovery).
 
 Crawls live hosts for URLs, JS files, forms, and links.
-Uses -jsonl output for structured parsing. Includes JS crawling.
+Light mode: fast, shallow (depth 2). Deep mode: form extraction, JS crawl (depth 5).
+Uses -jsonl output for structured parsing.
 """
 
 from __future__ import annotations
@@ -20,15 +21,52 @@ def is_available() -> bool:
     return tool_runner.is_available(BINARY)
 
 
+async def execute_light(
+    target: str,
+    timeout: int = 120,
+) -> ToolResult:
+    """Light crawl — fast, shallow, passive-only JS parsing."""
+    url = target if target.startswith(("http://", "https://")) else f"https://{target}"
+
+    result = await tool_runner.run(
+        BINARY,
+        ["-u", url, "-d", "2", "-jsonl", "-silent", "-js-crawl"],
+        target=target,
+        timeout=timeout,
+    )
+    return _parse_results(result)
+
+
+async def execute_deep(
+    target: str,
+    timeout: int = TIMEOUT,
+) -> ToolResult:
+    """Deep crawl — form extraction, JS crawl, deeper depth."""
+    url = target if target.startswith(("http://", "https://")) else f"https://{target}"
+
+    result = await tool_runner.run(
+        BINARY,
+        [
+            "-u", url,
+            "-d", "5",
+            "-jsonl", "-silent",
+            "-js-crawl",
+            "-form-extraction",
+            "-automatic-form-fill",
+            "-field-scope", "fqdn",
+        ],
+        target=target,
+        timeout=timeout,
+    )
+    return _parse_results(result)
+
+
 async def execute(
     target: str,
     depth: int = 3,
     timeout: int = TIMEOUT,
 ) -> ToolResult:
-    """Crawl a single URL with katana.
-
-    Returns URLs discovered during crawl with source attribution.
-    """
+    """Legacy interface — crawl with custom depth."""
     url = target if target.startswith(("http://", "https://")) else f"https://{target}"
 
     result = await tool_runner.run(
@@ -37,29 +75,46 @@ async def execute(
         target=target,
         timeout=timeout,
     )
+    return _parse_results(result)
 
+
+def _parse_results(result: ToolResult) -> ToolResult:
+    """Parse JSONL output into structured URL list."""
     if not result.success:
         return result
 
-    # Parse JSONL: each line is {"request":{"url":"..."},"response":{...}}
     urls: list[dict[str, Any]] = []
+    forms: list[dict[str, Any]] = []
     seen: set[str] = set()
 
     for line in result.results:
         try:
             obj = json.loads(line)
-            # katana JSONL has request.endpoint or request.url
             req = obj.get("request", {})
             found_url = req.get("endpoint", req.get("url", "")).strip()
+
             if found_url and found_url.startswith("http") and found_url not in seen:
                 seen.add(found_url)
-                urls.append({
+                entry: dict[str, Any] = {
                     "url": found_url,
-                    "source": obj.get("request", {}).get("source", ""),
-                    "tag": obj.get("request", {}).get("tag", ""),
-                })
+                    "source": req.get("source", ""),
+                    "tag": req.get("tag", ""),
+                }
+
+                # Extract form data if present in response
+                resp = obj.get("response", {})
+                if resp.get("forms"):
+                    for form in resp["forms"]:
+                        forms.append({
+                            "page_url": found_url,
+                            "action": form.get("action", ""),
+                            "method": (form.get("method") or "GET").upper(),
+                            "inputs": form.get("inputs", []),
+                            "source": "katana",
+                        })
+
+                urls.append(entry)
         except (json.JSONDecodeError, AttributeError):
-            # Fallback: plain URL line
             line = line.strip()
             if line.startswith("http") and line not in seen:
                 seen.add(line)
@@ -67,4 +122,7 @@ async def execute(
 
     result.results = urls
     result.result_count = len(urls)
+    # Attach forms as extra metadata
+    if forms:
+        result.warnings = [f"__forms__:{json.dumps(forms)}"]
     return result
