@@ -81,6 +81,7 @@ async def _load_all_data(workspace_id: str) -> dict[str, Any]:
         "dir_findings": "dirfuzz/light_results.json",
         "hidden_parameters": "urls/hidden_parameters.json",
         "forms": "urls/forms.json",
+        "auth_discovery": "hosts/auth_discovery.json",
     }
     result: dict[str, list[Any]] = {}
     for key, path in files.items():
@@ -1387,6 +1388,38 @@ def _flags_summary(data: dict[str, list]) -> dict[str, int]:
     return dict(counter.most_common(20))
 
 
+def _summarize_auth(data: dict[str, list]) -> dict[str, Any]:
+    """Summarize auth discovery for attack surface output."""
+    auth = data.get("auth_discovery", [])
+    if not auth:
+        return {"available": False}
+
+    total_cookies = 0
+    total_jwts = 0
+    total_insecure = 0
+    total_injectable = 0
+    mechanisms: Counter[str] = Counter()
+
+    for a in auth:
+        if not isinstance(a, dict):
+            continue
+        total_cookies += len(a.get("cookies", []))
+        total_jwts += len(a.get("jwts", []))
+        total_insecure += len(a.get("insecure_cookie_flags", []))
+        total_injectable += len(a.get("injectable_cookies", []))
+        mechanisms[a.get("auth_mechanism", "none")] += 1
+
+    return {
+        "available": True,
+        "hosts_analyzed": len(auth),
+        "total_cookies": total_cookies,
+        "total_jwts": total_jwts,
+        "insecure_cookie_flags": total_insecure,
+        "injectable_cookies": total_injectable,
+        "auth_mechanisms": dict(mechanisms.most_common()),
+    }
+
+
 def _summarize_forms(data: dict[str, list]) -> dict[str, Any]:
     """Summarize discovered forms for attack surface output."""
     forms = data.get("forms", [])
@@ -1551,6 +1584,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "technology_distribution": tech_dist,
         "flags_summary": flags_sum,
         "suggested_test_classes": test_classes,
+        "auth_discovery": _summarize_auth(data),
         "forms_discovered": _summarize_forms(data),
         "parameter_classification": _summarize_param_classification(data),
         "directory_discovery": _summarize_dir_findings(data),

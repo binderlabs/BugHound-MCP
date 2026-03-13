@@ -165,11 +165,56 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["spring"],
         "description": "Test actuator endpoints for env vars, heap dump, bean enumeration",
     },
+    {
+        "id": "cookie_sqli",
+        "name": "Cookie SQL Injection",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["auth_discovery.injectable_cookies"],
+        "vuln_classes": ["sqli"],
+        "description": "Test injectable cookies for SQL injection",
+    },
+    {
+        "id": "cookie_deserialization",
+        "name": "Cookie Deserialization",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["auth_discovery.injectable_cookies"],
+        "vuln_classes": ["deserialization"],
+        "description": "Test cookies for insecure deserialization",
+    },
+    {
+        "id": "rce_test",
+        "name": "Command Injection Testing",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.rce_candidates"],
+        "vuln_classes": ["rce"],
+        "description": "Test for OS command injection via time-based and output-based techniques",
+    },
+    {
+        "id": "broken_access_control",
+        "name": "Broken Access Control Testing",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["live_hosts", "crawled_urls", "auth_discovery"],
+        "vuln_classes": ["bac"],
+        "description": "Test for unauthenticated admin access, privilege escalation, and verb tampering",
+    },
+    {
+        "id": "rate_limit_test",
+        "name": "Rate Limiting Detection",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["auth_discovery.auth_endpoints"],
+        "vuln_classes": ["rate_limiting"],
+        "description": "Test authentication endpoints for missing rate limiting",
+    },
 ]
 
 # Test class → technique ID mapping
 _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
-    "sqli": ["nuclei_scan", "sqli_param_fuzz"],
+    "sqli": ["nuclei_scan", "sqli_param_fuzz", "cookie_sqli"],
     "xss": ["nuclei_scan", "xss_param_fuzz"],
     "ssrf": ["nuclei_scan", "ssrf_test"],
     "lfi": ["nuclei_scan", "lfi_test"],
@@ -189,6 +234,10 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "misconfig": ["nuclei_scan"],
     "default_creds": ["nuclei_scan"],
     "file_exposure": ["nuclei_scan"],
+    "rce": ["nuclei_scan", "rce_test"],
+    "deserialization": ["cookie_deserialization"],
+    "bac": ["broken_access_control"],
+    "rate_limiting": ["rate_limit_test"],
     "auth_bypass": ["nuclei_scan"],
     "api_abuse": ["nuclei_scan"],
     "cve_specific": ["nuclei_scan"],
@@ -338,6 +387,16 @@ async def execute_technique(
         return await _exec_wordpress(workspace_id, approved_hosts)
     elif technique_id == "spring_actuator_test":
         return await _exec_spring_actuator(workspace_id, approved_hosts)
+    elif technique_id == "cookie_sqli":
+        return await _exec_cookie_sqli(workspace_id, approved_hosts)
+    elif technique_id == "cookie_deserialization":
+        return await _exec_cookie_deser(workspace_id, approved_hosts)
+    elif technique_id == "rce_test":
+        return await _exec_rce(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "broken_access_control":
+        return await _exec_broken_access(workspace_id, approved_hosts)
+    elif technique_id == "rate_limit_test":
+        return await _exec_rate_limit(workspace_id, approved_hosts)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -1028,6 +1087,236 @@ async def _run_injection_batch_direct(
             findings.append(r)
 
     return findings
+
+
+async def _exec_cookie_sqli(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test injectable cookies for SQL injection."""
+    from bughound.tools.testing.injection_tester import test_cookie_injection
+
+    auth_data = await _load_auth_discovery(workspace_id)
+    if not auth_data:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for auth in auth_data:
+        for cookie in auth.get("injectable_cookies", []):
+            cookie_name = cookie.get("name", "")
+            cookie_value = cookie.get("value", "")
+            target_url = auth.get("target_url", "")
+            if not target_url or not cookie_name:
+                continue
+
+            host = _host_from_url(target_url)
+            if host not in approved_hosts:
+                continue
+
+            try:
+                result = await test_cookie_injection(
+                    target_url, cookie_name, cookie_value, "sqli",
+                )
+                if result.get("vulnerable"):
+                    findings.append({
+                        "vulnerability_class": "sqli",
+                        "tool": "injection_tester",
+                        "technique_id": "cookie_sqli",
+                        "host": host,
+                        "endpoint": target_url,
+                        "severity": "critical",
+                        "description": f"SQL injection in cookie '{cookie_name}'",
+                        "evidence": result.get("evidence", ""),
+                        "payload_used": result.get("payload", ""),
+                        "confidence": "high",
+                        "needs_validation": True,
+                    })
+            except Exception as exc:
+                logger.warning("technique.cookie_sqli_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_cookie_deser(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test injectable cookies for insecure deserialization."""
+    from bughound.tools.testing.injection_tester import test_cookie_injection
+
+    auth_data = await _load_auth_discovery(workspace_id)
+    if not auth_data:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for auth in auth_data:
+        for cookie in auth.get("injectable_cookies", []):
+            cookie_name = cookie.get("name", "")
+            cookie_value = cookie.get("value", "")
+            target_url = auth.get("target_url", "")
+            if not target_url or not cookie_name:
+                continue
+
+            host = _host_from_url(target_url)
+            if host not in approved_hosts:
+                continue
+
+            try:
+                result = await test_cookie_injection(
+                    target_url, cookie_name, cookie_value, "deserialization",
+                )
+                if result.get("vulnerable"):
+                    findings.append({
+                        "vulnerability_class": "deserialization",
+                        "tool": "injection_tester",
+                        "technique_id": "cookie_deserialization",
+                        "host": host,
+                        "endpoint": target_url,
+                        "severity": "critical",
+                        "description": f"Insecure deserialization in cookie '{cookie_name}'",
+                        "evidence": result.get("evidence", ""),
+                        "payload_used": result.get("payload", ""),
+                        "confidence": "medium",
+                        "needs_validation": True,
+                    })
+            except Exception as exc:
+                logger.warning("technique.cookie_deser_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_rce(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Test RCE/command injection on classified parameters."""
+    from bughound.tools.testing.injection_tester import test_rce
+    return await _run_injection_batch(
+        workspace_id, approved_hosts, "rce_candidates",
+        test_rce, "rce", "rce_test", "critical", concurrency,
+    )
+
+
+async def _exec_broken_access(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test broken access control on admin/internal endpoints."""
+    from bughound.tools.testing.injection_tester import test_broken_access
+
+    # Gather endpoints from crawled URLs and directory findings
+    raw_urls = await workspace.read_data(workspace_id, "urls/crawled.json")
+    urls = _extract_items(raw_urls)
+    raw_dir = await workspace.read_data(workspace_id, "dirfuzz/light_results.json")
+    dir_findings = _extract_items(raw_dir)
+
+    # Collect candidate endpoint URLs
+    endpoints: list[str] = []
+    seen: set[str] = set()
+    for u in urls:
+        url = u.get("url", "") if isinstance(u, dict) else str(u)
+        host = _host_from_url(url)
+        if host in approved_hosts and url not in seen:
+            seen.add(url)
+            endpoints.append(url)
+    for d in dir_findings:
+        url = d.get("url", "")
+        host = _host_from_url(url)
+        if host in approved_hosts and url not in seen:
+            seen.add(url)
+            endpoints.append(url)
+
+    if not endpoints:
+        return []
+
+    # Get auth token if available
+    auth_data = await _load_auth_discovery(workspace_id)
+    auth_token = None
+    for ad in auth_data:
+        if ad.get("auth_token"):
+            auth_token = ad["auth_token"]
+            break
+
+    try:
+        results = await test_broken_access(endpoints[:100], auth_token)
+    except Exception as exc:
+        logger.warning("technique.bac_error", error=str(exc))
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for r in results:
+        if r.get("accessible"):
+            findings.append({
+                "vulnerability_class": "bac",
+                "tool": "injection_tester",
+                "technique_id": "broken_access_control",
+                "host": _host_from_url(r.get("endpoint", "")),
+                "endpoint": r.get("endpoint", ""),
+                "severity": "high",
+                "description": f"Broken access control: {r.get('technique', 'unauthenticated access')}",
+                "evidence": r.get("evidence", f"Status {r.get('status_code')} with {r.get('content_length', 0)} bytes"),
+                "confidence": "medium",
+                "needs_validation": True,
+            })
+
+    return findings
+
+
+async def _exec_rate_limit(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test auth endpoints for missing rate limiting."""
+    from bughound.tools.testing.injection_tester import test_rate_limit
+
+    auth_data = await _load_auth_discovery(workspace_id)
+    if not auth_data:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    tested: set[str] = set()
+
+    for auth in auth_data:
+        for ep in auth.get("auth_endpoints", []):
+            path = ep.get("path", "")
+            target_url = auth.get("target_url", "")
+            if not target_url or not path:
+                continue
+
+            host = _host_from_url(target_url)
+            if host not in approved_hosts:
+                continue
+
+            base = target_url.rstrip("/")
+            full_url = f"{base}{path}"
+            if full_url in tested:
+                continue
+            tested.add(full_url)
+
+            # Only test login/auth endpoints
+            if not any(k in path.lower() for k in ("/login", "/signin", "/auth", "/token")):
+                continue
+
+            try:
+                result = await test_rate_limit(full_url, method="POST")
+                if not result.get("rate_limited"):
+                    findings.append({
+                        "vulnerability_class": "rate_limiting",
+                        "tool": "injection_tester",
+                        "technique_id": "rate_limit_test",
+                        "host": host,
+                        "endpoint": full_url,
+                        "severity": "medium",
+                        "description": f"No rate limiting on auth endpoint: {path}",
+                        "evidence": result.get("evidence", "30 requests without 429 response"),
+                        "confidence": "high",
+                        "needs_validation": False,
+                    })
+            except Exception as exc:
+                logger.warning("technique.rate_limit_error", error=str(exc))
+
+    return findings
+
+
+async def _load_auth_discovery(workspace_id: str) -> list[dict[str, Any]]:
+    """Load auth discovery data from workspace."""
+    raw = await workspace.read_data(workspace_id, "hosts/auth_discovery.json")
+    return _extract_items(raw)
 
 
 def _host_from_url(url: str) -> str:

@@ -524,15 +524,18 @@ async def _run_tests(
     await _progress(48, "Phase 4D: Injection testing", "injection_tester")
 
     injection_techniques = [
-        ("sqli", "sqli_param_fuzz", 45, 55),
-        ("xss", "xss_param_fuzz", 55, 65),
-        ("ssrf", "ssrf_test", 65, 70),
-        ("open_redirect", "open_redirect_test", 70, 73),
-        ("lfi", "lfi_test", 73, 76),
-        ("idor", "idor_test", 76, 79),
-        ("crlf", "crlf_test", 79, 82),
-        ("ssti", "ssti_test", 82, 85),
-        ("header_injection", "header_injection_test", 85, 88),
+        ("sqli", "sqli_param_fuzz", 45, 53),
+        ("sqli", "cookie_sqli", 53, 55),
+        ("xss", "xss_param_fuzz", 55, 63),
+        ("ssrf", "ssrf_test", 63, 67),
+        ("open_redirect", "open_redirect_test", 67, 70),
+        ("lfi", "lfi_test", 70, 73),
+        ("rce", "rce_test", 73, 76),
+        ("idor", "idor_test", 76, 78),
+        ("crlf", "crlf_test", 78, 80),
+        ("ssti", "ssti_test", 80, 82),
+        ("deserialization", "cookie_deserialization", 82, 84),
+        ("header_injection", "header_injection_test", 84, 88),
     ]
 
     for test_class, technique_id, pct_start, pct_end in injection_techniques:
@@ -571,10 +574,12 @@ async def _run_tests(
     # Phase 4E: Technology-Specific Tests (88-99%)
     # =================================================================
     tech_specific = [
-        ("graphql", "graphql_test", 88, 92),
-        ("jwt", "jwt_test", 92, 95),
-        ("wordpress", "wordpress_test", 95, 97),
-        ("spring", "spring_actuator_test", 97, 99),
+        ("graphql", "graphql_test", 88, 90),
+        ("jwt", "jwt_test", 90, 92),
+        ("wordpress", "wordpress_test", 92, 94),
+        ("spring", "spring_actuator_test", 94, 95),
+        ("bac", "broken_access_control", 95, 97),
+        ("rate_limiting", "rate_limit_test", 97, 99),
     ]
 
     for test_class, technique_id, pct_start, pct_end in tech_specific:
@@ -597,6 +602,63 @@ async def _run_tests(
         except Exception as exc:
             warnings.append(f"{technique_id} error: {exc}")
             phase_stats[f"4E_{technique_id}"] = 0
+
+    # =================================================================
+    # Phase 4F: Insecure Cookie Configuration Findings
+    # =================================================================
+    auth_raw = await workspace.read_data(workspace_id, "hosts/auth_discovery.json")
+    auth_items = auth_raw.get("data", []) if isinstance(auth_raw, dict) else (auth_raw or [])
+    cookie_findings: list[dict[str, Any]] = []
+
+    for auth in auth_items:
+        if not isinstance(auth, dict):
+            continue
+        target_url = auth.get("target_url", "")
+        host = _host_from_url(target_url)
+        if host not in {t.get("host", "").lower() for t in sorted_targets}:
+            continue
+
+        for flag in auth.get("insecure_cookie_flags", []):
+            issue = flag.get("issue", "")
+            cookie_name = flag.get("cookie_name", "")
+            classification = flag.get("classification", "other")
+
+            # Session cookies without HttpOnly are more severe
+            if issue == "missing_httponly" and classification == "session":
+                severity = "medium"
+            elif issue == "missing_secure":
+                severity = "low"
+            elif issue == "missing_httponly":
+                severity = "info"
+            elif issue == "missing_samesite":
+                severity = "low"
+            else:
+                severity = "info"
+
+            cookie_findings.append({
+                "finding_id": _make_finding_id({
+                    "host": host, "tool": "auth_analyzer",
+                    "description": f"{issue}:{cookie_name}",
+                }),
+                "host": host,
+                "endpoint": target_url,
+                "vulnerability_class": "insecure_cookie",
+                "severity": severity,
+                "tool": "auth_analyzer",
+                "technique_id": "auth_discovery",
+                "description": f"Insecure cookie '{cookie_name}': {issue.replace('_', ' ')}",
+                "evidence": f"Cookie classification: {classification}",
+                "confidence": "high",
+                "needs_validation": False,
+                "validated": True,
+                "validation_status": "confirmed",
+            })
+
+    if cookie_findings:
+        all_findings.extend(cookie_findings)
+        phase_stats["4F_cookie_config"] = len(cookie_findings)
+    else:
+        phase_stats["4F_cookie_config"] = 0
 
     # =================================================================
     # Finalize

@@ -441,6 +441,47 @@ Each wrapper has BINARY, is_available(), execute() + Python fallback:
 
 ---
 
+## 2026-03-13 - Day 9: Stage 2 Enhancement (Forms + Auth) + 6 Missing Attack Vectors
+
+### What Was Built
+
+**Stage 2 enhancements:**
+- bughound/tools/discovery/form_extractor.py — pure-Python form crawling (381 lines)
+- bughound/tools/discovery/auth_analyzer.py — auth mechanism discovery (cookies, JWTs, endpoints)
+- katana.py: light/deep mode, form extraction integration
+- dir_scanner.py: DOTNET_PATHS (14) + JAVA_PATHS (12)
+- param_classifier.py: form-aware classification, file_upload_candidates, post_endpoints
+- Phase 2A-post: auth discovery on all live hosts → hosts/auth_discovery.json
+- Phase 2B: form extraction → urls/forms.json
+
+**6 missing attack vectors (Patches 1-8):**
+1. Auth discovery in Stage 2: cookie classification, JWT extraction, insecure cookie flags, injectable cookie detection, auth endpoint probing, auto-registration
+2. Cookie-based injection (Stage 4): SQLi in cookies (error + time-based), deserialization probe, XSS reflection
+3. RCE/command injection: time-based (sleep) + output-based (id/whoami), Linux + Windows payloads
+4. Broken access control: unauthenticated admin access, verb tampering (GET→POST/PUT/DELETE)
+5. Rate limiting: 30 rapid requests to auth endpoints, 429 detection, lockout detection
+6. JWT secret brute force: 25+ common secrets + target-specific guesses (domain_secret_year pattern)
+7. Insecure cookie findings surfaced in Phase 4F (missing HttpOnly/Secure/SameSite → findings)
+8. New techniques wired into Phase 4D/4E execution order
+
+**Pydantic models:** FormInput, FormData, ParameterClassification, DirectoryScanResult
+
+**analyze.py updates:**
+- Loads auth_discovery, forms data
+- _summarize_auth() in attack surface output
+- 3 new attack chains: FILE_UPLOAD_ABUSE, LOGIN_FORM_SQLI, POST_ENDPOINT_INJECTION
+
+### Stats
+- 97 Python files, ~28.3K LOC
+- 21 MCP tools
+- 21 testing techniques (was 16)
+- 17 one-liner pipelines
+
+### What's Next
+- Stage 5 (Validate) + Stage 6 (Report) — demo prep
+
+---
+
 <!-- APPEND NEW ENTRIES ABOVE THIS LINE -->
 <!-- Format: ## YYYY-MM-DD - Day N: Brief Title -->
 <!-- Include: Decisions Made, What Was Built, Issues Encountered, What's Next -->
