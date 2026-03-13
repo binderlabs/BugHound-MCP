@@ -29,19 +29,23 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (BugHound Scanner)"}
 # ---------------------------------------------------------------------------
 
 _SESSION_NAMES = re.compile(
-    r"(session|sess|^sid$|phpsessid|jsessionid|asp\.net_sessionid)",
+    r"(session|sess|^sid$|phpsessid|jsessionid|asp\.net_sessionid|"
+    r"connect\.sid|laravel_session|rack\.session|_session_id|ci_session)",
     re.IGNORECASE,
 )
 _AUTH_TOKEN_NAMES = re.compile(
-    r"(token|auth|jwt|access|bearer)",
+    r"(token|auth|jwt|access|bearer|api_key|x-csrf|csrf_token|"
+    r"remember_me|remember_token|logged_in|authenticated)",
     re.IGNORECASE,
 )
 _TRACKING_NAMES = re.compile(
-    r"(track|analytics|_ga$|_gid$|utm)",
+    r"(track|analytics|_ga$|_gid$|utm|_fbp|_fbc|hubspot|intercom|"
+    r"ajs_anonymous|mp_|amplitude|segment)",
     re.IGNORECASE,
 )
 _PREFERENCE_NAMES = re.compile(
-    r"(pref|settings|config|user|theme|lang)",
+    r"(pref|settings|config|user_prefs|theme|lang|locale|timezone|"
+    r"dark_mode|consent|cookie_consent|gdpr|notice)",
     re.IGNORECASE,
 )
 
@@ -57,13 +61,19 @@ _JWT_BODY_RE = re.compile(r"eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*
 # ---------------------------------------------------------------------------
 
 _NUMERIC_RE = re.compile(r"^\d+$")
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+_HEX_RE = re.compile(r"^[0-9a-f]{16,}$", re.I)
 _BASE64_RE = re.compile(r"^[A-Za-z0-9+/]{8,}={0,2}$")
 _BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]{8,}$")
 _JSON_START_RE = re.compile(r"^[\[{]")
 # PHP serialized: s:4:"test"; or a:1:{...} or O:5:"Class":...
 _PHP_SERIAL_RE = re.compile(r"^(a|s|i|o|b|d|N):\d*:[\{\"NTF]")
+# Java serialized: \xac\xed magic bytes (url-encoded or raw)
+_JAVA_SERIAL_RE = re.compile(r"(rO0AB|%ac%ed|\\xac\\xed)", re.IGNORECASE)
 # Python pickle magic bytes (url-encoded: %80\x04 etc) — check hex-like patterns
 _PICKLE_RE = re.compile(r"(%80|\\x80|gASV)", re.IGNORECASE)
+# .NET ViewState
+_VIEWSTATE_RE = re.compile(r"^/wE[A-Za-z0-9+/]", re.IGNORECASE)
 # URL-encoded data
 _URLENC_RE = re.compile(r"%[0-9A-Fa-f]{2}")
 
@@ -84,6 +94,26 @@ _AUTH_PATHS = [
     "/api/session",
     "/register",
     "/signup",
+    "/api/v1/auth/login",
+    "/api/v1/login",
+    "/api/v1/register",
+    "/api/v2/auth/login",
+    "/auth/login",
+    "/auth/register",
+    "/auth/signup",
+    "/account/login",
+    "/user/login",
+    "/users/sign_in",
+    "/sso/login",
+    "/jwt/token",
+    "/oauth/token",
+    "/oauth/authorize",
+    "/api/users/login",
+    "/api/users/register",
+    "/.well-known/openid-configuration",
+    "/forgot-password",
+    "/reset-password",
+    "/api/auth/forgot-password",
 ]
 
 # ---------------------------------------------------------------------------
@@ -206,6 +236,14 @@ def _injectable_check(name: str, value: str) -> dict[str, Any] | None:
             "reason": "Cookie value is a plain numeric ID — likely directly used as a user/record identifier",
         }
 
+    if _UUID_RE.match(value):
+        return {
+            "name": name,
+            "value": value,
+            "injection_type": "uuid",
+            "reason": "Cookie value is a UUID — may reference a user/session object directly",
+        }
+
     if _JSON_START_RE.match(value):
         return {
             "name": name,
@@ -222,12 +260,28 @@ def _injectable_check(name: str, value: str) -> dict[str, Any] | None:
             "reason": "Cookie value matches PHP serialization format — potential deserialization vulnerability",
         }
 
+    if _JAVA_SERIAL_RE.search(value):
+        return {
+            "name": name,
+            "value": value[:120],
+            "injection_type": "java_serialized",
+            "reason": "Cookie value contains Java serialization markers — potential deserialization vulnerability",
+        }
+
     if _PICKLE_RE.search(value):
         return {
             "name": name,
             "value": value[:120],
             "injection_type": "python_pickle",
             "reason": "Cookie value contains pickle-like markers — potential insecure deserialization",
+        }
+
+    if _VIEWSTATE_RE.match(value):
+        return {
+            "name": name,
+            "value": value[:120],
+            "injection_type": "viewstate",
+            "reason": "Cookie value looks like .NET ViewState — potential deserialization target",
         }
 
     # URL-encoded check before base64 (common overlap)
@@ -237,6 +291,15 @@ def _injectable_check(name: str, value: str) -> dict[str, Any] | None:
             "value": value[:120],
             "injection_type": "url_encoded",
             "reason": "Cookie value is URL-encoded — decode and inspect for structured data",
+        }
+
+    # Hex string (long enough to be meaningful)
+    if _HEX_RE.match(value) and len(value) >= 16:
+        return {
+            "name": name,
+            "value": value[:120],
+            "injection_type": "hex_token",
+            "reason": "Cookie value is a hex token — may be a predictable or brute-forceable session ID",
         }
 
     # Base64 (standard alphabet)
@@ -252,6 +315,15 @@ def _injectable_check(name: str, value: str) -> dict[str, Any] | None:
                 }
         except Exception:
             pass
+
+    # Long opaque strings (>10 chars, not caught above) — still interesting
+    if len(value) > 10 and not value.startswith("eyJ"):
+        return {
+            "name": name,
+            "value": value[:120],
+            "injection_type": "opaque_token",
+            "reason": "Cookie value is a long opaque string — may be tamperable or predictable",
+        }
 
     return None
 
@@ -308,11 +380,13 @@ def _decode_jwt(token: str, source: str) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
-async def discover_auth(target_url: str) -> dict[str, Any]:
+async def discover_auth(
+    target_url: str, target_domain: str = "",
+) -> dict[str, Any]:
     """Discover authentication mechanisms on a target URL.
 
-    Probes for cookies, JWTs, auth endpoints, and optionally auto-registers
-    to obtain authenticated credentials.
+    target_domain: used for generating target-specific registration data and
+    scoping cookie analysis. Falls back to extracting from target_url.
 
     Returns a structured dict with cookies, jwts, auth_endpoints,
     auth_mechanism, registered_credentials, auth_token, insecure_cookie_flags,
@@ -320,6 +394,13 @@ async def discover_auth(target_url: str) -> dict[str, Any]:
     """
     log = logger.bind(target=target_url)
     log.info("auth_analyzer.start")
+
+    if not target_domain:
+        try:
+            from urllib.parse import urlparse as _urlparse
+            target_domain = _urlparse(target_url).hostname or ""
+        except Exception:
+            target_domain = ""
 
     is_https = target_url.lower().startswith("https://")
     base_url = target_url.rstrip("/")
@@ -451,59 +532,90 @@ async def discover_auth(target_url: str) -> dict[str, Any]:
     if register_path:
         suffix = _random_string(8)
         reg_username = f"bughound_test_{suffix}"
-        reg_email = f"bughound_test_{suffix}@test.local"
+        # Use target_domain for more realistic email
+        email_domain = target_domain if target_domain else "test.local"
+        reg_email = f"bughound_test_{suffix}@{email_domain}"
         reg_password = "BugHound_Test_123!"
+
+        reg_payload = {
+            "username": reg_username,
+            "email": reg_email,
+            "password": reg_password,
+            "password_confirmation": reg_password,
+            "name": f"BugHound Test {suffix}",
+        }
+
+        async def _try_register(
+            sess: aiohttp.ClientSession, url: str, use_json: bool,
+        ) -> tuple[int, aiohttp.ClientResponse | None]:
+            try:
+                kwargs: dict[str, Any] = {
+                    "timeout": _TIMEOUT, "ssl": False, "allow_redirects": False,
+                }
+                if use_json:
+                    kwargs["json"] = reg_payload
+                else:
+                    kwargs["data"] = reg_payload
+                async with sess.post(url, **kwargs) as resp:
+                    return resp.status, resp
+            except Exception:
+                return 0, None
+
+        async def _extract_token_from_response(resp: aiohttp.ClientResponse) -> None:
+            nonlocal auth_token, registered_credentials
+            registered_credentials = {
+                "username": reg_username,
+                "email": reg_email,
+                "password": reg_password,
+                "register_url": register_path,
+            }
+            # Try to extract auth token from response body
+            try:
+                reg_body = await resp.json(content_type=None)
+                for key in ("token", "access_token", "jwt", "accessToken", "id_token"):
+                    if key in reg_body and isinstance(reg_body[key], str):
+                        auth_token = reg_body[key]
+                        registered_credentials["token_field"] = key
+                        break
+            except Exception:
+                try:
+                    reg_text = await resp.text(errors="replace")
+                    match = re.search(
+                        r'"(?:token|access_token|jwt|accessToken|id_token)"\s*:\s*"([^"]{10,})"',
+                        reg_text,
+                    )
+                    if match:
+                        auth_token = match.group(1)
+                except Exception:
+                    pass
+
+            # Fall back to Set-Cookie for token
+            if not auth_token:
+                for raw in resp.headers.getall("Set-Cookie", []):
+                    c = _parse_set_cookie(raw)
+                    if c["name"] and _classify_cookie(c["name"]) == "auth_token":
+                        auth_token = c["value"]
+                        registered_credentials["token_field"] = f"cookie:{c['name']}"
+                        break
 
         try:
             async with aiohttp.ClientSession(headers=_HEADERS) as session:
-                payload = {
-                    "username": reg_username,
-                    "email": reg_email,
-                    "password": reg_password,
-                }
-                async with session.post(
-                    register_path,
-                    json=payload,
-                    timeout=_TIMEOUT,
-                    ssl=False,
-                    allow_redirects=False,
-                ) as resp:
-                    if resp.status in (200, 201):
-                        registered_credentials = {
-                            "username": reg_username,
-                            "email": reg_email,
-                            "password": reg_password,
-                            "register_url": register_path,
+                # Try JSON first, then form-encoded
+                for use_json in (True, False):
+                    try:
+                        kwargs: dict[str, Any] = {
+                            "timeout": _TIMEOUT, "ssl": False, "allow_redirects": False,
                         }
-
-                        # Try to extract auth token from response body
-                        try:
-                            reg_body = await resp.json(content_type=None)
-                            for key in ("token", "access_token", "jwt", "accessToken", "id_token"):
-                                if key in reg_body and isinstance(reg_body[key], str):
-                                    auth_token = reg_body[key]
-                                    registered_credentials["token_field"] = key
-                                    break
-                        except Exception:
-                            try:
-                                reg_text = await resp.text(errors="replace")
-                                match = re.search(
-                                    r'"(?:token|access_token|jwt|accessToken|id_token)"\s*:\s*"([^"]{10,})"',
-                                    reg_text,
-                                )
-                                if match:
-                                    auth_token = match.group(1)
-                            except Exception:
-                                pass
-
-                        # Fall back to Set-Cookie for token
-                        if not auth_token:
-                            for raw in resp.headers.getall("Set-Cookie", []):
-                                c = _parse_set_cookie(raw)
-                                if c["name"] and _classify_cookie(c["name"]) == "auth_token":
-                                    auth_token = c["value"]
-                                    registered_credentials["token_field"] = f"cookie:{c['name']}"
-                                    break
+                        if use_json:
+                            kwargs["json"] = reg_payload
+                        else:
+                            kwargs["data"] = reg_payload
+                        async with session.post(register_path, **kwargs) as resp:
+                            if resp.status in (200, 201):
+                                await _extract_token_from_response(resp)
+                                break
+                    except Exception:
+                        continue
 
         except Exception as exc:
             log.warning("auth_analyzer.registration_failed", error=str(exc))

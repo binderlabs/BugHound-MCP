@@ -227,7 +227,7 @@ async def _run_discover(
     live_host_urls_for_auth = [h["url"] for h in live_hosts if h.get("url")][:20]
     for host_url in live_host_urls_for_auth:
         try:
-            auth = await auth_analyzer.discover_auth(host_url)
+            auth = await auth_analyzer.discover_auth(host_url, target_domain=meta.target)
             auth["target_url"] = host_url
             auth_results.append(auth)
 
