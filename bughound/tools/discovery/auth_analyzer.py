@@ -500,6 +500,41 @@ async def discover_auth(
     # -----------------------------------------------------------------------
     register_path: str | None = None
 
+    _seen_cookie_names: set[str] = {c["name"] for c in cookies_found}
+
+    def _collect_cookies_from_response(resp: aiohttp.ClientResponse) -> None:
+        """Extract Set-Cookie headers from any response and add new cookies."""
+        for raw in resp.headers.getall("Set-Cookie", []):
+            cookie_data = _parse_set_cookie(raw)
+            name = cookie_data["name"]
+            if not name or name in _seen_cookie_names:
+                continue
+            _seen_cookie_names.add(name)
+
+            classification = _classify_cookie(name)
+            cookie_entry = {
+                "name": name,
+                "value": cookie_data["value"],
+                "domain": cookie_data["domain"],
+                "path": cookie_data["path"],
+                "secure": cookie_data["secure"],
+                "httpOnly": cookie_data["httpOnly"],
+                "sameSite": cookie_data["sameSite"],
+                "classification": classification,
+            }
+            cookies_found.append(cookie_entry)
+            insecure_flags.extend(_insecure_flags(cookie_data, is_https))
+
+            val = cookie_data["value"]
+            if val.startswith("eyJ"):
+                decoded = _decode_jwt(val, source=f"cookie:{name}")
+                if decoded:
+                    jwts_found.append(decoded)
+            else:
+                inj = _injectable_check(name, val)
+                if inj:
+                    injectable_cookies.append(inj)
+
     async def _probe_path(path: str) -> None:
         nonlocal register_path
         url = urljoin(base_url + "/", path.lstrip("/"))
@@ -518,6 +553,8 @@ async def discover_auth(
                             "status_code": resp.status,
                             "method": "GET",
                         })
+                        # Collect cookies from auth endpoints
+                        _collect_cookies_from_response(resp)
                         # Track register/signup endpoints for auto-registration
                         if path in ("/register", "/signup", "/api/auth/register") and register_path is None:
                             register_path = url
@@ -612,6 +649,7 @@ async def discover_auth(
                             kwargs["data"] = reg_payload
                         async with session.post(register_path, **kwargs) as resp:
                             if resp.status in (200, 201):
+                                _collect_cookies_from_response(resp)
                                 await _extract_token_from_response(resp)
                                 break
                     except Exception:
