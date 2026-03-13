@@ -380,6 +380,9 @@ async def _run_tests(
     host_url_map = _build_host_url_map(live_hosts)
 
     nuclei_severity = global_settings.get("nuclei_severity", "critical,high,medium")
+    # Normalize: AI clients may send list ["critical","high"] instead of string
+    if isinstance(nuclei_severity, list):
+        nuclei_severity = ",".join(str(s) for s in nuclei_severity)
     timeout_per_target = global_settings.get("timeout_per_target", 300)
     sorted_targets = sorted(targets, key=lambda t: t.get("priority", 99))
 
