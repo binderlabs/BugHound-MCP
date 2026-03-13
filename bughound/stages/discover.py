@@ -10,6 +10,7 @@ import asyncio
 import re
 from collections import Counter
 from typing import Any
+from urllib.parse import urlparse
 
 import structlog
 
@@ -915,7 +916,9 @@ async def _run_discover(
     static_urls: list[str] = []
 
     for entry in unique_urls:
-        url_str = entry["url"]
+        url_str = entry.get("url", "") if isinstance(entry, dict) else str(entry)
+        if not url_str:
+            continue
         parsed = urlparse(url_str)
         path = parsed.path.lower()
 
