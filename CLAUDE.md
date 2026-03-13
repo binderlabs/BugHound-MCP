@@ -37,13 +37,13 @@ Workspace:   bughound_init, bughound_workspace_list, bughound_workspace_get, bug
 Jobs:        bughound_job_status, bughound_job_results, bughound_job_cancel
 Recon:       bughound_enumerate, bughound_enumerate_deep, bughound_discover
 Analysis:    bughound_get_attack_surface, bughound_submit_scan_plan
-Testing:     bughound_execute_tests, bughound_test_single, bughound_list_techniques
+Testing:     bughound_execute_tests, bughound_test_single, bughound_nuclei_scan, bughound_list_techniques
 Pipelines:   bughound_run_pipeline, bughound_list_pipelines
 Validation:  bughound_validate_finding
 Reporting:   bughound_generate_report
 ```
 
-~21 tools total. Clean, purposeful, no bloat.
+~22 tools total. Clean, purposeful, no bloat.
 
 ## Project Structure
 

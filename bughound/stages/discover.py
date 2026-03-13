@@ -908,11 +908,62 @@ async def _run_discover(
     for cr in cors_results:
         cors_severities[cr.get("severity", "INFO")] += 1
 
+    # URL categorization
+    dynamic_urls: list[str] = []
+    api_urls: list[str] = []
+    admin_urls: list[str] = []
+    static_urls: list[str] = []
+
+    for entry in unique_urls:
+        url_str = entry["url"]
+        parsed = urlparse(url_str)
+        path = parsed.path.lower()
+
+        if parsed.query:
+            dynamic_urls.append(url_str)
+        elif any(seg in path for seg in ("/api/", "/v1/", "/v2/", "/graphql")):
+            api_urls.append(url_str)
+        elif any(seg in path for seg in ("/admin", "/debug", "/internal", "/manage", "/console")):
+            admin_urls.append(url_str)
+        else:
+            static_urls.append(url_str)
+
+    if dynamic_urls:
+        await workspace.write_data(
+            workspace_id, "urls/dynamic_urls.json", dynamic_urls,
+            generated_by="url_categorizer", target=target_label,
+        )
+        files_written.append("urls/dynamic_urls.json")
+
+    if api_urls:
+        await workspace.write_data(
+            workspace_id, "urls/api_urls.json", api_urls,
+            generated_by="url_categorizer", target=target_label,
+        )
+        files_written.append("urls/api_urls.json")
+
+    if admin_urls:
+        await workspace.write_data(
+            workspace_id, "urls/admin_urls.json", admin_urls,
+            generated_by="url_categorizer", target=target_label,
+        )
+        files_written.append("urls/admin_urls.json")
+
+    url_categories = {
+        "dynamic": len(dynamic_urls),
+        "api": len(api_urls),
+        "admin": len(admin_urls),
+        "js": len(js_urls),
+        "static": len(static_urls),
+        "total": len(unique_urls),
+    }
+
     return {
         "status": "success",
         "message": (
             f"Full discovery complete for {target_label}. "
-            f"{len(live_hosts)} live hosts, {len(unique_urls)} URLs, "
+            f"{len(live_hosts)} live hosts, {len(unique_urls)} URLs "
+            f"({len(dynamic_urls)} dynamic, {len(api_urls)} API, {len(admin_urls)} admin), "
             f"{len(js_secrets)} secrets, {len(hidden_endpoints)} hidden endpoints, "
             f"{sum(len(v) for v in sensitive_findings.values())} sensitive paths, "
             f"{len(takeover_results)} takeover candidates, "
@@ -929,6 +980,7 @@ async def _run_discover(
             "hosts_with_flags": len(hosts_with_flags),
             "waf_detected": sum(1 for w in waf_results if w.get("detected")),
             "urls_discovered": len(unique_urls),
+            "url_categories": url_categories,
             "url_sources": url_tool_counts,
             "js_files_found": len(js_urls),
             "js_files_analyzed": min(len(js_urls), 100),

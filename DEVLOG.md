@@ -1,5 +1,16 @@
 # BugHound Development Log
 
+## 2026-03-13 - Direct Nuclei MCP Tool + URL Categorization
+
+### Added
+- **`bughound_nuclei_scan`** — Direct nuclei access for AI-driven scanning. Accepts single target URL or workspace URL lists via `target_source` parameter. Sources: `all_urls`, `dynamic_urls`, `js_files`, `live_hosts`, `api_endpoints`, `admin_paths`, `forms`. Supports custom tags, severity, template paths, and extra args. Findings auto-appended to workspace scan_results.json.
+- **URL categorization in Stage 2** — After all discovery phases, categorizes crawled URLs into dynamic (has query params), API (/api/, /v1/, /v2/, /graphql), admin (/admin, /debug, /internal, /manage, /console), JS, and static. Writes `urls/dynamic_urls.json`, `urls/api_urls.json`, `urls/admin_urls.json` to workspace.
+- **URL categories in Stage 3** — `_compute_stats()` now includes `url_categories` dict with counts per category. AI sees "156 dynamic, 45 API, 12 admin" and can target nuclei scans accordingly.
+- **Fixed 4A-3 + 4A-4 nuclei phases** — `_TECH_NUCLEI_TAGS` was missing httpx-reported names (Python, Uvicorn, Cloudflare, etc.). Added ~30 keywords. `_get_versioned_hosts` now falls back to all hosts with recognized tech when no explicit versions found. Added URL batching (50/batch) for 4A-1 to prevent timeouts.
+
+### Design
+The `bughound_nuclei_scan` tool gives the AI full control over nuclei scanning strategy. Instead of the rigid 4-phase pipeline, the AI can decide: "Run sqli+xss on 156 dynamic URLs, then run api templates on 45 API endpoints, then run exposure templates on admin paths." This matches how Sn1per and HexStrike separate reconnaissance from targeted scanning.
+
 ## 2026-03-13 - Enhanced Nuclei Execution (4 scan phases)
 
 ### Problem

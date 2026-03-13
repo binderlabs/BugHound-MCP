@@ -969,6 +969,197 @@ async def bughound_list_techniques() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Direct nuclei scan
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_nuclei_scan",
+    description=(
+        "Run nuclei vulnerability scanner with full flexibility. Specify a single "
+        "target URL, or use target_source to scan workspace URL lists. "
+        "target_source options: 'all_urls' (all crawled), 'dynamic_urls' (URLs with "
+        "query params), 'js_files', 'live_hosts' (root URLs), 'api_endpoints' "
+        "(API + OpenAPI), 'admin_paths' (admin/internal), 'forms' (GET form URLs). "
+        "Control templates via tags, severity, or custom template_path. "
+        "Examples: scan dynamic URLs for injection (target_source='dynamic_urls', "
+        "tags='sqli,xss'), scan JS files for secrets (target_source='js_files', "
+        "tags='exposure'), scan specific endpoint (target='https://example.com/api', "
+        "tags='api'). Findings are appended to workspace scan_results.json. Sync."
+    ),
+)
+async def bughound_nuclei_scan(
+    workspace_id: str,
+    target: str = "",
+    target_source: str = "",
+    tags: str = "",
+    severity: str = "critical,high,medium",
+    template_path: str = "",
+    extra_args: str = "",
+) -> str:
+    """Direct nuclei scan with flexible targeting."""
+    from bughound.tools.scanning import nuclei
+    from bughound.stages.test import (
+        _process_nuclei_findings,
+        _deduplicate_nuclei_findings,
+        _append_findings,
+    )
+
+    if not nuclei.is_available():
+        return json.dumps({"status": "error", "message": "nuclei is not installed."})
+
+    if not target and not target_source:
+        return json.dumps({
+            "status": "error",
+            "message": "Provide either 'target' (single URL) or 'target_source' (workspace URL list).",
+            "target_source_options": [
+                "all_urls", "dynamic_urls", "js_files", "live_hosts",
+                "api_endpoints", "admin_paths", "forms",
+            ],
+        })
+
+    # Resolve targets
+    scan_urls: list[str] = []
+
+    if target:
+        scan_urls = [target]
+    elif target_source:
+        scan_urls = await _resolve_nuclei_targets(workspace_id, target_source)
+        if not scan_urls:
+            return json.dumps({
+                "status": "error",
+                "message": f"No URLs found for target_source='{target_source}'.",
+            })
+
+    # Build nuclei kwargs
+    nuclei_kwargs: dict[str, Any] = {}
+    if tags:
+        nuclei_kwargs["tags"] = [t.strip() for t in tags.split(",")]
+    if severity:
+        nuclei_kwargs["severity"] = severity
+    if template_path:
+        nuclei_kwargs["template_path"] = template_path
+
+    # Run nuclei
+    nuclei_target = scan_urls[0] if len(scan_urls) == 1 else scan_urls
+    result = await nuclei.execute(nuclei_target, **nuclei_kwargs)
+
+    if not result.success:
+        err = result.error.message if result.error else "nuclei execution failed"
+        return json.dumps({"status": "error", "message": err})
+
+    # Process and deduplicate
+    raw = result.results if isinstance(result.results, list) else []
+    findings = _process_nuclei_findings(raw, workspace_id)
+    findings = _deduplicate_nuclei_findings(findings)
+
+    # Append to workspace
+    if findings:
+        await _append_findings(workspace_id, findings)
+
+    # Severity breakdown
+    sev_counts: dict[str, int] = {}
+    for f in findings:
+        s = f.get("severity", "unknown")
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+
+    # Format response
+    lines = [f"## Nuclei Scan Results\n"]
+    source_label = f"target={target}" if target else f"target_source={target_source}"
+    lines.append(f"**Scan:** {source_label}")
+    lines.append(f"**URLs scanned:** {len(scan_urls)}")
+    if tags:
+        lines.append(f"**Tags:** {tags}")
+    lines.append(f"**Findings:** {len(findings)}\n")
+
+    if sev_counts:
+        lines.append("**By severity:**")
+        for s in ("critical", "high", "medium", "low", "info"):
+            if s in sev_counts:
+                lines.append(f"  - {s}: {sev_counts[s]}")
+        lines.append("")
+
+    if findings:
+        lines.append("**Top findings:**")
+        for f in findings[:15]:
+            lines.append(
+                f"  - [{f.get('severity', '?').upper()}] {f.get('template_name', '?')} "
+                f"@ {f.get('matched_at', f.get('host', '?'))[:80]}"
+            )
+        if len(findings) > 15:
+            lines.append(f"  ... and {len(findings) - 15} more")
+        lines.append("")
+
+    lines.append("Findings written to `vulnerabilities/scan_results.json`.")
+    return "\n".join(lines)
+
+
+async def _resolve_nuclei_targets(workspace_id: str, source: str) -> list[str]:
+    """Resolve target_source to a list of URLs from workspace data."""
+    urls: list[str] = []
+
+    if source == "all_urls":
+        data = await workspace.read_data(workspace_id, "urls/crawled.json")
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        urls = [u.get("url", u) if isinstance(u, dict) else str(u) for u in items]
+
+    elif source == "dynamic_urls":
+        data = await workspace.read_data(workspace_id, "urls/dynamic_urls.json")
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        urls = [u.get("url", u) if isinstance(u, dict) else str(u) for u in items]
+
+    elif source == "js_files":
+        data = await workspace.read_data(workspace_id, "urls/js_files.json")
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        urls = [u.get("url", u) if isinstance(u, dict) else str(u) for u in items]
+
+    elif source == "live_hosts":
+        data = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        urls = [h.get("url", "") for h in items if isinstance(h, dict) and h.get("url")]
+
+    elif source == "api_endpoints":
+        # Combine api_endpoints + openapi_specs
+        api_data = await workspace.read_data(workspace_id, "endpoints/api_endpoints.json")
+        api_items = api_data.get("data", []) if isinstance(api_data, dict) else (api_data or [])
+        for ep in api_items:
+            if isinstance(ep, dict) and ep.get("url"):
+                urls.append(ep["url"])
+
+        oas_data = await workspace.read_data(workspace_id, "endpoints/openapi_specs.json")
+        oas_items = oas_data.get("data", []) if isinstance(oas_data, dict) else (oas_data or [])
+        for spec in oas_items:
+            if isinstance(spec, dict):
+                for endpoint in spec.get("endpoints", []):
+                    if isinstance(endpoint, dict) and endpoint.get("url"):
+                        urls.append(endpoint["url"])
+
+    elif source == "admin_paths":
+        data = await workspace.read_data(workspace_id, "urls/admin_urls.json")
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        urls = [u.get("url", u) if isinstance(u, dict) else str(u) for u in items]
+
+    elif source == "forms":
+        data = await workspace.read_data(workspace_id, "urls/forms.json")
+        items = data.get("data", []) if isinstance(data, dict) else (data or [])
+        for form in items:
+            if isinstance(form, dict) and form.get("method", "").upper() == "GET":
+                test_url = form.get("testable_url", form.get("action", ""))
+                if test_url:
+                    urls.append(test_url)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for u in urls:
+        if u and u not in seen:
+            seen.add(u)
+            unique.append(u)
+
+    return unique
+
+
+# ---------------------------------------------------------------------------
 # One-liner Pipelines
 # ---------------------------------------------------------------------------
 
