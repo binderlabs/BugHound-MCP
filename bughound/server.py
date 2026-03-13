@@ -707,12 +707,25 @@ async def bughound_get_attack_surface(workspace_id: str) -> str:
         "'targets' array and optional 'global_settings'. Stage 3, sync."
     ),
 )
-async def bughound_submit_scan_plan(workspace_id: str, scan_plan: str) -> str:
+async def bughound_submit_scan_plan(workspace_id: str, scan_plan: str | dict) -> str:
     """Validate and store scan plan."""
-    try:
-        parsed = json.loads(scan_plan)
-    except (json.JSONDecodeError, TypeError) as exc:
-        return f"Error: Invalid JSON in scan_plan: {exc}"
+    if isinstance(scan_plan, dict):
+        # MCP framework already parsed it
+        parsed = scan_plan
+    elif isinstance(scan_plan, str):
+        # Try JSON first, then fall back to ast.literal_eval for Python-style dicts
+        try:
+            parsed = json.loads(scan_plan)
+        except (json.JSONDecodeError, TypeError):
+            try:
+                import ast
+                parsed = ast.literal_eval(scan_plan)
+            except (ValueError, SyntaxError) as exc:
+                return f"Error: Invalid scan_plan — must be valid JSON or dict: {exc}"
+    else:
+        return f"Error: scan_plan must be a JSON string or dict, got {type(scan_plan).__name__}"
+    if not isinstance(parsed, dict):
+        return f"Error: scan_plan must be a JSON object/dict, got {type(parsed).__name__}"
     result = await stage_analyze.submit_scan_plan(workspace_id, parsed)
     return _format_scan_plan_result(result)
 
