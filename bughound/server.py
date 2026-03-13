@@ -33,6 +33,7 @@ from bughound.stages import analyze as stage_analyze
 from bughound.stages import discover as stage_discover
 from bughound.stages import enumerate as stage_enumerate
 from bughound.stages import test as stage_test
+from bughound.stages import validate as stage_validate
 
 # Shared job manager instance (lives for server lifetime)
 _job_manager = JobManager()
@@ -995,6 +996,64 @@ async def bughound_list_pipelines() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Stage 5: Validate
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_validate_finding",
+    description=(
+        "Surgically validate a single finding from Stage 4. Runs the appropriate "
+        "validation tool (sqlmap for SQLi, dalfox for XSS, curl-based for others) "
+        "against the specific endpoint/parameter. Returns CONFIRMED, LIKELY_FALSE_POSITIVE, "
+        "or NEEDS_MANUAL_REVIEW with full PoC evidence including curl commands and "
+        "reproduction steps. CVSS 3.1 scoring for confirmed findings. Stage 5, sync."
+    ),
+)
+async def bughound_validate_finding(
+    workspace_id: str,
+    finding_id: str,
+    tool: str = "",
+) -> str:
+    """Validate a single finding."""
+    result = await stage_validate.validate_finding(
+        workspace_id, finding_id, tool=tool or None,
+    )
+    return _format_validation_result(result)
+
+
+@mcp.tool(
+    name="bughound_validate_all",
+    description=(
+        "Batch-validate all unvalidated findings from Stage 4. Processes findings "
+        "in severity order (critical first). For each finding, auto-selects the "
+        "best validation tool. Returns summary with confirmed/false positive/manual "
+        "review counts. Writes validated.json, false_positives.json, manual_review.json, "
+        "and individual confirmed finding files. Stage 5."
+    ),
+)
+async def bughound_validate_all(workspace_id: str) -> str:
+    """Batch-validate all findings."""
+    result = await stage_validate.validate_all(workspace_id)
+    return _format_validate_all_result(result)
+
+
+@mcp.tool(
+    name="bughound_validate_immediate_wins",
+    description=(
+        "Verify Stage 3 immediate wins — exposed .git, .env, credentials, CORS "
+        "misconfigs, subdomain takeovers, actuator endpoints, phpinfo, backups. "
+        "Quick HTTP verification with content-aware checks. Confirmed wins get "
+        "individual finding files with PoC evidence. Stage 5, sync."
+    ),
+)
+async def bughound_validate_immediate_wins(workspace_id: str) -> str:
+    """Verify immediate wins from Stage 3."""
+    result = await stage_validate.validate_immediate_wins(workspace_id)
+    return _format_immediate_wins_result(result)
+
+
+# ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------
 
@@ -1681,6 +1740,174 @@ def _format_pipeline_result(result: dict[str, Any]) -> str:
 
         if len(candidates) > 20:
             lines.append(f"  - ... and {len(candidates) - 20} more")
+        lines.append("")
+
+    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_validation_result(result: dict[str, Any]) -> str:
+    """Format single finding validation result."""
+    if result.get("status") == "error":
+        return f"Error [{result.get('error_type', '?')}]: {result['message']}"
+
+    if result.get("status") == "already_validated":
+        return (
+            f"Finding `{result['finding_id']}` already **{result['validation_status']}**. "
+            "No re-validation needed."
+        )
+
+    lines = ["## Validation Result\n"]
+    lines.append(f"**Finding:** `{result.get('finding_id', '?')}`")
+    lines.append(f"**Status:** **{result.get('validation_status', '?')}**")
+    lines.append(f"**Tool:** {result.get('validation_tool', '?')}")
+    lines.append(f"**Time:** {result.get('validation_time_seconds', 0)}s")
+
+    cvss = result.get("cvss_score")
+    if cvss:
+        lines.append(f"**CVSS Score:** {cvss}")
+
+    evidence = result.get("evidence_summary", "")
+    if evidence:
+        lines.append(f"\n**Evidence:**\n```\n{evidence[:500]}\n```")
+
+    curl = result.get("curl_command", "")
+    if curl:
+        lines.append(f"\n**Curl:** `{curl[:200]}`")
+
+    finding = result.get("finding", {})
+    steps = finding.get("reproduction_steps", [])
+    if steps:
+        lines.append("\n**Reproduction Steps:**")
+        for step in steps:
+            lines.append(f"  {step}")
+
+    impact = finding.get("impact", "")
+    if impact:
+        lines.append(f"\n**Impact:** {impact}")
+
+    assessment = finding.get("severity_assessment", "")
+    if assessment:
+        lines.append(f"**Assessment:** {assessment}")
+
+    lines.append(f"\n**Next step:** {result.get('next_step', 'Continue.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_validate_all_result(result: dict[str, Any]) -> str:
+    """Format batch validation results."""
+    if result.get("status") == "error":
+        return f"Error [{result.get('error_type', '?')}]: {result['message']}"
+
+    if result.get("status") == "nothing_to_validate":
+        return (
+            f"Nothing to validate. {result.get('total_findings', 0)} total findings, "
+            f"{result.get('already_validated', 0)} already validated."
+        )
+
+    lines = ["## Batch Validation Results\n"]
+    lines.append(f"**Validated:** {result.get('total_validated', 0)} findings")
+    lines.append(f"**Time:** {result.get('validation_time_seconds', 0)}s\n")
+
+    confirmed = result.get("confirmed", 0)
+    fp = result.get("false_positives", 0)
+    manual = result.get("needs_manual_review", 0)
+    errors = result.get("errors", 0)
+
+    lines.append("### Summary")
+    lines.append(f"  - **CONFIRMED:** {confirmed}")
+    lines.append(f"  - **FALSE POSITIVE:** {fp}")
+    lines.append(f"  - **MANUAL REVIEW:** {manual}")
+    if errors:
+        lines.append(f"  - **ERRORS:** {errors}")
+    lines.append("")
+
+    # Show individual results
+    results_list = result.get("results", [])
+    if results_list:
+        # Show confirmed first
+        confirmed_items = [r for r in results_list if r.get("validation_status") == "CONFIRMED"]
+        if confirmed_items:
+            lines.append("### Confirmed Findings")
+            for r in confirmed_items:
+                sev = r.get("severity", "?").upper()
+                lines.append(
+                    f"  - **[{sev}]** `{r.get('finding_id', '?')}` "
+                    f"({r.get('vulnerability_class', '?')}) — {r.get('validator', '?')}"
+                )
+            lines.append("")
+
+        # Show manual review
+        manual_items = [r for r in results_list if r.get("validation_status") == "NEEDS_MANUAL_REVIEW"]
+        if manual_items:
+            lines.append(f"### Needs Manual Review ({len(manual_items)})")
+            for r in manual_items[:10]:
+                lines.append(
+                    f"  - `{r.get('finding_id', '?')}` ({r.get('vulnerability_class', '?')})"
+                )
+            if len(manual_items) > 10:
+                lines.append(f"  - ... and {len(manual_items) - 10} more")
+            lines.append("")
+
+    # Files written
+    files = result.get("files_written", [])
+    if files:
+        lines.append("**Files written:**")
+        for f in files:
+            lines.append(f"  - `{f}`")
+        lines.append("")
+
+    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_immediate_wins_result(result: dict[str, Any]) -> str:
+    """Format immediate wins validation results."""
+    if result.get("status") == "error":
+        return f"Error [{result.get('error_type', '?')}]: {result['message']}"
+
+    if result.get("status") == "no_immediate_wins":
+        return result.get("message", "No immediate wins found.")
+
+    lines = ["## Immediate Wins Verification\n"]
+    lines.append(f"**Checked:** {result.get('total_checked', 0)}")
+    lines.append(f"**Confirmed:** {result.get('confirmed', 0)}")
+    lines.append(f"**Time:** {result.get('validation_time_seconds', 0)}s\n")
+
+    results_list = result.get("results", [])
+    confirmed_items = [r for r in results_list if r.get("status") == "CONFIRMED"]
+    other_items = [r for r in results_list if r.get("status") != "CONFIRMED"]
+
+    if confirmed_items:
+        lines.append("### Confirmed Wins")
+        for r in confirmed_items:
+            win_type = r.get("type", "?")
+            host = r.get("host", "?")
+            url = r.get("url", "")
+            cvss = r.get("cvss_score", "")
+            impact = r.get("impact", "")
+            lines.append(f"  - **{win_type}** on `{host}`")
+            if url:
+                lines.append(f"    URL: `{url}`")
+            if cvss:
+                lines.append(f"    CVSS: {cvss}")
+            if impact:
+                lines.append(f"    Impact: {impact}")
+            curl = r.get("curl_command", "")
+            if curl:
+                lines.append(f"    Curl: `{curl[:120]}`")
+        lines.append("")
+
+    if other_items:
+        lines.append(f"### Not Confirmed ({len(other_items)})")
+        for r in other_items[:5]:
+            status = r.get("status", "?")
+            reason = r.get("reason", "")
+            lines.append(f"  - {r.get('type', '?')} ({r.get('host', '?')}): {status}")
+            if reason:
+                lines.append(f"    Reason: {reason}")
+        if len(other_items) > 5:
+            lines.append(f"  - ... and {len(other_items) - 5} more")
         lines.append("")
 
     lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")

@@ -1,5 +1,25 @@
 # BugHound Development Log
 
+## 2026-03-13 - Day 9: Stage 5 Validation Engine
+
+### Built
+- **stages/validate.py** — 1,758 lines, full validation engine
+  - 3 public functions: validate_finding(), validate_all(), validate_immediate_wins()
+  - 13 vulnerability-type validators: SQLi (sqlmap + pure-Python), XSS (dalfox + pure-Python), SSRF, LFI, CRLF, SSTI, open redirect, RCE, IDOR, JWT, BAC, CORS, file exposure
+  - 35 CVSS 3.1 base score mappings with subtype resolution (sqli → sqli_blind/sqli_error_based, xss → xss_reflected/xss_stored/xss_dom, etc.)
+  - Evidence collection: poc_request, poc_response, curl_command, reproduction_steps, impact, severity_assessment
+  - Validation statuses: CONFIRMED, LIKELY_FALSE_POSITIVE, NEEDS_MANUAL_REVIEW
+  - Pure-Python fallbacks for sqlmap (time-based + error-based) and dalfox (reflection + HTML injection)
+  - Immediate wins verification: exposed git, env, credentials, CORS, actuator, phpinfo, backup, takeover
+  - DNS-based subdomain takeover validation via dig
+- **3 new MCP tools** in server.py: bughound_validate_finding, bughound_validate_all, bughound_validate_immediate_wins
+- **3 new formatters**: _format_validation_result, _format_validate_all_result, _format_immediate_wins_result
+
+### Stats
+- 24 MCP tools (was 21)
+- 100 Python files, ~32.3K LOC
+- Stage 5 complete, Stage 6 (Report) next
+
 ## 2026-03-11 - Day 0: Architecture Planning
 
 ### Decisions Made

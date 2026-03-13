@@ -234,12 +234,14 @@ Target: Black Hat Arsenal demo-ready by Day 10
 ### Day 9: Validation + Reporting
 
 **Stage 5 (Validate):**
-- [ ] stages/validate.py
-- [ ] Migrate sqlmap wrapper
-- [ ] Migrate dalfox wrapper
-- [ ] Register MCP tool:
-  - [ ] bughound_validate_finding
-- [ ] Output: vulnerabilities/validated.json, vulnerabilities/confirmed/
+- [x] stages/validate.py — 1,758 lines, 13 vuln-type validators, CVSS scoring, evidence collection
+- [x] sqlmap validation (with pure-Python fallback for time-based + error-based SQLi)
+- [x] dalfox validation (with pure-Python reflection fallback)
+- [x] Register MCP tools:
+  - [x] bughound_validate_finding — surgical single-finding validation
+  - [x] bughound_validate_all — batch validate all unvalidated findings
+  - [x] bughound_validate_immediate_wins — verify Stage 3 immediate wins
+- [x] Output: validated.json, confirmed/{id}.json, false_positives.json, manual_review.json
 
 **Stage 6 (Report):**
 - [ ] stages/report.py
