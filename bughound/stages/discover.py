@@ -88,10 +88,8 @@ async def discover(
             "No targets to discover. Run bughound_enumerate first for broad domains.",
         )
 
-    is_broad = meta.target_type in (TargetType.BROAD_DOMAIN, TargetType.URL_LIST)
-    many_targets = len(targets) > 10
-
-    if is_broad and many_targets and job_manager is not None:
+    # Always run as background job to avoid MCP client timeouts
+    if job_manager is not None:
         return await _start_discover_job(workspace_id, targets, meta, job_manager)
 
     return await _run_discover(workspace_id, targets, meta)

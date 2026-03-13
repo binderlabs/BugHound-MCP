@@ -174,11 +174,10 @@ async def execute_tests(
 
     global_settings = scan_plan.get("global_settings", {})
 
-    # Decide sync vs async
+    # Always run as background job to avoid MCP client timeouts
     total_classes = sum(len(t.get("test_classes", [])) for t in targets)
-    is_small = len(targets) <= 2 and total_classes <= 5
 
-    if is_small or job_manager is None:
+    if job_manager is None:
         return await _run_tests(workspace_id, meta, targets, global_settings)
     else:
         target_label = meta.target
