@@ -1178,10 +1178,33 @@ async def _run_injection_batch_direct(
     return findings
 
 
+def _get_all_cookies(auth: dict[str, Any]) -> list[dict[str, str]]:
+    """Get ALL cookies from auth data, not just injectable ones.
+
+    Returns list of {name, value} dicts from both 'cookies' (all cookies)
+    and 'injectable_cookies', deduped by name.
+    """
+    seen: set[str] = set()
+    result: list[dict[str, str]] = []
+    # All cookies first (broadest set)
+    for cookie in auth.get("cookies", []):
+        name = cookie.get("name", "")
+        if name and name not in seen:
+            seen.add(name)
+            result.append({"name": name, "value": cookie.get("value", "")})
+    # Also include injectable_cookies in case they have different values
+    for cookie in auth.get("injectable_cookies", []):
+        name = cookie.get("name", "")
+        if name and name not in seen:
+            seen.add(name)
+            result.append({"name": name, "value": cookie.get("value", "")})
+    return result
+
+
 async def _exec_cookie_sqli(
     workspace_id: str, approved_hosts: set[str],
 ) -> list[dict[str, Any]]:
-    """Test injectable cookies for SQL injection."""
+    """Test ALL cookies for SQL injection."""
     from bughound.tools.testing.injection_tester import test_cookie_injection
 
     auth_data = await _load_auth_discovery(workspace_id)
@@ -1190,16 +1213,17 @@ async def _exec_cookie_sqli(
 
     findings: list[dict[str, Any]] = []
     for auth in auth_data:
-        for cookie in auth.get("injectable_cookies", []):
-            cookie_name = cookie.get("name", "")
-            cookie_value = cookie.get("value", "")
-            target_url = auth.get("target_url", "")
-            if not target_url or not cookie_name:
-                continue
+        target_url = auth.get("target_url", "")
+        if not target_url:
+            continue
 
-            host = _host_from_url(target_url)
-            if host not in approved_hosts:
-                continue
+        host = _host_from_url(target_url)
+        if host not in approved_hosts:
+            continue
+
+        for cookie in _get_all_cookies(auth):
+            cookie_name = cookie["name"]
+            cookie_value = cookie["value"]
 
             try:
                 result = await test_cookie_injection(
@@ -1228,7 +1252,7 @@ async def _exec_cookie_sqli(
 async def _exec_cookie_deser(
     workspace_id: str, approved_hosts: set[str],
 ) -> list[dict[str, Any]]:
-    """Test injectable cookies for insecure deserialization."""
+    """Test ALL cookies for insecure deserialization."""
     from bughound.tools.testing.injection_tester import test_cookie_injection
 
     auth_data = await _load_auth_discovery(workspace_id)
@@ -1237,16 +1261,17 @@ async def _exec_cookie_deser(
 
     findings: list[dict[str, Any]] = []
     for auth in auth_data:
-        for cookie in auth.get("injectable_cookies", []):
-            cookie_name = cookie.get("name", "")
-            cookie_value = cookie.get("value", "")
-            target_url = auth.get("target_url", "")
-            if not target_url or not cookie_name:
-                continue
+        target_url = auth.get("target_url", "")
+        if not target_url:
+            continue
 
-            host = _host_from_url(target_url)
-            if host not in approved_hosts:
-                continue
+        host = _host_from_url(target_url)
+        if host not in approved_hosts:
+            continue
+
+        for cookie in _get_all_cookies(auth):
+            cookie_name = cookie["name"]
+            cookie_value = cookie["value"]
 
             try:
                 result = await test_cookie_injection(
@@ -1740,7 +1765,7 @@ async def _exec_mass_assignment(
 async def _exec_cookie_xss(
     workspace_id: str, approved_hosts: set[str],
 ) -> list[dict[str, Any]]:
-    """Test injectable cookies for XSS."""
+    """Test ALL cookies for XSS."""
     from bughound.tools.testing.injection_tester import test_cookie_injection
 
     auth_data = await _load_auth_discovery(workspace_id)
@@ -1749,16 +1774,17 @@ async def _exec_cookie_xss(
 
     findings: list[dict[str, Any]] = []
     for auth in auth_data:
-        for cookie in auth.get("injectable_cookies", []):
-            cookie_name = cookie.get("name", "")
-            cookie_value = cookie.get("value", "")
-            target_url = auth.get("target_url", "")
-            if not target_url or not cookie_name:
-                continue
+        target_url = auth.get("target_url", "")
+        if not target_url:
+            continue
 
-            host = _host_from_url(target_url)
-            if host not in approved_hosts:
-                continue
+        host = _host_from_url(target_url)
+        if host not in approved_hosts:
+            continue
+
+        for cookie in _get_all_cookies(auth):
+            cookie_name = cookie["name"]
+            cookie_value = cookie["value"]
 
             try:
                 result = await test_cookie_injection(
