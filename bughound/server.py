@@ -668,8 +668,10 @@ async def bughound_enumerate_deep(workspace_id: str) -> str:
         "detect WAF/CDN, crawl URLs, analyze JavaScript for secrets and hidden "
         "endpoints, check 70+ sensitive paths, detect subdomain takeovers, test "
         "CORS misconfigurations, harvest parameters. Returns intelligence flags per "
-        "host for AI reasoning. Always async — returns job_id. Do NOT poll status "
-        "automatically; tell the user the job is running and wait for them to ask."
+        "host for AI reasoning. Always async — returns job_id immediately. "
+        "IMPORTANT: After receiving the job_id, do NOT automatically call "
+        "bughound_job_status. Do NOT poll or loop. Just tell the user the job "
+        "is running and wait for them to ask you to check."
     ),
 )
 async def bughound_discover(workspace_id: str) -> str:
@@ -898,7 +900,10 @@ async def bughound_check_tool_coverage() -> str:
         "nuclei templates, directory fuzzing, parameter discovery, injection testing "
         "(SQLi, XSS, SSRF, LFI, IDOR, CRLF, SSTI, header injection, open redirect), "
         "and technology-specific tests (GraphQL, JWT, WordPress, Spring Boot). "
-        "Requires bughound_submit_scan_plan first. Stage 4."
+        "Requires bughound_submit_scan_plan first. Always async — returns job_id. "
+        "IMPORTANT: After receiving the job_id, do NOT automatically call "
+        "bughound_job_status. Do NOT poll or loop. Just tell the user the job "
+        "is running and wait for them to ask you to check. Stage 4."
     ),
 )
 async def bughound_execute_tests(workspace_id: str) -> str:
@@ -1568,13 +1573,14 @@ def _format_job_started(result: dict[str, Any]) -> str:
     if result.get("status") == "error":
         return f"Error: {result['message']}"
 
+    job_id = result.get('job_id', '?')
+    est = result.get('estimated_time', 'a few minutes')
     return (
         f"## Background Job Started\n\n"
-        f"**Job ID:** `{result.get('job_id', '?')}`\n"
-        f"**Estimated Time:** {result.get('estimated_time', 'unknown')}\n\n"
-        f"STOP. Do NOT call bughound_job_status. Do NOT poll, loop, or wait. "
-        f"Tell the user: \"Job `{result.get('job_id', '?')}` is running in the background. "
-        f"When you're ready, ask me to check the status.\" Then WAIT for the user to respond.\n"
+        f"**Job ID:** `{job_id}`\n"
+        f"**Estimated Time:** {est}\n\n"
+        f"The job is running in the background. You can continue chatting.\n"
+        f"When you're ready, ask me to check the status of `{job_id}`.\n"
     )
 
 
