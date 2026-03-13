@@ -67,6 +67,12 @@ CVSS_SCORES: dict[str, float] = {
     "exposed_backup": 7.5,
     "default_credentials": 9.8,
     "file_exposure": 5.3,
+    "exposed_swagger": 5.3,
+    "exposed_config": 7.5,
+    "exposed_admin": 5.3,
+    "exposed_graphql": 5.3,
+    "exposed_svn": 7.5,
+    "exposed_debug": 7.5,
 }
 
 # ---------------------------------------------------------------------------
@@ -1456,6 +1462,53 @@ async def _verify_immediate_win(
                             win_type, url, host, body, "Backup file accessible",
                         )
 
+                elif "swagger" in wt or "api_doc" in wt:
+                    if any(k in body for k in ['"paths"', '"openapi"', '"swagger"', "Swagger UI"]):
+                        return _confirmed_win(
+                            win_type, url, host, body,
+                            "API documentation exposed — full endpoint disclosure",
+                        )
+
+                elif "config" in wt and "env" not in wt:
+                    if body.strip().startswith(("{", "[", "<?")) or "=" in body:
+                        if not body.strip().startswith(("<!doctype", "<html", "<!DOCTYPE")):
+                            return _confirmed_win(
+                                win_type, url, host, body,
+                                "Configuration file exposed — potential credential leak",
+                            )
+
+                elif "admin" in wt:
+                    # Admin panel: confirmed if page loads (200) with form or admin content
+                    if any(k in body.lower() for k in ["login", "password", "admin", "dashboard"]):
+                        return _confirmed_win(
+                            win_type, url, host, body,
+                            "Admin panel accessible — potential brute-force target",
+                        )
+
+                elif "graphql" in wt:
+                    if any(k in body for k in ['"__schema"', '"data"', "GraphQL", "graphiql"]):
+                        return _confirmed_win(
+                            win_type, url, host, body,
+                            "GraphQL endpoint exposed — schema introspection possible",
+                        )
+
+                elif "svn" in wt:
+                    if any(k in body for k in ["dir", "svn", "entries", "wc.db"]):
+                        return _confirmed_win(
+                            win_type, url, host, body,
+                            "SVN metadata exposed — source code recovery possible",
+                        )
+
+                elif "debug" in wt:
+                    if any(k in body.lower() for k in [
+                        "stack trace", "debug", "traceback", "exception",
+                        "django debug", "rails", "environment", "phpinfo",
+                    ]):
+                        return _confirmed_win(
+                            win_type, url, host, body,
+                            "Debug endpoint exposed — information disclosure",
+                        )
+
                 # Generic: file exists and has meaningful content (not just an HTML error page)
                 if len(body) > 50 and not body.strip().startswith(("<!doctype", "<html", "<!DOCTYPE")):
                     return {
@@ -1529,6 +1582,18 @@ def _normalize_win_type(win_type: str) -> str:
         return "exposed_phpinfo"
     if "backup" in wt:
         return "exposed_backup"
+    if "swagger" in wt or "api_doc" in wt:
+        return "exposed_swagger"
+    if "config" in wt:
+        return "exposed_config"
+    if "admin" in wt:
+        return "exposed_admin"
+    if "graphql" in wt:
+        return "exposed_graphql"
+    if "svn" in wt:
+        return "exposed_svn"
+    if "debug" in wt:
+        return "exposed_debug"
     return wt
 
 

@@ -82,6 +82,7 @@ async def _load_all_data(workspace_id: str) -> dict[str, Any]:
         "hidden_parameters": "urls/hidden_parameters.json",
         "forms": "urls/forms.json",
         "auth_discovery": "hosts/auth_discovery.json",
+        "openapi_specs": "endpoints/openapi_specs.json",
     }
     result: dict[str, list[Any]] = {}
     for key, path in files.items():
@@ -1153,6 +1154,66 @@ def _find_immediate_wins(
                     "reproduction": f"curl -s -o backup https://{host}{path}",
                     "impact": "Database dumps, source code, or configuration backups may contain credentials.",
                     "remediation": "Remove backup files from web-accessible directories.",
+                    "report_ready": True,
+                })
+
+        # 9. Catch-all: remaining sensitive paths not already covered above
+        # Map category → (win_type, severity, bounty, impact, remediation)
+        _CATEGORY_WIN_MAP = {
+            "SWAGGER_EXPOSED": (
+                "EXPOSED_SWAGGER", "MEDIUM", "$200-1000",
+                "API documentation exposed. Reveals all endpoints, parameters, auth requirements, and data models.",
+                "Restrict swagger/API docs to internal network or authenticated users.",
+            ),
+            "CONFIG_LEAKED": (
+                "EXPOSED_CONFIG", "HIGH", "$500-1500",
+                "Configuration file exposed. May contain database credentials, API keys, internal paths.",
+                "Block access to configuration files in web server config.",
+            ),
+            "ADMIN_PANEL": (
+                "EXPOSED_ADMIN_PANEL", "MEDIUM", "$200-500",
+                "Admin panel accessible. May allow brute-force login or reveal admin functionality.",
+                "Restrict admin panel access to internal network or VPN.",
+            ),
+            "GRAPHQL_INTROSPECTION": (
+                "EXPOSED_GRAPHQL", "MEDIUM", "$200-800",
+                "GraphQL endpoint with introspection enabled. Full API schema disclosure.",
+                "Disable introspection in production. Restrict GraphQL access.",
+            ),
+            "SVN_EXPOSED": (
+                "EXPOSED_SVN", "HIGH", "$500-1500",
+                "SVN metadata exposed. Source code recovery possible.",
+                "Block access to .svn directories.",
+            ),
+            "DEBUG_ENABLED": (
+                "EXPOSED_DEBUG", "HIGH", "$300-1000",
+                "Debug endpoint exposed. May reveal stack traces, environment variables, internal state.",
+                "Disable debug mode in production. Block debug endpoints.",
+            ),
+            "SPRING_ACTUATOR": (
+                "EXPOSED_ACTUATOR", "HIGH", "$500-1500",
+                "Spring Boot actuator exposed. Environment variables, heap dumps, thread info accessible.",
+                "Restrict actuator endpoints to internal network only.",
+            ),
+        }
+        # Track already-reported paths to avoid duplicates
+        already_reported = {w["path"] for w in wins if w.get("host") == host}
+        for path, sp in sp_paths.items():
+            if path in already_reported:
+                continue
+            cat = sp.get("category", "")
+            if cat in _CATEGORY_WIN_MAP:
+                win_type, severity, bounty, impact, remediation = _CATEGORY_WIN_MAP[cat]
+                wins.append({
+                    "type": win_type,
+                    "host": host,
+                    "path": path,
+                    "severity": severity,
+                    "bounty_estimate": bounty,
+                    "evidence": f"Accessible at https://{host}{path} (status {sp.get('status_code', '?')})",
+                    "reproduction": f"curl -s https://{host}{path}",
+                    "impact": impact,
+                    "remediation": remediation,
                     "report_ready": True,
                 })
 
