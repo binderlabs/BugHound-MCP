@@ -524,16 +524,23 @@ async def _run_tests(
     await _progress(48, "Phase 4D: Injection testing", "injection_tester")
 
     injection_techniques = [
-        ("sqli", "sqli_param_fuzz", 45, 53),
-        ("sqli", "cookie_sqli", 53, 55),
-        ("xss", "xss_param_fuzz", 55, 63),
-        ("ssrf", "ssrf_test", 63, 67),
-        ("open_redirect", "open_redirect_test", 67, 70),
-        ("lfi", "lfi_test", 70, 73),
-        ("rce", "rce_test", 73, 76),
-        ("idor", "idor_test", 76, 78),
+        ("sqli", "sqli_param_fuzz", 45, 50),
+        ("sqli", "cookie_sqli", 50, 52),
+        ("sqli", "post_sqli", 52, 54),
+        ("xss", "xss_param_fuzz", 54, 58),
+        ("xss", "stored_xss", 58, 60),
+        ("xss", "dom_xss", 60, 62),
+        ("xss", "cookie_xss", 62, 63),
+        ("ssrf", "ssrf_test", 63, 66),
+        ("open_redirect", "open_redirect_test", 66, 68),
+        ("lfi", "lfi_test", 68, 70),
+        ("rce", "rce_test", 70, 72),
+        ("rce", "post_rce", 72, 74),
+        ("idor", "idor_test", 74, 76),
+        ("idor", "path_idor_test", 76, 78),
         ("crlf", "crlf_test", 78, 80),
-        ("ssti", "ssti_test", 80, 82),
+        ("ssti", "ssti_test", 80, 81),
+        ("ssti", "post_ssti", 81, 82),
         ("deserialization", "cookie_deserialization", 82, 84),
         ("header_injection", "header_injection_test", 84, 88),
     ]
@@ -575,11 +582,12 @@ async def _run_tests(
     # =================================================================
     tech_specific = [
         ("graphql", "graphql_test", 88, 90),
-        ("jwt", "jwt_test", 90, 92),
-        ("wordpress", "wordpress_test", 92, 94),
-        ("spring", "spring_actuator_test", 94, 95),
-        ("bac", "broken_access_control", 95, 97),
-        ("rate_limiting", "rate_limit_test", 97, 99),
+        ("jwt", "jwt_test", 90, 91),
+        ("wordpress", "wordpress_test", 91, 93),
+        ("spring", "spring_actuator_test", 93, 94),
+        ("bac", "broken_access_control", 94, 96),
+        ("rate_limiting", "rate_limit_test", 96, 97),
+        ("mass_assignment", "mass_assignment_test", 97, 99),
     ]
 
     for test_class, technique_id, pct_start, pct_end in tech_specific:

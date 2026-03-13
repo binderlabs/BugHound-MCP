@@ -210,19 +210,91 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["rate_limiting"],
         "description": "Test authentication endpoints for missing rate limiting",
     },
+    {
+        "id": "post_sqli",
+        "name": "POST SQL Injection",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.post_endpoints"],
+        "vuln_classes": ["sqli"],
+        "description": "Test POST endpoints for SQL injection via form/JSON body",
+    },
+    {
+        "id": "stored_xss",
+        "name": "Stored XSS Testing",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.post_endpoints"],
+        "vuln_classes": ["xss"],
+        "description": "Test POST endpoints for stored XSS with marker verification",
+    },
+    {
+        "id": "post_ssti",
+        "name": "POST SSTI Testing",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.post_endpoints"],
+        "vuln_classes": ["ssti"],
+        "description": "Test POST endpoints for server-side template injection",
+    },
+    {
+        "id": "post_rce",
+        "name": "POST Command Injection",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.post_endpoints"],
+        "vuln_classes": ["rce"],
+        "description": "Test POST endpoints for OS command injection",
+    },
+    {
+        "id": "path_idor_test",
+        "name": "Path-Based IDOR",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.path_idor_candidates"],
+        "vuln_classes": ["idor"],
+        "description": "Test URL path segments for IDOR (numeric IDs, UUIDs)",
+    },
+    {
+        "id": "dom_xss",
+        "name": "DOM XSS Testing",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["crawled_urls"],
+        "vuln_classes": ["xss"],
+        "description": "Test for DOM-based XSS via Playwright or source analysis",
+    },
+    {
+        "id": "mass_assignment_test",
+        "name": "Mass Assignment Testing",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.post_endpoints"],
+        "vuln_classes": ["mass_assignment"],
+        "description": "Test POST/PUT endpoints for mass assignment privilege escalation",
+    },
+    {
+        "id": "cookie_xss",
+        "name": "Cookie XSS Testing",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["auth_discovery.injectable_cookies"],
+        "vuln_classes": ["xss"],
+        "description": "Test injectable cookies for reflected XSS",
+    },
 ]
 
 # Test class → technique ID mapping
 _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
-    "sqli": ["nuclei_scan", "sqli_param_fuzz", "cookie_sqli"],
-    "xss": ["nuclei_scan", "xss_param_fuzz"],
+    "sqli": ["nuclei_scan", "sqli_param_fuzz", "cookie_sqli", "post_sqli"],
+    "xss": ["nuclei_scan", "xss_param_fuzz", "stored_xss", "dom_xss", "cookie_xss"],
     "ssrf": ["nuclei_scan", "ssrf_test"],
     "lfi": ["nuclei_scan", "lfi_test"],
     "rfi": ["nuclei_scan"],
     "open_redirect": ["nuclei_scan", "open_redirect_test"],
-    "idor": ["idor_test"],
+    "idor": ["idor_test", "path_idor_test"],
     "crlf": ["crlf_test"],
-    "ssti": ["ssti_test"],
+    "ssti": ["ssti_test", "post_ssti"],
     "header_injection": ["header_injection_test"],
     "graphql": ["nuclei_scan", "graphql_test"],
     "jwt": ["jwt_test"],
@@ -234,10 +306,11 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "misconfig": ["nuclei_scan"],
     "default_creds": ["nuclei_scan"],
     "file_exposure": ["nuclei_scan"],
-    "rce": ["nuclei_scan", "rce_test"],
+    "rce": ["nuclei_scan", "rce_test", "post_rce"],
     "deserialization": ["cookie_deserialization"],
     "bac": ["broken_access_control"],
     "rate_limiting": ["rate_limit_test"],
+    "mass_assignment": ["mass_assignment_test"],
     "auth_bypass": ["nuclei_scan"],
     "api_abuse": ["nuclei_scan"],
     "cve_specific": ["nuclei_scan"],
@@ -397,6 +470,22 @@ async def execute_technique(
         return await _exec_broken_access(workspace_id, approved_hosts)
     elif technique_id == "rate_limit_test":
         return await _exec_rate_limit(workspace_id, approved_hosts)
+    elif technique_id == "post_sqli":
+        return await _exec_post_sqli(workspace_id, approved_hosts)
+    elif technique_id == "stored_xss":
+        return await _exec_stored_xss(workspace_id, approved_hosts)
+    elif technique_id == "post_ssti":
+        return await _exec_post_ssti(workspace_id, approved_hosts)
+    elif technique_id == "post_rce":
+        return await _exec_post_rce(workspace_id, approved_hosts)
+    elif technique_id == "path_idor_test":
+        return await _exec_path_idor(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "dom_xss":
+        return await _exec_dom_xss(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "mass_assignment_test":
+        return await _exec_mass_assignment(workspace_id, approved_hosts)
+    elif technique_id == "cookie_xss":
+        return await _exec_cookie_xss(workspace_id, approved_hosts)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -1309,6 +1398,388 @@ async def _exec_rate_limit(
                     })
             except Exception as exc:
                 logger.warning("technique.rate_limit_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_post_sqli(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test POST endpoints for SQL injection."""
+    from bughound.tools.testing.post_tester import test_post_sqli
+
+    pc = await _load_param_classification(workspace_id)
+    pc_dict = pc[0] if pc and isinstance(pc[0], dict) else {}
+    post_eps = pc_dict.get("post_endpoints", [])
+
+    findings: list[dict[str, Any]] = []
+    for ep in post_eps[:10]:
+        url = ep.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts or not url:
+            continue
+        params = ep.get("params", [])
+        if not params:
+            continue
+
+        try:
+            result = await test_post_sqli(url, params)
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "sqli",
+                    "tool": "post_tester",
+                    "technique_id": "post_sqli",
+                    "host": host,
+                    "endpoint": url,
+                    "severity": "critical",
+                    "description": f"POST SQL injection: {result.get('type', 'sqli')}",
+                    "evidence": result.get("evidence", ""),
+                    "payload_used": result.get("payload", ""),
+                    "confidence": "medium",
+                    "needs_validation": True,
+                })
+        except Exception as exc:
+            logger.warning("technique.post_sqli_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_stored_xss(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test POST endpoints for stored XSS."""
+    from bughound.tools.testing.post_tester import test_stored_xss
+
+    pc = await _load_param_classification(workspace_id)
+    pc_dict = pc[0] if pc and isinstance(pc[0], dict) else {}
+    post_eps = pc_dict.get("post_endpoints", [])
+
+    findings: list[dict[str, Any]] = []
+    for ep in post_eps[:10]:
+        url = ep.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts or not url:
+            continue
+        params = ep.get("params", [])
+        if not params:
+            continue
+
+        try:
+            result = await test_stored_xss(url, params)
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "xss",
+                    "tool": "post_tester",
+                    "technique_id": "stored_xss",
+                    "host": host,
+                    "endpoint": url,
+                    "severity": "high",
+                    "description": f"Stored XSS: {result.get('type', 'stored')}",
+                    "evidence": result.get("evidence", ""),
+                    "payload_used": result.get("payload", ""),
+                    "confidence": "medium",
+                    "needs_validation": True,
+                })
+        except Exception as exc:
+            logger.warning("technique.stored_xss_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_post_ssti(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test POST endpoints for SSTI."""
+    from bughound.tools.testing.post_tester import test_post_ssti
+
+    pc = await _load_param_classification(workspace_id)
+    pc_dict = pc[0] if pc and isinstance(pc[0], dict) else {}
+    post_eps = pc_dict.get("post_endpoints", [])
+
+    findings: list[dict[str, Any]] = []
+    for ep in post_eps[:10]:
+        url = ep.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts or not url:
+            continue
+        params = ep.get("params", [])
+        if not params:
+            continue
+
+        try:
+            result = await test_post_ssti(url, params)
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "ssti",
+                    "tool": "post_tester",
+                    "technique_id": "post_ssti",
+                    "host": host,
+                    "endpoint": url,
+                    "severity": "critical",
+                    "description": f"POST SSTI ({result.get('template_engine', 'unknown')} engine)",
+                    "evidence": result.get("evidence", ""),
+                    "payload_used": result.get("payload", ""),
+                    "confidence": "medium",
+                    "needs_validation": True,
+                })
+        except Exception as exc:
+            logger.warning("technique.post_ssti_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_post_rce(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test POST endpoints for command injection."""
+    from bughound.tools.testing.post_tester import test_post_rce
+
+    pc = await _load_param_classification(workspace_id)
+    pc_dict = pc[0] if pc and isinstance(pc[0], dict) else {}
+    post_eps = pc_dict.get("post_endpoints", [])
+
+    findings: list[dict[str, Any]] = []
+    for ep in post_eps[:5]:
+        url = ep.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts or not url:
+            continue
+        params = ep.get("params", [])
+        if not params:
+            continue
+
+        try:
+            result = await test_post_rce(url, params)
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "rce",
+                    "tool": "post_tester",
+                    "technique_id": "post_rce",
+                    "host": host,
+                    "endpoint": url,
+                    "severity": "critical",
+                    "description": f"POST command injection ({result.get('technique', 'unknown')})",
+                    "evidence": result.get("evidence", ""),
+                    "payload_used": result.get("payload", ""),
+                    "confidence": "medium",
+                    "needs_validation": True,
+                })
+        except Exception as exc:
+            logger.warning("technique.post_rce_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_path_idor(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Test path-based IDOR on URLs with ID-like segments."""
+    from bughound.tools.testing.injection_tester import test_path_idor
+
+    pc = await _load_param_classification(workspace_id)
+    pc_dict = pc[0] if pc and isinstance(pc[0], dict) else {}
+    candidates = pc_dict.get("path_idor_candidates", [])
+
+    sem = asyncio.Semaphore(concurrency)
+    findings: list[dict[str, Any]] = []
+
+    async def _test_one(c: dict[str, Any]) -> dict[str, Any] | None:
+        url = c.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts:
+            return None
+        async with sem:
+            try:
+                result = await test_path_idor(url)
+                if result.get("potential_idor"):
+                    return {
+                        "vulnerability_class": "idor",
+                        "tool": "injection_tester",
+                        "technique_id": "path_idor_test",
+                        "host": host,
+                        "endpoint": result.get("url", url),
+                        "severity": "medium",
+                        "description": f"Path IDOR: {result.get('segment_type', 'unknown')} segment '{result.get('path_segment', '')}'",
+                        "evidence": result.get("response_diff", ""),
+                        "confidence": result.get("confidence", "low"),
+                        "needs_validation": True,
+                    }
+            except Exception:
+                pass
+            return None
+
+    tasks = [_test_one(c) for c in candidates[:15]]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, dict):
+            findings.append(r)
+
+    return findings
+
+
+async def _exec_dom_xss(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Test for DOM-based XSS on crawled URLs."""
+    from bughound.tools.testing.dom_xss_tester import test_dom_xss
+
+    raw_urls = await workspace.read_data(workspace_id, "urls/crawled.json")
+    urls = _extract_items(raw_urls)
+
+    sem = asyncio.Semaphore(concurrency)
+    findings: list[dict[str, Any]] = []
+
+    async def _test_one(u: Any) -> list[dict[str, Any]]:
+        url = u.get("url", "") if isinstance(u, dict) else str(u)
+        host = _host_from_url(url)
+        if host not in approved_hosts:
+            return []
+        async with sem:
+            try:
+                result = await test_dom_xss(url)
+                if result.get("vulnerable"):
+                    out: list[dict[str, Any]] = []
+                    if result.get("method") == "playwright":
+                        for f in result.get("findings", []):
+                            out.append({
+                                "vulnerability_class": "xss",
+                                "tool": "dom_xss_tester",
+                                "technique_id": "dom_xss",
+                                "host": host,
+                                "endpoint": f.get("url", url),
+                                "severity": "high",
+                                "description": f"DOM XSS ({f.get('type', 'unknown')}): {f.get('injection_point', '')}",
+                                "evidence": f.get("evidence", ""),
+                                "payload_used": f.get("payload", ""),
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+                    else:
+                        # Lite mode — sink/source analysis
+                        out.append({
+                            "vulnerability_class": "xss",
+                            "tool": "dom_xss_tester",
+                            "technique_id": "dom_xss",
+                            "host": host,
+                            "endpoint": url,
+                            "severity": "medium",
+                            "description": f"Potential DOM XSS: {len(result.get('sinks', []))} sinks, {len(result.get('sources', []))} sources",
+                            "evidence": str(result.get("dangerous_flows", []))[:500],
+                            "confidence": "low",
+                            "needs_validation": True,
+                        })
+                    return out
+            except Exception:
+                pass
+            return []
+
+    # Test a sample of URLs — DOM XSS testing is slow
+    sample_urls = urls[:20]
+    tasks = [_test_one(u) for u in sample_urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, list):
+            findings.extend(r)
+
+    return findings
+
+
+async def _exec_mass_assignment(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test POST endpoints for mass assignment."""
+    from bughound.tools.testing.mass_assignment_tester import test_mass_assignment
+
+    pc = await _load_param_classification(workspace_id)
+    pc_dict = pc[0] if pc and isinstance(pc[0], dict) else {}
+    post_eps = pc_dict.get("post_endpoints", [])
+
+    # Get auth token for authenticated testing
+    auth_data = await _load_auth_discovery(workspace_id)
+    auth_token = None
+    for ad in auth_data:
+        if ad.get("auth_token"):
+            auth_token = ad["auth_token"]
+            break
+
+    findings: list[dict[str, Any]] = []
+    for ep in post_eps[:10]:
+        url = ep.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts or not url:
+            continue
+
+        params = ep.get("params", [])
+        original = {p: "test" for p in params} if params else None
+
+        try:
+            result = await test_mass_assignment(
+                url, original_params=original, auth_token=auth_token,
+            )
+            if result.get("vulnerable"):
+                for f in result.get("findings", []):
+                    findings.append({
+                        "vulnerability_class": "mass_assignment",
+                        "tool": "mass_assignment_tester",
+                        "technique_id": "mass_assignment_test",
+                        "host": host,
+                        "endpoint": url,
+                        "severity": f.get("severity", "high"),
+                        "description": f"Mass assignment: field '{f.get('field', '?')}' accepted",
+                        "evidence": f.get("evidence", ""),
+                        "payload_used": str(f.get("injected_value", "")),
+                        "confidence": "medium",
+                        "needs_validation": True,
+                    })
+        except Exception as exc:
+            logger.warning("technique.mass_assignment_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_cookie_xss(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test injectable cookies for XSS."""
+    from bughound.tools.testing.injection_tester import test_cookie_injection
+
+    auth_data = await _load_auth_discovery(workspace_id)
+    if not auth_data:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for auth in auth_data:
+        for cookie in auth.get("injectable_cookies", []):
+            cookie_name = cookie.get("name", "")
+            cookie_value = cookie.get("value", "")
+            target_url = auth.get("target_url", "")
+            if not target_url or not cookie_name:
+                continue
+
+            host = _host_from_url(target_url)
+            if host not in approved_hosts:
+                continue
+
+            try:
+                result = await test_cookie_injection(
+                    target_url, cookie_name, cookie_value, "xss",
+                )
+                if result.get("vulnerable"):
+                    findings.append({
+                        "vulnerability_class": "xss",
+                        "tool": "injection_tester",
+                        "technique_id": "cookie_xss",
+                        "host": host,
+                        "endpoint": target_url,
+                        "severity": "medium",
+                        "description": f"Cookie XSS in '{cookie_name}'",
+                        "evidence": result.get("evidence", ""),
+                        "payload_used": result.get("payload", ""),
+                        "confidence": "medium",
+                        "needs_validation": True,
+                    })
+            except Exception as exc:
+                logger.warning("technique.cookie_xss_error", error=str(exc))
 
     return findings
 
