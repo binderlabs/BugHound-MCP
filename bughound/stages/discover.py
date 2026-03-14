@@ -1008,7 +1008,10 @@ async def _run_discover(
             "httpx_time": f"{httpx_result.execution_time_seconds}s",
         },
         "warnings": warnings,
-        "next_step": "Call bughound_get_attack_surface to review the full attack surface with AI analysis.",
+        "next_step": (
+            "STOP here and present results to the user. "
+            "Do NOT proceed to the next stage unless the user explicitly asks."
+        ),
     }
 
 

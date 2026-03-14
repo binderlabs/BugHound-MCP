@@ -997,12 +997,8 @@ async def _run_tests(
         "warnings": warnings,
         "files_written": ["vulnerabilities/scan_results.json"] if all_findings else [],
         "next_step": (
-            "Review findings. Use bughound_validate_finding for findings that need "
-            "confirmation (sqli, xss, ssrf). Use bughound_generate_report for "
-            "definitive findings."
-            if all_findings
-            else "No findings. Consider broadening the scan plan or running "
-            "bughound_test_single with specific techniques."
+            "STOP here and present findings to the user. "
+            "Do NOT proceed to validation or reporting unless the user explicitly asks."
         ),
     }
 

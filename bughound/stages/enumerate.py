@@ -179,7 +179,10 @@ async def enumerate_light(workspace_id: str) -> dict[str, Any]:
             "patterns": patterns,
         },
         "warnings": warnings,
-        "next_step": "Call bughound_discover to probe live hosts and map the attack surface.",
+        "next_step": (
+            "STOP here and present results to the user. "
+            "Do NOT proceed to the next stage unless the user explicitly asks."
+        ),
     }
 
 

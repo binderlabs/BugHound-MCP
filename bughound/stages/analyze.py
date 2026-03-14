@@ -1834,9 +1834,8 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "directory_discovery": _summarize_dir_findings(data),
         "hidden_parameters": data.get("hidden_parameters", [])[:30],
         "next_step": (
-            "Review this analysis. For immediate wins, use bughound_generate_report "
-            "directly. For deeper testing, use bughound_submit_scan_plan to define "
-            "your strategy."
+            "STOP here and present this analysis to the user. Do NOT proceed to "
+            "the next stage unless the user explicitly asks. Wait for user instructions."
         ),
     }
 
@@ -2005,7 +2004,10 @@ async def submit_scan_plan(
         "tools_required": sorted(all_tools),
         "tools_available": tools_available,
         "tools_missing": tools_missing,
-        "next_step": "Call bughound_execute_tests to run the scan plan.",
+        "next_step": (
+            "STOP here and confirm to the user that the scan plan is approved. "
+            "Do NOT call bughound_execute_tests unless the user explicitly asks."
+        ),
     }
 
 
