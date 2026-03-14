@@ -334,6 +334,13 @@ _CATEGORY_MAP: dict[str, tuple[str, int]] = {
     "vulnerabilities": ("vulnerabilities/scan_results.json", 0),
     "waf": ("hosts/waf.json", 0),
     "attack_surface": ("analysis/attack_surface.json", 0),
+    "scan_plan": ("scan_plan.json", 0),
+    "findings": ("vulnerabilities/scan_results.json", 0),
+    "param_classification": ("urls/parameter_classification.json", 0),
+    "dynamic_urls": ("urls/dynamic_urls.json", 50),
+    "api_urls": ("urls/api_urls.json", 50),
+    "admin_urls": ("urls/admin_urls.json", 50),
+    "forms": ("urls/forms.json", 0),
 }
 
 
