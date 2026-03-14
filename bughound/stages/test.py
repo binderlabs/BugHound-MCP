@@ -447,6 +447,7 @@ async def _run_tests(
             "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
             "crlf", "idor", "header_injection", "rce",
             "graphql", "jwt", "misconfig", "default_creds",
+            "cors", "bac", "rate_limiting",
         ])
 
     async def _progress(pct: int, msg: str, module: str) -> None:
@@ -803,6 +804,7 @@ async def _run_tests(
         ("bac", "broken_access_control"),
         ("rate_limiting", "rate_limit_test"),
         ("mass_assignment", "mass_assignment_test"),
+        ("cors", "cors_misconfig"),
     ]
 
     # -- Build runnable task list (filter by test_class + availability) -

@@ -282,6 +282,15 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["xss"],
         "description": "Test injectable cookies for reflected XSS",
     },
+    {
+        "id": "cors_misconfig",
+        "name": "CORS Misconfiguration",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["cors_results"],
+        "vuln_classes": ["cors"],
+        "description": "Promote CORS misconfigurations detected in discovery to findings",
+    },
 ]
 
 # Test class → technique ID mapping
@@ -308,6 +317,7 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "file_exposure": ["nuclei_scan"],
     "rce": ["nuclei_scan", "rce_test", "post_rce"],
     "deserialization": ["cookie_deserialization"],
+    "cors": ["cors_misconfig"],
     "bac": ["broken_access_control"],
     "rate_limiting": ["rate_limit_test"],
     "mass_assignment": ["mass_assignment_test"],
@@ -500,6 +510,8 @@ async def execute_technique(
         return await _exec_mass_assignment(workspace_id, approved_hosts)
     elif technique_id == "cookie_xss":
         return await _exec_cookie_xss(workspace_id, approved_hosts)
+    elif technique_id == "cors_misconfig":
+        return await _exec_cors(workspace_id, approved_hosts)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -521,38 +533,49 @@ async def _exec_sqli_fuzz(
 
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, "sqli_candidates")
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=5)
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=15)
 
     findings: list[dict[str, Any]] = []
-    for c in scoped:
+    sem = asyncio.Semaphore(2)
+
+    async def _test_one(c: dict[str, Any]) -> list[dict[str, Any]]:
         url = c.get("url", "")
         param = c.get("param", "")
         if not url or not param:
-            continue
+            return []
 
-        # Build URL with param if needed
         test_url = url if f"{param}=" in url else f"{url}?{param}=1"
 
         try:
-            result = await sqlmap.execute(test_url, timeout=120)
-            if result.success and result.results:
-                for r in result.results:
-                    if isinstance(r, dict) and r.get("vulnerable"):
-                        findings.append({
-                            "vulnerability_class": "sqli",
-                            "tool": "sqlmap",
-                            "technique_id": "sqli_param_fuzz",
-                            "host": _host_from_url(url),
-                            "endpoint": test_url,
-                            "severity": "critical",
-                            "description": f"SQL injection confirmed in parameter '{param}'",
-                            "evidence": f"DB: {r.get('db_type', 'unknown')}, Payloads: {r.get('payloads', [])}",
-                            "payload_used": r.get("payloads", [""])[0] if r.get("payloads") else "",
-                            "confidence": "high",
-                            "needs_validation": False,
-                        })
+            async with sem:
+                result = await sqlmap.execute(test_url, timeout=120)
+                if result.success and result.results:
+                    hits = []
+                    for r in result.results:
+                        if isinstance(r, dict) and r.get("vulnerable"):
+                            hits.append({
+                                "vulnerability_class": "sqli",
+                                "tool": "sqlmap",
+                                "technique_id": "sqli_param_fuzz",
+                                "host": _host_from_url(url),
+                                "endpoint": test_url,
+                                "severity": "critical",
+                                "description": f"SQL injection confirmed in parameter '{param}'",
+                                "evidence": f"DB: {r.get('db_type', 'unknown')}, Payloads: {r.get('payloads', [])}",
+                                "payload_used": r.get("payloads", [""])[0] if r.get("payloads") else "",
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+                    return hits
         except Exception as exc:
             logger.warning("technique.sqli_error", url=url, error=str(exc))
+        return []
+
+    tasks = [_test_one(c) for c in scoped]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, list):
+            findings.extend(r)
 
     return findings
 
@@ -1040,6 +1063,22 @@ async def _exec_jwt(
                     "description": "JWT expiry not enforced — expired tokens accepted",
                     "confidence": "medium",
                     "needs_validation": True,
+                })
+            if result.get("weak_secret"):
+                desc = f"JWT weak secret cracked: '{result.get('cracked_secret', '')}'"
+                if result.get("forged_admin_token"):
+                    desc += " — admin token forgeable"
+                findings.append({
+                    "vulnerability_class": "jwt",
+                    "tool": "jwt_tester",
+                    "technique_id": "jwt_test",
+                    "host": source_host,
+                    "endpoint": target_url,
+                    "severity": "critical",
+                    "description": desc,
+                    "evidence": f"Secret: {result.get('cracked_secret', '')}, Algorithm: {result.get('original_alg', 'HS256')}",
+                    "confidence": "high",
+                    "needs_validation": False,
                 })
         except Exception as exc:
             logger.warning("technique.jwt_error", error=str(exc))
@@ -1543,6 +1582,53 @@ async def _exec_rate_limit(
                     })
             except Exception as exc:
                 logger.warning("technique.rate_limit_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_cors(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Promote CORS misconfigurations from Stage 2 to Stage 4 findings."""
+    raw = await workspace.read_data(workspace_id, "hosts/cors_results.json")
+    cors_results = _extract_items(raw)
+    if not cors_results:
+        return []
+
+    findings: list[dict[str, Any]] = []
+    for cr in cors_results:
+        url = cr.get("url", "")
+        host = _host_from_url(url)
+        if host not in approved_hosts:
+            continue
+
+        sev_map = {"CRITICAL": "critical", "HIGH": "high", "MEDIUM": "medium", "LOW": "low", "INFO": "info"}
+        severity = sev_map.get(cr.get("severity", "INFO"), "info")
+
+        # Skip INFO-level (wildcard without credentials) — not reportable
+        if severity == "info":
+            continue
+
+        origin = cr.get("origin_tested", "")
+        acao = cr.get("acao", "")
+        creds = cr.get("credentials_allowed", False)
+
+        desc = f"CORS misconfiguration: origin '{origin}' reflected in Access-Control-Allow-Origin"
+        if creds:
+            desc += " with credentials allowed"
+
+        findings.append({
+            "vulnerability_class": "cors",
+            "tool": "cors_checker",
+            "technique_id": "cors_misconfig",
+            "host": host,
+            "endpoint": url,
+            "severity": severity,
+            "description": desc,
+            "evidence": f"ACAO: {acao}, Origin: {origin}, Credentials: {creds}",
+            "confidence": "high",
+            "needs_validation": False,
+        })
 
     return findings
 

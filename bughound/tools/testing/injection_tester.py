@@ -505,14 +505,24 @@ async def test_idor(
         test_values: list[str] = []
         if original_value.isdigit():
             orig_int = int(original_value)
-            test_values = [str(orig_int + 1), str(max(0, orig_int - 1)), "0", "99999"]
+            test_values = [
+                str(orig_int + 1),
+                str(max(0, orig_int - 1)),
+                "0",
+                "1",
+                "2",
+                str(orig_int + 100),
+                "99999",
+            ]
         elif len(original_value) > 8 and all(c in "0123456789abcdef-" for c in original_value.lower()):
-            # UUID-like — modify last character
-            last = original_value[-1]
-            new_last = chr(ord(last) + 1) if last != "f" else "0"
-            test_values = [original_value[:-1] + new_last]
+            # UUID-like — try modified versions
+            import uuid
+            test_values = [
+                original_value[:-1] + ("0" if original_value[-1] != "0" else "1"),
+                str(uuid.uuid4()),  # completely different UUID
+            ]
         else:
-            test_values = ["admin", "test", "1"]
+            test_values = ["admin", "test", "1", "root", "me", "self"]
 
         for test_val in test_values:
             test_url = _replace_param(target_url, param, test_val)
@@ -608,19 +618,24 @@ async def test_path_idor(target_url: str) -> dict[str, Any]:
                     str(orig_int + 1),
                     str(max(0, orig_int - 1)),
                     "0",
+                    "1",
+                    "2",
+                    str(orig_int + 100),
                     "99999",
                 ]
             elif seg["type"] == "uuid":
-                # Modify last character
+                import uuid
                 last = original[-1]
-                new_last = chr(ord(last) + 1) if last != "f" else "0"
-                test_values = [original[:-1] + new_last]
+                test_values = [
+                    original[:-1] + ("0" if last != "0" else "1"),
+                    str(uuid.uuid4()),
+                ]
             elif seg["type"] == "hex":
                 last = original[-1]
                 new_last = chr(ord(last) + 1) if last.lower() != "f" else "0"
                 test_values = [original[:-1] + new_last]
             elif seg["type"] == "mixed":
-                test_values = ["admin", "test", "1"]
+                test_values = ["admin", "test", "1", "root", "me", "self"]
 
             for test_val in test_values:
                 test_parts = list(parts)
@@ -977,6 +992,8 @@ async def test_rce(
 _ADMIN_PATH_PATTERNS = [
     "/admin", "/dashboard", "/manage", "/internal", "/debug", "/config",
     "/settings", "/api/admin", "/api/internal", "/api/debug", "/api/private",
+    "/console", "/actuator", "/swagger", "/api-docs", "/graphiql",
+    "/phpmyadmin", "/wp-admin", "/manager", "/panel",
 ]
 
 
@@ -1031,6 +1048,11 @@ async def test_broken_access(
                 # Skip if response matches SPA catch-all (same size as homepage)
                 if baseline_size and abs(len(body) - baseline_size) < 50:
                     continue
+                # Skip SPA-like responses that are HTML shells (no real data)
+                if '<div id="root">' in body or '<div id="app">' in body:
+                    # SPA shell — check if body has actual data beyond the shell
+                    if body.count('<script') <= 3 and len(body) < 5000:
+                        continue
                 # Must be 200 with meaningful content, and look like data (JSON/HTML with data)
                 if status == 200 and len(body) > 100:
                     findings.append({
