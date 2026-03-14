@@ -21,8 +21,10 @@ SQLI_PARAMS: dict[str, Any] = {
         "sort", "group", "by", "having", "limit", "offset", "fetch", "row",
         "union", "insert", "update", "delete", "search", "filter", "results",
         "num", "count", "page", "field", "view", "process", "show", "col",
+        "cat", "category", "item", "product", "article", "key", "idx",
     },
-    "patterns": ["*_id", "*_no", "*_num", "*_number", "*_key", "*_pk", "*_fk"],
+    "patterns": ["*_id", "*_no", "*_num", "*_number", "*_key", "*_pk", "*_fk",
+                  "*id", "*num", "*no"],
 }
 
 XSS_PARAMS: dict[str, Any] = {
@@ -33,10 +35,11 @@ XSS_PARAMS: dict[str, Any] = {
         "placeholder", "data", "payload", "html", "xml", "callback", "jsonp",
         "func", "function", "handler", "error", "err", "msg", "alert",
         "redirect_uri", "return_url", "next",
+        "key", "term", "s", "w", "p", "txt", "val",
     },
     "patterns": [
         "*_name", "*_text", "*_value", "*_msg", "*_message", "*_content",
-        "*_title", "*_desc",
+        "*_title", "*_desc", "*name", "*search*", "*key*",
     ],
 }
 
@@ -323,6 +326,12 @@ def classify_parameters(
         urls_with_params.add(url)
 
         matched_types = _classify_one_param(param_lower)
+
+        # Catch-all: any GET param not matching specific patterns is still
+        # a potential XSS + SQLi target (user-controlled input = testable)
+        if not matched_types and method == "GET":
+            matched_types = ["xss", "sqli"]
+
         param_vuln_count.setdefault(param_lower, set()).update(matched_types)
 
         for vtype in matched_types:

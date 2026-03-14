@@ -452,7 +452,7 @@ async def _run_tests(
 
     # Always merge in low-cost, high-value classes that AI clients often omit
     all_test_classes.update([
-        "cors", "bac", "rate_limiting",
+        "cors", "bac", "rate_limiting", "cve_specific",
         "ssti", "csti", "crlf", "header_injection", "jwt", "graphql",
     ])
 
