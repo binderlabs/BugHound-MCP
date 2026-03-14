@@ -1331,9 +1331,31 @@ async def bughound_job_status(job_id: str) -> str:
         lines.append(f"**Module:** {status['current_module']}")
 
     if status.get("result_summary"):
-        lines.append(f"\n**Results:**")
-        for k, v in status["result_summary"].items():
-            lines.append(f"  - {k}: {v}")
+        rs = status["result_summary"]
+        lines.append("\n### Results\n")
+
+        table_rows: list[tuple[str, Any]] = []
+        detail_lines: list[str] = []
+        for k, v in rs.items():
+            if isinstance(v, dict):
+                flat = ", ".join(f"{sk}: {sv}" for sk, sv in v.items() if sv)
+                if flat:
+                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {flat}")
+            elif isinstance(v, list):
+                if v:
+                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {len(v)} items")
+            elif v or v == 0:
+                table_rows.append((k, v))
+
+        if table_rows:
+            lines.append("| Metric | Value |")
+            lines.append("|--------|-------|")
+            for k, v in table_rows:
+                lines.append(f"| {k.replace('_', ' ').title()} | {v} |")
+            lines.append("")
+
+        for dl in detail_lines:
+            lines.append(dl)
 
     if status.get("error"):
         lines.append(f"\n**Error:** {status['error']}")
@@ -1368,9 +1390,31 @@ async def bughound_job_results(job_id: str) -> str:
     lines.append(f"**Workspace:** `{status.get('workspace_id', 'unknown')}`")
 
     if status.get("result_summary"):
-        lines.append(f"\n**Results:**")
-        for k, v in status["result_summary"].items():
-            lines.append(f"  - {k}: {v}")
+        rs = status["result_summary"]
+        lines.append("\n### Results\n")
+
+        table_rows: list[tuple[str, Any]] = []
+        detail_lines: list[str] = []
+        for k, v in rs.items():
+            if isinstance(v, dict):
+                flat = ", ".join(f"{sk}: {sv}" for sk, sv in v.items() if sv)
+                if flat:
+                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {flat}")
+            elif isinstance(v, list):
+                if v:
+                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {len(v)} items")
+            elif v or v == 0:
+                table_rows.append((k, v))
+
+        if table_rows:
+            lines.append("| Metric | Value |")
+            lines.append("|--------|-------|")
+            for k, v in table_rows:
+                lines.append(f"| {k.replace('_', ' ').title()} | {v} |")
+            lines.append("")
+
+        for dl in detail_lines:
+            lines.append(dl)
 
     if status.get("error"):
         lines.append(f"\n**Error:** {status['error']}")
