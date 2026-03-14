@@ -1707,10 +1707,25 @@ def _summarize_param_classification(data: dict[str, list]) -> dict[str, Any]:
         if candidates:
             top_by_type[vtype] = candidates[:5]
 
+    # Highlight probe-confirmed params (from live reflection probing)
+    confirmed: list[dict[str, Any]] = []
+    for vtype in ("xss", "sqli", "lfi"):
+        for c in pc.get(f"{vtype}_candidates", []):
+            probe = c.get("probe")
+            if probe:
+                confirmed.append({
+                    "url": c.get("url", ""),
+                    "param": c.get("param", ""),
+                    "vuln_type": vtype,
+                    "probe_result": probe,
+                    "priority": "HIGH — confirmed by live probe",
+                })
+
     return {
         "available": True,
         "stats": stats,
         "high_value_params": high_value[:10],
+        "probe_confirmed": confirmed,
         "top_candidates_by_type": top_by_type,
         "file_upload_candidates": pc.get("file_upload_candidates", [])[:10],
         "post_endpoints": pc.get("post_endpoints", [])[:10],
