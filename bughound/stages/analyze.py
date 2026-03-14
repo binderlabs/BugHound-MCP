@@ -204,6 +204,16 @@ def _build_host_index(data: dict[str, list]) -> dict[str, dict[str, Any]]:
             if host in idx:
                 idx[host]["robots_disallowed"].append(rs.get("value", ""))
 
+    # Probe-confirmed vulnerabilities from parameter classification
+    param_class = data.get("parameter_classification", [])
+    pc = param_class[0] if param_class and isinstance(param_class[0], dict) else {}
+    for vtype in ("xss", "sqli", "lfi"):
+        for c in pc.get(f"{vtype}_candidates", []):
+            if c.get("probe"):
+                host = _host_from_url(c.get("url", ""))
+                if host in idx:
+                    idx[host].setdefault("probe_confirmed", {}).setdefault(vtype, []).append(c)
+
     return idx
 
 
@@ -215,6 +225,21 @@ def _score_host(host: str, info: dict[str, Any]) -> dict[str, Any]:
     flags_set = {f.split(":")[0] for f in flags_list}
     sp_paths = [sp.get("path", "") for sp in info["sensitive_paths"]]
     sp_cats = [sp.get("category", "") for sp in info["sensitive_paths"]]
+
+    # --- PROBE-CONFIRMED VULNS (highest priority) ---
+    probe_confirmed = info.get("probe_confirmed", {})
+    if probe_confirmed.get("sqli"):
+        score += _W_CRITICAL
+        sqli_endpoints = [p["url"] for p in probe_confirmed["sqli"][:3]]
+        reasons.append(f"CONFIRMED SQLi (live probe): {', '.join(sqli_endpoints)}")
+    if probe_confirmed.get("xss"):
+        score += _W_HIGH
+        xss_endpoints = [p["url"] for p in probe_confirmed["xss"][:3]]
+        reasons.append(f"CONFIRMED XSS reflection (live probe): {', '.join(xss_endpoints)}")
+    if probe_confirmed.get("lfi"):
+        score += _W_CRITICAL
+        lfi_endpoints = [p["url"] for p in probe_confirmed["lfi"][:3]]
+        reasons.append(f"CONFIRMED LFI (live probe): {', '.join(lfi_endpoints)}")
 
     # --- CRITICAL (50 each) ---
     for s in info["secrets"]:
