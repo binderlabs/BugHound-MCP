@@ -16,6 +16,7 @@ The AI client handles the feedback loop (find → re-recon → test more).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections import Counter
