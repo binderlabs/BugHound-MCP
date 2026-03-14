@@ -767,37 +767,84 @@ async def _run_tests(
         phase_stats["4D_pre_pipeline"] = 0
 
     # =================================================================
-    # Phase 4D: Value Fuzzing / Injection Testing (48-88%)
+    # Phase 4D+4E: Parallel Injection + Tech-Specific Testing (48-95%)
     # =================================================================
-    await _progress(48, "Phase 4D: Injection testing", "injection_tester")
+    await _progress(48, "Phase 4D+4E: Parallel injection & tech testing", "parallel")
 
+    # -- Technique definitions -----------------------------------------
     injection_techniques = [
-        ("sqli", "sqli_param_fuzz", 50, 54),
-        ("sqli", "cookie_sqli", 54, 55),
-        ("sqli", "post_sqli", 55, 57),
-        ("xss", "xss_param_fuzz", 57, 60),
-        ("xss", "stored_xss", 60, 62),
-        ("xss", "dom_xss", 62, 63),
-        ("xss", "cookie_xss", 63, 64),
-        ("ssrf", "ssrf_test", 64, 66),
-        ("open_redirect", "open_redirect_test", 66, 68),
-        ("lfi", "lfi_test", 68, 70),
-        ("rce", "rce_test", 70, 72),
-        ("rce", "post_rce", 72, 73),
-        ("idor", "idor_test", 73, 75),
-        ("idor", "path_idor_test", 75, 77),
-        ("crlf", "crlf_test", 77, 78),
-        ("ssti", "ssti_test", 78, 79),
-        ("ssti", "post_ssti", 79, 80),
-        ("deserialization", "cookie_deserialization", 80, 82),
-        ("header_injection", "header_injection_test", 82, 85),
+        ("sqli", "sqli_param_fuzz"),
+        ("sqli", "cookie_sqli"),
+        ("sqli", "post_sqli"),
+        ("xss", "xss_param_fuzz"),
+        ("xss", "stored_xss"),
+        ("xss", "dom_xss"),
+        ("xss", "cookie_xss"),
+        ("ssrf", "ssrf_test"),
+        ("open_redirect", "open_redirect_test"),
+        ("lfi", "lfi_test"),
+        ("rce", "rce_test"),
+        ("rce", "post_rce"),
+        ("idor", "idor_test"),
+        ("idor", "path_idor_test"),
+        ("crlf", "crlf_test"),
+        ("ssti", "ssti_test"),
+        ("ssti", "post_ssti"),
+        ("deserialization", "cookie_deserialization"),
+        ("header_injection", "header_injection_test"),
     ]
 
-    for test_class, technique_id, pct_start, pct_end in injection_techniques:
+    tech_specific = [
+        ("graphql", "graphql_test"),
+        ("jwt", "jwt_test"),
+        ("wordpress", "wordpress_test"),
+        ("spring", "spring_actuator_test"),
+        ("bac", "broken_access_control"),
+        ("rate_limiting", "rate_limit_test"),
+        ("mass_assignment", "mass_assignment_test"),
+    ]
+
+    # -- Build runnable task list (filter by test_class + availability) -
+    # Heavy tools that spawn subprocesses — limit concurrency
+    _HEAVY_TECHNIQUES = {"sqli_param_fuzz", "xss_param_fuzz", "deep_dirfuzz"}
+    heavy_sem = asyncio.Semaphore(2)   # max 2 external-tool techniques
+    light_sem = asyncio.Semaphore(6)   # max 6 pure-Python techniques
+
+    async def _run_technique(
+        technique_id: str, phase_prefix: str,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Run a single technique with semaphore control. Returns (id, findings)."""
+        sem = heavy_sem if technique_id in _HEAVY_TECHNIQUES else light_sem
+        async with sem:
+            logger.info(
+                "technique.parallel_start", technique_id=technique_id,
+            )
+            try:
+                tech_findings = await techniques.execute_technique(
+                    technique_id, workspace_id, sorted_targets,
+                )
+                for f in tech_findings:
+                    f["finding_id"] = _make_finding_id(f)
+                    f.setdefault("validated", False)
+                    f.setdefault("validation_status", None)
+                    if f.get("tool") in _TOOL_DEFINITIVE:
+                        f["needs_validation"] = False
+                return technique_id, tech_findings
+            except Exception as exc:
+                logger.warning(
+                    "technique.parallel_error",
+                    technique_id=technique_id, error=str(exc),
+                )
+                return technique_id, []
+
+    # -- Collect tasks --------------------------------------------------
+    parallel_tasks: list[asyncio.Task] = []
+    task_meta: dict[str, str] = {}  # technique_id -> phase_prefix
+
+    for test_class, technique_id in injection_techniques:
         if test_class not in all_test_classes:
             phase_stats[f"4D_{technique_id}"] = 0
             continue
-
         avail = techniques.check_technique_availability(
             next((t for t in techniques.TECHNIQUE_REGISTRY if t["id"] == technique_id), {}),
         )
@@ -805,59 +852,51 @@ async def _run_tests(
             warnings.append(f"{technique_id}: missing {avail.get('missing_tools', [])}")
             phase_stats[f"4D_{technique_id}"] = 0
             continue
+        task = asyncio.create_task(
+            _run_technique(technique_id, "4D"),
+            name=f"4D_{technique_id}",
+        )
+        parallel_tasks.append(task)
+        task_meta[technique_id] = "4D"
 
-        await _progress(pct_start, f"Phase 4D: {technique_id}", technique_id)
-
-        try:
-            tech_findings = await techniques.execute_technique(
-                technique_id, workspace_id, sorted_targets,
-            )
-            for f in tech_findings:
-                f["finding_id"] = _make_finding_id(f)
-                f.setdefault("validated", False)
-                f.setdefault("validation_status", None)
-                # Override needs_validation for definitive tools
-                if f.get("tool") in _TOOL_DEFINITIVE:
-                    f["needs_validation"] = False
-            all_findings.extend(tech_findings)
-            phase_stats[f"4D_{technique_id}"] = len(tech_findings)
-        except Exception as exc:
-            warnings.append(f"{technique_id} error: {exc}")
-            phase_stats[f"4D_{technique_id}"] = 0
-
-    # =================================================================
-    # Phase 4E: Technology-Specific Tests (88-99%)
-    # =================================================================
-    tech_specific = [
-        ("graphql", "graphql_test", 85, 87),
-        ("jwt", "jwt_test", 87, 88),
-        ("wordpress", "wordpress_test", 88, 90),
-        ("spring", "spring_actuator_test", 90, 91),
-        ("bac", "broken_access_control", 91, 93),
-        ("rate_limiting", "rate_limit_test", 93, 94),
-        ("mass_assignment", "mass_assignment_test", 94, 95),
-    ]
-
-    for test_class, technique_id, pct_start, pct_end in tech_specific:
+    for test_class, technique_id in tech_specific:
         if test_class not in all_test_classes:
             phase_stats[f"4E_{technique_id}"] = 0
             continue
+        task = asyncio.create_task(
+            _run_technique(technique_id, "4E"),
+            name=f"4E_{technique_id}",
+        )
+        parallel_tasks.append(task)
+        task_meta[technique_id] = "4E"
 
-        await _progress(pct_start, f"Phase 4E: {technique_id}", technique_id)
+    # -- Execute all in parallel with progress updates ------------------
+    total_tasks = len(parallel_tasks)
+    if total_tasks > 0:
+        await _progress(
+            50,
+            f"Phase 4D+4E: Running {total_tasks} techniques in parallel "
+            f"(heavy={heavy_sem._value} slots, light={light_sem._value} slots)",
+            "parallel",
+        )
 
-        try:
-            tech_findings = await techniques.execute_technique(
-                technique_id, workspace_id, sorted_targets,
+        completed = 0
+        for coro in asyncio.as_completed(parallel_tasks):
+            technique_id, tech_findings = await coro
+            completed += 1
+            prefix = task_meta.get(technique_id, "4D")
+            phase_stats[f"{prefix}_{technique_id}"] = len(tech_findings)
+            if tech_findings:
+                all_findings.extend(tech_findings)
+
+            # Progress: 50% → 95% spread across tasks
+            pct = 50 + int(45 * completed / total_tasks)
+            await _progress(
+                pct,
+                f"Completed {technique_id} ({len(tech_findings)} findings) "
+                f"[{completed}/{total_tasks}]",
+                technique_id,
             )
-            for f in tech_findings:
-                f["finding_id"] = _make_finding_id(f)
-                f.setdefault("validated", False)
-                f.setdefault("validation_status", None)
-            all_findings.extend(tech_findings)
-            phase_stats[f"4E_{technique_id}"] = len(tech_findings)
-        except Exception as exc:
-            warnings.append(f"{technique_id} error: {exc}")
-            phase_stats[f"4E_{technique_id}"] = 0
 
     # =================================================================
     # Phase 4F: Insecure Cookie Configuration Findings
