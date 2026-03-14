@@ -1,15 +1,22 @@
-"""Parameter classification engine — gf-style pattern matching, pure Python.
+"""Parameter classification engine — pattern matching + live reflection probes.
 
-Classifies discovered parameters by vulnerability type so Stage 3/4 can
-prioritize testing. A single parameter can match multiple vuln types.
+Phase 1: gf-style pattern matching classifies params by name.
+Phase 2: lightweight HTTP probes detect reflection (XSS), SQL errors (SQLi),
+          and path traversal indicators (LFI) regardless of param names.
 """
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import re
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
+import aiohttp
+import structlog
+
+logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
 # Vulnerability parameter patterns
@@ -456,3 +463,206 @@ def classify_parameters(
         "high_value_params": high_value[:30],
         "stats": stats,
     }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Live reflection probes (async)
+# ---------------------------------------------------------------------------
+
+_PROBE_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_PROBE_HEADERS = {"User-Agent": "Mozilla/5.0 (BugHound Scanner)"}
+_PROBE_MARKER = "bh7r3f"  # unique marker unlikely to appear naturally
+
+# SQL error patterns across databases
+_SQL_ERROR_RE = re.compile(
+    r"SQL syntax|ORA-\d{5}|PG::SyntaxError|mysql_fetch|"
+    r"sqlite3\.OperationalError|ODBC SQL Server|"
+    r"Unclosed quotation mark|quoted string not properly terminated|"
+    r"SQL command not properly ended|"
+    r"Microsoft OLE DB|JET Database|"
+    r"unterminated string|syntax error at or near|"
+    r"You have an error in your SQL|"
+    r"java\.sql\.SQLException|"
+    r"PostgreSQL.*ERROR|"
+    r"Warning.*mysql_|"
+    r"SQLite.*error",
+    re.I,
+)
+
+# LFI indicators
+_LFI_INDICATOR_RE = re.compile(
+    r"root:x:0:0|/bin/bash|/bin/sh|daemon:x:|"
+    r"\[boot loader\]|\\windows\\system32|"
+    r"No such file or directory",
+    re.I,
+)
+
+
+def _replace_param_value(url: str, param: str, new_value: str) -> str:
+    """Replace a query parameter value in a URL."""
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    if param in qs:
+        qs[param] = [new_value]
+    else:
+        qs[param] = [new_value]
+    new_query = urlencode(qs, doseq=True)
+    return urlunparse(parsed._replace(query=new_query))
+
+
+async def probe_reflection(
+    classification: dict[str, Any],
+    concurrency: int = 8,
+    max_params: int = 60,
+) -> dict[str, Any]:
+    """Live-probe params to detect reflection, SQL errors, and LFI indicators.
+
+    Enriches classification with high-confidence candidates found through
+    actual HTTP probing rather than name matching alone.
+
+    Sends 2-3 lightweight requests per param:
+      1. Marker probe: inject unique string, check if reflected in response
+      2. SQLi probe: inject single quote, check for SQL error messages
+      3. LFI probe (if not already LFI candidate): inject traversal path
+
+    Returns the enriched classification dict.
+    """
+    # Collect all unique (url, param) pairs from crawled URLs
+    all_params: list[tuple[str, str, str]] = []  # (url, param, sample_value)
+    seen: set[str] = set()
+
+    for key in ("xss_candidates", "sqli_candidates", "lfi_candidates",
+                "ssrf_candidates", "ssti_candidates", "redirect_candidates",
+                "idor_candidates", "rce_candidates"):
+        for c in classification.get(key, []):
+            url = c.get("url", "")
+            param = c.get("param", "")
+            if url and param:
+                dk = f"{url}:{param}"
+                if dk not in seen:
+                    seen.add(dk)
+                    all_params.append((url, param, c.get("sample_value", "")))
+
+    if not all_params:
+        return classification
+
+    # Limit to avoid excessive probing
+    all_params = all_params[:max_params]
+
+    sem = asyncio.Semaphore(concurrency)
+    new_xss: list[dict[str, Any]] = []
+    new_sqli: list[dict[str, Any]] = []
+    new_lfi: list[dict[str, Any]] = []
+    probed_count = 0
+
+    # Track what's already classified to avoid duplicates
+    existing_xss = {f"{c['url']}:{c['param']}" for c in classification.get("xss_candidates", [])}
+    existing_sqli = {f"{c['url']}:{c['param']}" for c in classification.get("sqli_candidates", [])}
+    existing_lfi = {f"{c['url']}:{c['param']}" for c in classification.get("lfi_candidates", [])}
+
+    async def _probe_one(url: str, param: str, sample: str) -> None:
+        nonlocal probed_count
+        async with sem:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    # --- Probe 1: Reflection check ---
+                    marker_url = _replace_param_value(url, param, _PROBE_MARKER)
+                    try:
+                        async with session.get(
+                            marker_url, headers=_PROBE_HEADERS,
+                            timeout=_PROBE_TIMEOUT, ssl=False,
+                            allow_redirects=True,
+                        ) as resp:
+                            body = await resp.text(errors="replace")
+                            ct = resp.headers.get("content-type", "")
+
+                            # If marker reflected in HTML body → XSS candidate
+                            if _PROBE_MARKER in body and "text/html" in ct:
+                                dk = f"{url}:{param}"
+                                if dk not in existing_xss:
+                                    new_xss.append({
+                                        "url": url, "param": param,
+                                        "sample_value": sample, "method": "GET",
+                                        "probe": "reflected",
+                                    })
+                    except Exception:
+                        pass
+
+                    # --- Probe 2: SQLi error check ---
+                    sqli_url = _replace_param_value(url, param, "1'")
+                    try:
+                        async with session.get(
+                            sqli_url, headers=_PROBE_HEADERS,
+                            timeout=_PROBE_TIMEOUT, ssl=False,
+                            allow_redirects=True,
+                        ) as resp:
+                            body = await resp.text(errors="replace")
+
+                            if _SQL_ERROR_RE.search(body):
+                                dk = f"{url}:{param}"
+                                if dk not in existing_sqli:
+                                    new_sqli.append({
+                                        "url": url, "param": param,
+                                        "sample_value": sample, "method": "GET",
+                                        "probe": "sql_error",
+                                    })
+                    except Exception:
+                        pass
+
+                    # --- Probe 3: LFI check (only if not already LFI) ---
+                    dk = f"{url}:{param}"
+                    if dk not in existing_lfi:
+                        lfi_url = _replace_param_value(
+                            url, param, "../../../../etc/passwd",
+                        )
+                        try:
+                            async with session.get(
+                                lfi_url, headers=_PROBE_HEADERS,
+                                timeout=_PROBE_TIMEOUT, ssl=False,
+                                allow_redirects=True,
+                            ) as resp:
+                                body = await resp.text(errors="replace")
+                                if _LFI_INDICATOR_RE.search(body):
+                                    new_lfi.append({
+                                        "url": url, "param": param,
+                                        "sample_value": sample, "method": "GET",
+                                        "probe": "lfi_confirmed",
+                                    })
+                        except Exception:
+                            pass
+
+                    probed_count += 1
+            except Exception:
+                pass
+
+    tasks = [_probe_one(url, param, sample) for url, param, sample in all_params]
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Merge new findings into classification
+    if new_xss:
+        classification.setdefault("xss_candidates", []).extend(new_xss)
+    if new_sqli:
+        classification.setdefault("sqli_candidates", []).extend(new_sqli)
+    if new_lfi:
+        classification.setdefault("lfi_candidates", []).extend(new_lfi)
+
+    # Update stats
+    stats = classification.get("stats", {})
+    stats["probe_total"] = probed_count
+    stats["probe_xss_found"] = len(new_xss)
+    stats["probe_sqli_found"] = len(new_sqli)
+    stats["probe_lfi_found"] = len(new_lfi)
+    stats["xss_count"] = len(classification.get("xss_candidates", []))
+    stats["sqli_count"] = len(classification.get("sqli_candidates", []))
+    stats["lfi_count"] = len(classification.get("lfi_candidates", []))
+
+    if new_xss or new_sqli or new_lfi:
+        logger.info(
+            "param_probe.results",
+            probed=probed_count,
+            xss_found=len(new_xss),
+            sqli_found=len(new_sqli),
+            lfi_found=len(new_lfi),
+        )
+
+    return classification

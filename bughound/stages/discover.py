@@ -864,6 +864,16 @@ async def _run_discover(
             urls_items, params_items, hidden_ep_items, forms_items,
         )
 
+        # Phase 2: Live reflection probes — detect XSS/SQLi/LFI by behavior
+        if progress_cb:
+            await progress_cb(82, "Probing params for reflection & SQL errors", "probe")
+        try:
+            param_classification = await param_classifier.probe_reflection(
+                param_classification, concurrency=8, max_params=60,
+            )
+        except Exception as exc:
+            warnings.append(f"Reflection probe failed: {exc}")
+
         await workspace.write_data(
             workspace_id, "urls/parameter_classification.json",
             [param_classification],  # wrap in list for DataWrapper
