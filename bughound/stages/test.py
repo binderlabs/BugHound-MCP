@@ -785,6 +785,7 @@ async def _run_tests(
         ("sqli", "cookie_sqli"),
         ("sqli", "post_sqli"),
         ("xss", "xss_param_fuzz"),
+        ("xss", "reflected_xss_test"),
         ("xss", "stored_xss"),
         ("xss", "dom_xss"),
         ("xss", "cookie_xss"),

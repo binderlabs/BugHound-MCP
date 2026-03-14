@@ -416,6 +416,121 @@ _CSTI_PAYLOADS = [
     ("#{7*7}", "49", "generic_el"),
 ]
 
+# ---------------------------------------------------------------------------
+# Reflected XSS Testing (pure-Python fallback when dalfox unavailable)
+# ---------------------------------------------------------------------------
+
+# Unique marker to avoid false positives from common words
+_XSS_MARKER = "bughound9x5s"
+
+_REFLECTED_XSS_PAYLOADS = [
+    # Basic reflection probes — check if marker appears unescaped in HTML
+    (f'<script>{_XSS_MARKER}</script>', f"<script>{_XSS_MARKER}</script>"),
+    (f'"><script>{_XSS_MARKER}</script>', f"<script>{_XSS_MARKER}</script>"),
+    (f"'><script>{_XSS_MARKER}</script>", f"<script>{_XSS_MARKER}</script>"),
+    # Event handler payloads
+    (f'"><img src=x onerror={_XSS_MARKER}>', f"onerror={_XSS_MARKER}"),
+    (f"'><img src=x onerror={_XSS_MARKER}>", f"onerror={_XSS_MARKER}"),
+    (f'" onfocus={_XSS_MARKER} autofocus="', f"onfocus={_XSS_MARKER}"),
+    # SVG/details
+    (f"<svg/onload={_XSS_MARKER}>", f"onload={_XSS_MARKER}"),
+    (f"<details open ontoggle={_XSS_MARKER}>", f"ontoggle={_XSS_MARKER}"),
+    # Template literal (inside JS context)
+    (f"${{`{_XSS_MARKER}`}}", _XSS_MARKER),
+    # Href javascript
+    (f'javascript:void("{_XSS_MARKER}")', f'javascript:void("{_XSS_MARKER}")'),
+]
+
+# Context detection: what kind of HTML context is the reflection in?
+_CONTEXT_PATTERNS = [
+    (re.compile(r'<script[^>]*>[^<]*' + _XSS_MARKER), "js_context"),
+    (re.compile(r'<[a-z][^>]*=["\'][^"\']*' + _XSS_MARKER), "attr_context"),
+    (re.compile(r'<[a-z][^>]*' + _XSS_MARKER), "tag_context"),
+]
+
+
+async def test_reflected_xss(
+    target_url: str, param: str, original_value: str,
+) -> dict[str, Any]:
+    """Test for reflected XSS by injecting payloads and checking HTML response."""
+    async with aiohttp.ClientSession() as session:
+        # Baseline — check response content type
+        baseline_status, baseline_body, baseline_headers = await _send(
+            session, target_url,
+        )
+        if baseline_status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        # Skip JSON-only APIs — XSS requires HTML context
+        content_type = baseline_headers.get("content-type", "")
+        is_html = "text/html" in content_type or "text/xml" in content_type
+
+        # Phase 1: Simple reflection check — does the marker appear in response?
+        probe_url = _replace_param(target_url, param, _XSS_MARKER)
+        status, body, headers = await _send(session, probe_url)
+
+        if status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        ct = headers.get("content-type", "")
+        if "application/json" in ct and "text/html" not in ct:
+            # Pure JSON response — no HTML reflection possible
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        if _XSS_MARKER not in body:
+            # Input not reflected at all — no XSS possible
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        # Detect reflection context
+        context = "html_body"
+        for pattern, ctx_name in _CONTEXT_PATTERNS:
+            if pattern.search(body):
+                context = ctx_name
+                break
+
+        # Phase 2: Try actual XSS payloads
+        for payload, indicator in _REFLECTED_XSS_PAYLOADS:
+            test_url = _replace_param(target_url, param, payload)
+            status, body, headers = await _send(session, test_url)
+
+            if status == 0:
+                continue
+
+            ct = headers.get("content-type", "")
+            if "application/json" in ct and "text/html" not in ct:
+                continue
+
+            # Check if payload indicator appears unescaped
+            if indicator in body:
+                # Verify it's not in baseline (avoid FP from static content)
+                if indicator not in baseline_body:
+                    return {
+                        "vulnerable": True,
+                        "url": test_url,
+                        "param": param,
+                        "payload": payload,
+                        "evidence": f"Reflected XSS: payload indicator '{indicator}' found unescaped in HTML response",
+                        "context": context,
+                        "confidence": "high",
+                    }
+
+        # Phase 3: Check if basic HTML tags survive (partial reflection)
+        tag_probe = _replace_param(target_url, param, f"<b>{_XSS_MARKER}</b>")
+        status, body, headers = await _send(session, tag_probe)
+        if status > 0 and f"<b>{_XSS_MARKER}</b>" in body:
+            return {
+                "vulnerable": True,
+                "url": tag_probe,
+                "param": param,
+                "payload": f"<b>{_XSS_MARKER}</b>",
+                "evidence": "HTML tags reflected unescaped — XSS likely exploitable",
+                "context": context,
+                "confidence": "medium",
+            }
+
+    return {"vulnerable": False, "url": target_url, "param": param}
+
+
 # Polyglot probe — detect which engine is in use
 _CSTI_PROBE = "{{7*7}}${7*7}#{7*7}<%= 7*7 %>"
 

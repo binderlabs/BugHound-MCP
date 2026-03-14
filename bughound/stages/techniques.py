@@ -292,6 +292,15 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "description": "Test injectable cookies for reflected XSS",
     },
     {
+        "id": "reflected_xss_test",
+        "name": "Reflected XSS Testing (Pure-Python)",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.xss_candidates"],
+        "vuln_classes": ["xss"],
+        "description": "Pure-Python reflected XSS testing — fallback when dalfox unavailable or for additional coverage",
+    },
+    {
         "id": "cors_misconfig",
         "name": "CORS Misconfiguration",
         "phase": "4E",
@@ -305,7 +314,7 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
 # Test class → technique ID mapping
 _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "sqli": ["nuclei_scan", "sqli_param_fuzz", "cookie_sqli", "post_sqli"],
-    "xss": ["nuclei_scan", "xss_param_fuzz", "stored_xss", "dom_xss", "cookie_xss"],
+    "xss": ["nuclei_scan", "xss_param_fuzz", "reflected_xss_test", "stored_xss", "dom_xss", "cookie_xss"],
     "ssrf": ["nuclei_scan", "ssrf_test"],
     "lfi": ["nuclei_scan", "lfi_test"],
     "rfi": ["nuclei_scan"],
@@ -504,6 +513,8 @@ async def execute_technique(
         return await _exec_ssti(workspace_id, approved_hosts, concurrency)
     elif technique_id == "csti_test":
         return await _exec_csti(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "reflected_xss_test":
+        return await _exec_reflected_xss(workspace_id, approved_hosts, concurrency)
     elif technique_id == "header_injection_test":
         return await _exec_header_injection(workspace_id, approved_hosts, concurrency)
     elif technique_id == "graphql_test":
@@ -953,6 +964,35 @@ async def _exec_csti(
 
     return await _run_injection_batch_direct(
         scoped, test_csti, "csti", "csti_test", "medium", concurrency,
+    )
+
+
+async def _exec_reflected_xss(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Pure-Python reflected XSS testing — runs alongside dalfox for extra coverage."""
+    from urllib.parse import urlparse, urlunparse
+    from bughound.tools.testing.injection_tester import test_reflected_xss
+
+    pc = await _load_param_classification(workspace_id)
+    candidates = _get_param_candidates(pc, "xss_candidates")
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=15)
+
+    # Generate frontend URL variants for API endpoints
+    extra: list[dict[str, Any]] = []
+    seen_urls: set[str] = {c.get("url", "") for c in scoped}
+    for c in scoped:
+        url = c.get("url", "")
+        parsed = urlparse(url)
+        if "/api/" in parsed.path or parsed.path.startswith("/api"):
+            frontend_url = urlunparse(parsed._replace(path="/"))
+            if frontend_url not in seen_urls:
+                seen_urls.add(frontend_url)
+                extra.append({**c, "url": frontend_url})
+    scoped.extend(extra)
+
+    return await _run_injection_batch_direct(
+        scoped, test_reflected_xss, "xss", "reflected_xss_test", "high", concurrency,
     )
 
 
