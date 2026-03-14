@@ -1715,6 +1715,120 @@ def _summarize_forms(data: dict[str, list]) -> dict[str, Any]:
     }
 
 
+def _generate_reasoning_prompts(
+    host_idx: dict[str, dict[str, Any]],
+    data: dict[str, list],
+    chains: list[dict[str, Any]],
+    wins: list[dict[str, Any]],
+) -> list[str]:
+    """Generate context-aware prompts that guide the AI client's reasoning.
+
+    These are NOT instructions — they're observations and questions that
+    help the AI think deeper about the attack surface.
+    """
+    prompts: list[str] = []
+
+    # Probe-confirmed findings
+    for host, info in host_idx.items():
+        pc = info.get("probe_confirmed", {})
+        if pc.get("sqli"):
+            endpoints = [p.get("url", "") for p in pc["sqli"][:3]]
+            prompts.append(
+                f"{host} has CONFIRMED SQL injection on: {', '.join(endpoints)}. "
+                "Consider: what database is behind it? Can you extract credentials? "
+                "Is there a login page that uses the same database?"
+            )
+        if pc.get("xss"):
+            endpoints = [p.get("url", "") for p in pc["xss"][:3]]
+            prompts.append(
+                f"{host} reflects user input on: {', '.join(endpoints)}. "
+                "Consider: is there a login page? Can you steal session cookies? "
+                "Are there stored input fields (comments, profiles) for stored XSS?"
+            )
+        if pc.get("lfi"):
+            endpoints = [p.get("url", "") for p in pc["lfi"][:3]]
+            prompts.append(
+                f"{host} has CONFIRMED LFI on: {', '.join(endpoints)}. "
+                "Consider: can you read /etc/passwd, .env files, or application config? "
+                "Can you chain with log poisoning for RCE?"
+            )
+
+    # WAF observations
+    for host, info in host_idx.items():
+        waf = info.get("waf")
+        if waf and not waf.get("detected"):
+            total_params = sum(len(p.get("params", [])) for p in info["parameters"])
+            if total_params > 5:
+                prompts.append(
+                    f"{host} has NO WAF protection and {total_params} injectable parameters. "
+                    "Direct exploitation is possible without bypass techniques."
+                )
+
+    # GraphQL
+    for host, info in host_idx.items():
+        if any("GRAPHQL" in f for f in info["flags"]):
+            prompts.append(
+                f"{host} has a GraphQL endpoint. Consider: is introspection enabled? "
+                "Can you discover mutations for data modification? "
+                "Is there query depth limiting (DoS risk)?"
+            )
+
+    # Auth + injectable cookies
+    for host, info in host_idx.items():
+        if any("INJECTABLE_COOKIES" in f for f in info["flags"]):
+            prompts.append(
+                f"{host} has injectable cookies (base64/JSON/serialized data). "
+                "Consider: test for insecure deserialization, SQLi via cookie values, "
+                "and session manipulation."
+            )
+
+    # JWT
+    auth_items = _extract_items(data.get("auth_discovery"))
+    for auth in auth_items:
+        if auth.get("auth_token", "").startswith("eyJ"):
+            prompts.append(
+                f"JWT token found on {auth.get('host', '?')}. "
+                "Consider: is the secret weak (dictionary crackable)? "
+                "Does alg:none bypass work? Can you forge admin tokens?"
+            )
+
+    # Admin paths exposed
+    for host, info in host_idx.items():
+        admin_flags = [f for f in info["flags"] if "ADMIN" in f]
+        if admin_flags:
+            prompts.append(
+                f"{host} has exposed admin paths. "
+                "Consider: test unauthenticated access, default credentials, "
+                "verb tampering (POST/PUT on 403 endpoints), and path traversal bypasses."
+            )
+
+    # Attack chain hints
+    for chain in chains[:3]:
+        prompts.append(
+            f"Attack chain '{chain.get('name', '?')}': {' → '.join(chain.get('exploitation_steps', [])[:3])}. "
+            f"Estimated bounty: {chain.get('bounty_estimate', '?')}."
+        )
+
+    # Immediate wins
+    if wins:
+        prompts.append(
+            f"{len(wins)} immediate wins found (report-ready without testing). "
+            "Consider: submit these to the bug bounty program first while testing continues."
+        )
+
+    # CORS with credentials
+    for host, info in host_idx.items():
+        crit_cors = [c for c in info["cors"] if c.get("credentials_allowed")]
+        if crit_cors:
+            prompts.append(
+                f"{host} has CORS misconfiguration with credentials allowed. "
+                "Consider: can you exfiltrate user data cross-origin? "
+                "Chain with XSS for full account takeover."
+            )
+
+    return prompts[:15]  # Cap at 15 to avoid noise
+
+
 def _summarize_param_classification(data: dict[str, list]) -> dict[str, Any]:
     """Summarize parameter classification for attack surface output."""
     param_class = _extract_items(data.get("parameter_classification"))
@@ -1851,6 +1965,9 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
     flags_sum = _flags_summary(data)
     test_classes = _suggest_test_classes(chains, playbooks, data)
 
+    # Reasoning prompts — guide the AI client's thinking
+    reasoning = _generate_reasoning_prompts(host_idx, data, chains, wins)
+
     # Mark complete
     await workspace.add_stage_history(workspace_id, 3, "completed")
 
@@ -1873,6 +1990,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "parameter_classification": _summarize_param_classification(data),
         "directory_discovery": _summarize_dir_findings(data),
         "hidden_parameters": data.get("hidden_parameters", [])[:30],
+        "reasoning_prompts": reasoning,
         "next_step": (
             "Analysis complete. Present results to user and await further instructions."
         ),
