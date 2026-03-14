@@ -997,8 +997,7 @@ async def _run_tests(
         "warnings": warnings,
         "files_written": ["vulnerabilities/scan_results.json"] if all_findings else [],
         "next_step": (
-            "STOP here and present findings to the user. "
-            "Do NOT proceed to validation or reporting unless the user explicitly asks."
+            "Testing complete. Present findings to user and await further instructions."
         ),
     }
 

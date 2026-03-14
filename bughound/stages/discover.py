@@ -1009,8 +1009,7 @@ async def _run_discover(
         },
         "warnings": warnings,
         "next_step": (
-            "STOP here and present results to the user. "
-            "Do NOT proceed to the next stage unless the user explicitly asks."
+            "Discovery complete. Present results to user and await further instructions."
         ),
     }
 

@@ -1834,8 +1834,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "directory_discovery": _summarize_dir_findings(data),
         "hidden_parameters": data.get("hidden_parameters", [])[:30],
         "next_step": (
-            "STOP here and present this analysis to the user. Do NOT proceed to "
-            "the next stage unless the user explicitly asks. Wait for user instructions."
+            "Analysis complete. Present results to user and await further instructions."
         ),
     }
 
@@ -2005,8 +2004,7 @@ async def submit_scan_plan(
         "tools_available": tools_available,
         "tools_missing": tools_missing,
         "next_step": (
-            "STOP here and confirm to the user that the scan plan is approved. "
-            "Do NOT call bughound_execute_tests unless the user explicitly asks."
+            "Scan plan approved. Present confirmation to user and await further instructions."
         ),
     }
 

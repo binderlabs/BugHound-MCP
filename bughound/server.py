@@ -639,7 +639,10 @@ _CATEGORY_FORMATTERS: dict[str, Any] = {
         "Discover subdomains for a broad domain target. Stage 1: runs passive "
         "subdomain sources (subfinder, assetfinder, findomain, crt.sh) in parallel, "
         "resolves DNS, detects wildcards, and analyzes naming patterns. Requires "
-        "bughound_init first. Auto-skips for non-domain targets. Sync, ~30-60s."
+        "bughound_init first. Auto-skips for non-domain targets. Sync, ~30-60s. "
+        "IMPORTANT: After results, present them to the user and WAIT. "
+        "Do NOT automatically call bughound_discover. "
+        "Each stage requires explicit user approval before proceeding."
     ),
 )
 async def bughound_enumerate(workspace_id: str) -> str:
@@ -698,8 +701,10 @@ async def bughound_discover(workspace_id: str) -> str:
         "Get comprehensive attack surface analysis with exploitability-scored targets, "
         "attack chain detection, immediate reportable wins, technology-specific playbooks, "
         "and cross-stage correlations. This is the intelligence brain of BugHound. "
-        "Use after discovery to plan testing or generate reports for immediate wins. "
-        "Stage 3, read-only, sync."
+        "Stage 3, read-only, sync. "
+        "IMPORTANT: After receiving results, present the analysis to the user and WAIT. "
+        "Do NOT automatically call bughound_submit_scan_plan or any other tool. "
+        "Each stage requires explicit user approval before proceeding."
     ),
 )
 async def bughound_get_attack_surface(workspace_id: str) -> str:
@@ -714,7 +719,10 @@ async def bughound_get_attack_surface(workspace_id: str) -> str:
         "Submit testing strategy after reviewing attack surface. Validates targets "
         "against scope and checks tool availability. Required before "
         "bughound_execute_tests. Pass scan_plan as a JSON object (not a string) with "
-        "'targets' array and optional 'global_settings'. Stage 3, sync."
+        "'targets' array and optional 'global_settings'. Stage 3, sync. "
+        "IMPORTANT: After scan plan is approved, present confirmation to the user "
+        "and WAIT. Do NOT automatically call bughound_execute_tests. "
+        "Each stage requires explicit user approval before proceeding."
     ),
 )
 async def bughound_submit_scan_plan(workspace_id: str, scan_plan: dict | str) -> str:

@@ -180,8 +180,7 @@ async def enumerate_light(workspace_id: str) -> dict[str, Any]:
         },
         "warnings": warnings,
         "next_step": (
-            "STOP here and present results to the user. "
-            "Do NOT proceed to the next stage unless the user explicitly asks."
+            "Enumeration complete. Present results to user and await further instructions."
         ),
     }
 
