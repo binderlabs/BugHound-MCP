@@ -560,7 +560,12 @@ async def _exec_sqli_fuzz(
 async def _exec_xss_fuzz(
     workspace_id: str, approved_hosts: set[str],
 ) -> list[dict[str, Any]]:
-    """Run dalfox on top XSS candidates."""
+    """Run dalfox on top XSS candidates.
+
+    For API endpoints (returning JSON), also generate a frontend URL variant
+    since SPAs often reflect the same params in HTML on the root page.
+    """
+    from urllib.parse import urlparse, urlunparse
     from bughound.tools.scanning import dalfox
 
     if not dalfox.is_available():
@@ -571,6 +576,8 @@ async def _exec_xss_fuzz(
     scoped = await _filter_to_scope(candidates, approved_hosts, limit=10)
 
     findings: list[dict[str, Any]] = []
+    tested_urls: set[str] = set()
+
     for c in scoped:
         url = c.get("url", "")
         param = c.get("param", "")
@@ -579,27 +586,43 @@ async def _exec_xss_fuzz(
 
         test_url = url if f"{param}=" in url else f"{url}?{param}=test"
 
-        try:
-            result = await dalfox.execute(test_url, timeout=120)
-            if result.success and result.results:
-                for r in result.results:
-                    if not isinstance(r, dict):
-                        continue
-                    findings.append({
-                        "vulnerability_class": "xss",
-                        "tool": "dalfox",
-                        "technique_id": "xss_param_fuzz",
-                        "host": _host_from_url(url),
-                        "endpoint": r.get("url", test_url),
-                        "severity": "high",
-                        "description": f"{r.get('xss_type', 'reflected')} XSS in param '{param}'",
-                        "evidence": r.get("evidence", ""),
-                        "payload_used": r.get("payload", ""),
-                        "confidence": "high",
-                        "needs_validation": False,
-                    })
-        except Exception as exc:
-            logger.warning("technique.xss_error", url=url, error=str(exc))
+        # Build list of URLs to test: original + frontend variant
+        urls_to_test = [test_url]
+
+        # If URL is an API path, also test the frontend root with same param
+        # e.g. /api/products/?search=test → /?search=test
+        parsed = urlparse(test_url)
+        if "/api/" in parsed.path or parsed.path.startswith("/api"):
+            frontend_url = urlunparse(parsed._replace(path="/"))
+            if frontend_url not in tested_urls:
+                urls_to_test.append(frontend_url)
+
+        for t_url in urls_to_test:
+            if t_url in tested_urls:
+                continue
+            tested_urls.add(t_url)
+
+            try:
+                result = await dalfox.execute(t_url, timeout=120)
+                if result.success and result.results:
+                    for r in result.results:
+                        if not isinstance(r, dict):
+                            continue
+                        findings.append({
+                            "vulnerability_class": "xss",
+                            "tool": "dalfox",
+                            "technique_id": "xss_param_fuzz",
+                            "host": _host_from_url(url),
+                            "endpoint": r.get("url", t_url),
+                            "severity": "high",
+                            "description": f"{r.get('xss_type', 'reflected')} XSS in param '{param}'",
+                            "evidence": r.get("evidence", ""),
+                            "payload_used": r.get("payload", ""),
+                            "confidence": "high",
+                            "needs_validation": False,
+                        })
+            except Exception as exc:
+                logger.warning("technique.xss_error", url=t_url, error=str(exc))
 
     return findings
 
@@ -617,9 +640,24 @@ async def _run_injection_batch(
     result_key: str = "vulnerable",
 ) -> list[dict[str, Any]]:
     """Generic batch runner for injection_tester functions."""
+    from urllib.parse import urlparse, urlunparse
+
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, candidate_key)
     scoped = await _filter_to_scope(candidates, approved_hosts, limit=limit)
+
+    # For API-only candidates, also generate frontend URL variants
+    extra: list[dict[str, Any]] = []
+    seen_urls: set[str] = {c.get("url", "") for c in scoped}
+    for c in scoped:
+        url = c.get("url", "")
+        parsed = urlparse(url)
+        if "/api/" in parsed.path or parsed.path.startswith("/api"):
+            frontend_url = urlunparse(parsed._replace(path="/"))
+            if frontend_url not in seen_urls:
+                seen_urls.add(frontend_url)
+                extra.append({**c, "url": frontend_url})
+    scoped.extend(extra)
 
     sem = asyncio.Semaphore(concurrency)
     findings: list[dict[str, Any]] = []
