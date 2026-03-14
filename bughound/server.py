@@ -98,14 +98,15 @@ async def bughound_init(target: str, depth: str = "light") -> str:
     ws_path = workspace.workspace_dir(meta.workspace_id)
 
     return (
-        f"## Workspace Created Successfully\n\n"
-        f"**Workspace ID:** `{meta.workspace_id}`\n"
-        f"**Target:** {target}\n"
-        f"**Target Type:** {classification.target_type.value}\n"
-        f"**Depth:** {depth}\n"
-        f"**Path:** `{ws_path}`\n"
-        f"**Normalized Targets:** {', '.join(classification.normalized_targets)}\n\n"
-        f"**Pipeline stages to run:** {stages_str}\n"
+        f"## \U0001f3af BugHound Workspace Initialized\n\n"
+        f"| Field | Value |\n"
+        f"|-------|-------|\n"
+        f"| Workspace ID | `{meta.workspace_id}` |\n"
+        f"| Target | `{target}` |\n"
+        f"| Target Type | {classification.target_type.value} |\n"
+        f"| Depth | {depth} |\n"
+        f"| Normalized | {', '.join(classification.normalized_targets)} |\n\n"
+        f"**Pipeline:** {stages_str}\n"
         f"{skips}\n"
         f"**Next step:** {next_step}\n"
     )
@@ -1311,23 +1312,34 @@ async def bughound_job_status(job_id: str) -> str:
     if status is None:
         return f"Error: Job '{job_id}' not found."
 
+    st = status['status']
+    pct = status['progress_pct']
+
+    # Progress bar
+    filled = int(pct / 5)
+    bar = "\u2588" * filled + "\u2591" * (20 - filled)
+
+    icon = {"PENDING": "\u23f3", "RUNNING": "\U0001f504", "COMPLETED": "\u2705", "FAILED": "\u274c", "TIMED_OUT": "\u23f0"}.get(st, "\u2753")
+
     lines = [
-        f"## Job Status: `{job_id}`\n",
-        f"**Status:** {status['status']}",
-        f"**Progress:** {status['progress_pct']}%",
-        f"**Message:** {status['message']}",
+        f"## {icon} Job Status: `{job_id}`\n",
+        f"**Status:** {st}",
+        f"**Progress:** [{bar}] {pct}%",
+        f"**Current:** {status.get('message', '')}",
     ]
     if status.get("current_module"):
-        lines.append(f"**Current Module:** {status['current_module']}")
+        lines.append(f"**Module:** {status['current_module']}")
+
     if status.get("result_summary"):
-        lines.append(f"\n**Result Summary:**")
+        lines.append(f"\n**Results:**")
         for k, v in status["result_summary"].items():
             lines.append(f"  - {k}: {v}")
+
     if status.get("error"):
         lines.append(f"\n**Error:** {status['error']}")
 
-    if status["status"] in ("RUNNING", "PENDING"):
-        lines.append(f"\n**Wait at least 30 seconds before checking again.**")
+    if st in ("RUNNING", "PENDING"):
+        lines.append(f"\nWait at least 30 seconds before checking again.")
 
     return "\n".join(lines) + "\n"
 
@@ -1468,16 +1480,36 @@ def _format_discover(result: dict[str, Any]) -> str:
         return _format_job_started(result)
 
     data = result.get("data", {})
-    lines = [f"## Discovery Results\n"]
+    lines = [f"## \U0001f50d Discovery Results\n"]
     lines.append(f"**{result['message']}**\n")
 
-    # Live hosts
-    lines.append(f"**Live Hosts:** {data.get('live_hosts', 0)}")
-    lines.append(f"**Hosts with Flags:** {data.get('hosts_with_flags', 0)}")
-
-    # WAF
-    waf = data.get("waf_detected", 0)
-    lines.append(f"**WAF Detected:** {waf} hosts")
+    # Summary table
+    lines.append("| Metric | Value |")
+    lines.append("|--------|-------|")
+    lines.append(f"| Live Hosts | {data.get('live_hosts', 0)} |")
+    lines.append(f"| Hosts with Flags | {data.get('hosts_with_flags', 0)} |")
+    lines.append(f"| WAF Detected | {data.get('waf_detected', 0)} |")
+    lines.append(f"| URLs Discovered | {data.get('urls_discovered', 0)} |")
+    lines.append(f"| JS Files | {data.get('js_files_found', 0)} |")
+    secrets_count = data.get("secrets_found", 0)
+    if secrets_count:
+        lines.append(f"| Secrets Found | {secrets_count} |")
+    hidden = data.get("hidden_endpoints", 0)
+    if hidden:
+        lines.append(f"| Hidden Endpoints | {hidden} |")
+    params = data.get("parameters_harvested", 0)
+    if params:
+        lines.append(f"| Parameters | {params} |")
+    sp = data.get("sensitive_paths_found", 0)
+    if sp:
+        lines.append(f"| Sensitive Paths | {sp} |")
+    takeover = data.get("takeover_candidates", 0)
+    if takeover:
+        lines.append(f"| Takeover Candidates | {takeover} |")
+    cors = data.get("cors_vulnerable", 0)
+    if cors:
+        lines.append(f"| CORS Misconfig | {cors} |")
+    lines.append("")
 
     # Technologies
     techs = data.get("top_technologies", [])
@@ -1590,12 +1622,16 @@ def _format_job_started(result: dict[str, Any]) -> str:
 
     job_id = result.get('job_id', '?')
     est = result.get('estimated_time', 'a few minutes')
+    msg = result.get('message', '')
     return (
-        f"## Background Job Started\n\n"
-        f"**Job ID:** `{job_id}`\n"
-        f"**Estimated Time:** {est}\n\n"
-        f"The job is running in the background. You can continue chatting.\n"
-        f"When you're ready, ask me to check the status of `{job_id}`.\n"
+        f"## \u23f3 Background Job Started\n\n"
+        f"| Field | Value |\n"
+        f"|-------|-------|\n"
+        f"| Job ID | `{job_id}` |\n"
+        f"| Estimated Time | {est} |\n"
+        f"| Details | {msg} |\n\n"
+        f"The job is running in the background.\n"
+        f"When ready, ask to check status of `{job_id}`.\n"
     )
 
 
@@ -1740,7 +1776,7 @@ def _format_scan_plan_result(result: dict[str, Any]) -> str:
 
     if result.get("status") == "rejected":
         lines = [
-            "## Scan Plan Rejected\n",
+            "## \u274c Scan Plan Rejected\n",
             f"**{result.get('message', '')}**\n",
             "**Reasons:**",
         ]
@@ -1751,25 +1787,42 @@ def _format_scan_plan_result(result: dict[str, Any]) -> str:
 
     # Approved
     lines = [
-        "## Scan Plan Approved\n",
-        f"**{result.get('message', '')}**\n",
-        f"**Targets:** {result.get('targets_count', 0)}",
-        f"**Test Classes:** {result.get('test_classes_total', 0)}",
+        "## \u2705 Scan Plan Approved\n",
+        f"| Metric | Value |",
+        f"|--------|-------|",
+        f"| Targets | {result.get('targets_count', 0)} |",
+        f"| Test Classes | {result.get('test_classes_total', 0)} |",
     ]
 
-    tools_req = result.get("tools_required", [])
-    if tools_req:
-        lines.append(f"**Tools Required:** {', '.join(tools_req)}")
+    tools_avail = result.get("tools_available", [])
+    tools_missing = result.get("tools_missing", [])
 
-    avail = result.get("tools_available", [])
-    if avail:
-        lines.append(f"**Tools Available:** {', '.join(avail)}")
+    if tools_avail:
+        lines.append(f"| Tools Available | {', '.join(tools_avail)} |")
+    if tools_missing:
+        lines.append(f"| Tools Missing | {', '.join(tools_missing)} |")
 
-    missing = result.get("tools_missing", [])
-    if missing:
-        lines.append(f"**Tools Missing:** {', '.join(missing)} (install for full coverage)")
+    lines.append("")
 
-    lines.append(f"\n**Next step:** {result.get('next_step', 'Continue.')}")
+    # Show test classes grouped
+    test_classes = result.get("test_classes_list", [])
+    if test_classes:
+        injection = [c for c in test_classes if c in ("sqli", "xss", "ssrf", "lfi", "ssti", "csti", "crlf", "rce", "open_redirect")]
+        auth_access = [c for c in test_classes if c in ("idor", "bac", "jwt", "rate_limiting", "cors", "mass_assignment")]
+        infra = [c for c in test_classes if c in ("misconfig", "default_creds", "header_injection", "graphql", "wordpress", "spring")]
+        other = [c for c in test_classes if c not in injection + auth_access + infra]
+
+        if injection:
+            lines.append(f"**Injection Tests:** {', '.join(injection)}")
+        if auth_access:
+            lines.append(f"**Auth/Access Tests:** {', '.join(auth_access)}")
+        if infra:
+            lines.append(f"**Infrastructure Tests:** {', '.join(infra)}")
+        if other:
+            lines.append(f"**Other Tests:** {', '.join(other)}")
+        lines.append("")
+
+    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -1875,72 +1928,77 @@ def _format_test_results(result: dict[str, Any]) -> str:
     if result.get("status") == "error":
         return f"Error [{result.get('error_type', '?')}]: {result['message']}"
 
-    lines = [f"## Test Results\n"]
+    sev_icon = {"critical": "\U0001f534", "high": "\U0001f7e0", "medium": "\U0001f7e1", "low": "\U0001f535", "info": "\u26aa"}
 
-    # Single-target mode
-    if result.get("tool"):
-        lines.append(f"**Tool:** {result['tool']}")
-        lines.append(f"**Target:** {result.get('target', '?')}")
-    else:
-        lines.append(f"**Targets Tested:** {result.get('targets_tested', 0)}")
+    lines = [f"## \U0001f3af Test Results\n"]
 
-    lines.append(f"**Findings Total:** {result.get('findings_total', 0)}\n")
+    lines.append(f"**Targets Tested:** {result.get('targets_tested', 0)}")
+    lines.append(f"**Total Findings:** {result.get('findings_total', 0)}\n")
 
-    # Severity breakdown
+    # Severity breakdown as table
     sev = result.get("findings_by_severity", {})
     if any(sev.values()):
-        lines.append("**Findings by Severity:**")
+        lines.append("| Severity | Count |")
+        lines.append("|----------|-------|")
         for level in ("critical", "high", "medium", "low", "info"):
             count = sev.get(level, 0)
             if count:
-                lines.append(f"  - **{level.upper()}**: {count}")
+                lines.append(f"| {sev_icon.get(level, '')} {level.upper()} | {count} |")
         lines.append("")
 
-    # Validation breakdown
+    # By vuln class
+    by_class = result.get("findings_by_class", {})
+    if by_class:
+        lines.append("**By Vulnerability Class:**")
+        for cls, count in by_class.items():
+            lines.append(f"  - {cls}: {count}")
+        lines.append("")
+
+    # Validation status
     needs_val = result.get("findings_needing_validation")
     definitive = result.get("findings_definitive")
     if needs_val is not None:
-        lines.append(f"**Definitive (report now):** {definitive}")
+        lines.append(f"**Definitive (report-ready):** {definitive}")
         lines.append(f"**Needs Validation (Stage 5):** {needs_val}\n")
 
-    # Show findings
+    # Findings list - grouped by severity
     findings = result.get("findings", [])
     if findings:
-        lines.append("### Findings\n")
-        for f in findings[:15]:
-            sev_tag = f.get("severity", "?").upper()
-            val_tag = " [needs validation]" if f.get("needs_validation") else " [definitive]"
-            lines.append(
-                f"**[{sev_tag}]** `{f.get('template_id', '?')}`{val_tag}"
-            )
-            lines.append(f"  - Host: {f.get('host', '?')}")
-            lines.append(f"  - Endpoint: `{f.get('endpoint', '?')}`")
-            lines.append(f"  - Class: {f.get('vulnerability_class', '?')}")
-            name = f.get("template_name", "")
-            if name:
-                lines.append(f"  - Name: {name}")
-            curl = f.get("curl_command", "")
-            if curl:
-                lines.append(f"  - Curl: `{curl[:120]}{'...' if len(curl) > 120 else ''}`")
-            lines.append("")
+        lines.append("### Findings Detail\n")
+        # Sort by severity
+        sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+        sorted_findings = sorted(findings, key=lambda f: sev_order.get(f.get("severity", "info"), 5))
 
-        if len(findings) > 15:
-            lines.append(f"... and {len(findings) - 15} more findings.\n")
+        for f in sorted_findings[:20]:
+            s = f.get("severity", "info")
+            icon = sev_icon.get(s, "")
+            desc = f.get("description", f.get("template_name", f.get("template_id", "?")))
+            val = "\u2705" if not f.get("needs_validation") else "\u23f3"
+
+            lines.append(f"- {icon} **[{s.upper()}]** {desc} {val}")
+            lines.append(f"  `{f.get('endpoint', f.get('host', '?'))}`  |  Tool: {f.get('tool', '?')}")
+
+        if len(findings) > 20:
+            lines.append(f"\n... and {len(findings) - 20} more findings.")
+        lines.append("")
+
+    # Phase stats summary
+    phase_stats = result.get("phase_stats", {})
+    if phase_stats:
+        lines.append("### Phase Stats\n")
+        lines.append("| Phase | Findings |")
+        lines.append("|-------|----------|")
+        for key, val in phase_stats.items():
+            if val > 0:
+                lines.append(f"| {key} | {val} |")
+        lines.append("")
 
     # Warnings
     warnings = result.get("warnings", [])
     if warnings:
-        lines.append("**Warnings:**")
-        for w in warnings:
+        lines.append("**\u26a0\ufe0f Warnings:**")
+        for w in warnings[:10]:
             lines.append(f"  - {w}")
-        lines.append("")
-
-    # Files
-    files = result.get("files_written", [])
-    if files:
-        lines.append("**Files written:**")
-        for f in files:
-            lines.append(f"  - `{f}`")
         lines.append("")
 
     lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")

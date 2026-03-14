@@ -1994,12 +1994,16 @@ async def submit_scan_plan(
 
     # Count test classes
     test_classes_total = sum(len(t.get("test_classes", [])) for t in targets)
+    all_classes: set[str] = set()
+    for t in targets:
+        all_classes.update(t.get("test_classes", []))
 
     return {
         "status": "approved",
         "message": f"Scan plan approved. {len(targets)} targets, {test_classes_total} test classes.",
         "targets_count": len(targets),
         "test_classes_total": test_classes_total,
+        "test_classes_list": sorted(all_classes),
         "tools_required": sorted(all_tools),
         "tools_available": tools_available,
         "tools_missing": tools_missing,
