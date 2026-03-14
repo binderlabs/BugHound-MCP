@@ -1941,10 +1941,31 @@ async def submit_scan_plan(
         if priority is not None and (not isinstance(priority, int) or priority < 1):
             errors.append(f"targets[{i}] ({host}): priority must be int >= 1")
 
-        # Test classes
+        # Test classes — auto-populate if missing or empty
         tc = t.get("test_classes")
-        if tc is not None and (not isinstance(tc, list) or not tc):
-            errors.append(f"targets[{i}] ({host}): test_classes must be a non-empty list")
+        if not tc or not isinstance(tc, list):
+            # Pull from attack_surface suggested_test_classes, else use defaults
+            default_classes = [
+                "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
+                "crlf", "idor", "header_injection", "rce",
+                "graphql", "jwt", "misconfig", "default_creds",
+            ]
+            try:
+                as_data = await workspace.read_data(
+                    workspace_id, "analysis/attack_surface.json",
+                )
+                if as_data and isinstance(as_data, dict):
+                    suggested = as_data.get("suggested_test_classes", [])
+                    if suggested:
+                        default_classes = suggested
+                elif isinstance(as_data, list) and as_data:
+                    item = as_data[0] if isinstance(as_data[0], dict) else {}
+                    suggested = item.get("suggested_test_classes", [])
+                    if suggested:
+                        default_classes = suggested
+            except Exception:
+                pass
+            t["test_classes"] = default_classes
 
     if out_of_scope:
         errors.append(f"Out of scope: {', '.join(out_of_scope)}")
