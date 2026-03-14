@@ -328,9 +328,9 @@ def classify_parameters(
         matched_types = _classify_one_param(param_lower)
 
         # Catch-all: any GET param not matching specific patterns is still
-        # a potential XSS + SQLi target (user-controlled input = testable)
+        # a potential target — test for common injection classes
         if not matched_types and method == "GET":
-            matched_types = ["xss", "sqli"]
+            matched_types = ["xss", "sqli", "lfi", "ssti"]
 
         param_vuln_count.setdefault(param_lower, set()).update(matched_types)
 
