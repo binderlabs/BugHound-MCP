@@ -401,6 +401,86 @@ async def test_ssti(
 
 
 # ---------------------------------------------------------------------------
+# Client-Side Template Injection (CSTI) Testing
+# ---------------------------------------------------------------------------
+
+# CSTI payloads — check if template syntax is reflected unescaped in HTML
+_CSTI_PAYLOADS = [
+    # AngularJS (most common)
+    ("{{constructor.constructor('return 1')()}}", "1", "angularjs"),
+    ("{{7*7}}", "49", "angularjs"),
+    # Vue.js
+    ("{{_openBlock.constructor('return 1')()}}", "1", "vuejs"),
+    # Generic
+    ("${7*7}", "49", "generic_el"),
+    ("#{7*7}", "49", "generic_el"),
+]
+
+# Polyglot probe — detect which engine is in use
+_CSTI_PROBE = "{{7*7}}${7*7}#{7*7}<%= 7*7 %>"
+
+
+async def test_csti(
+    target_url: str, param: str, original_value: str,
+) -> dict[str, Any]:
+    """Test for Client-Side Template Injection."""
+    async with aiohttp.ClientSession() as session:
+        # Baseline
+        baseline_status, baseline_body, _ = await _send(session, target_url)
+        if baseline_status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        # Phase 1: Polyglot probe — check if any template syntax is reflected
+        probe_url = _replace_param(target_url, param, _CSTI_PROBE)
+        status, body, _ = await _send(session, probe_url)
+
+        if status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        # Check if "49" appears (any engine computed 7*7)
+        if "49" in body and "49" not in baseline_body:
+            return {
+                "vulnerable": True,
+                "url": probe_url,
+                "param": param,
+                "payload": _CSTI_PROBE,
+                "evidence": "Template expression 7*7=49 computed — CSTI confirmed",
+                "engine": "unknown",
+            }
+
+        # Phase 2: Individual payloads
+        for payload, expected, engine in _CSTI_PAYLOADS:
+            test_url = _replace_param(target_url, param, payload)
+            status, body, _ = await _send(session, test_url)
+            if status == 0:
+                continue
+
+            if expected in body and expected not in baseline_body:
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "payload": payload,
+                    "evidence": f"CSTI: {engine} — expression result '{expected}' found in response",
+                    "engine": engine,
+                }
+
+            # Also check if the raw payload is reflected unescaped (potential CSTI)
+            if payload in body and "{{" not in baseline_body:
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "payload": payload,
+                    "evidence": f"Template syntax reflected unescaped in HTML — potential {engine} CSTI",
+                    "engine": engine,
+                    "confidence": "low",
+                }
+
+    return {"vulnerable": False, "url": target_url, "param": param}
+
+
+# ---------------------------------------------------------------------------
 # Header Injection Testing
 # ---------------------------------------------------------------------------
 

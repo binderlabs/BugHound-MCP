@@ -103,6 +103,15 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "description": "Test SSTI with template expression payloads",
     },
     {
+        "id": "csti_test",
+        "name": "Client-Side Template Injection Testing",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.xss_candidates"],
+        "vuln_classes": ["csti"],
+        "description": "Test for AngularJS/Vue.js client-side template injection",
+    },
+    {
         "id": "header_injection_test",
         "name": "Header Injection Testing",
         "phase": "4D",
@@ -304,6 +313,7 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "idor": ["idor_test", "path_idor_test"],
     "crlf": ["crlf_test"],
     "ssti": ["ssti_test", "post_ssti"],
+    "csti": ["csti_test"],
     "header_injection": ["header_injection_test"],
     "graphql": ["nuclei_scan", "graphql_test"],
     "jwt": ["jwt_test"],
@@ -424,6 +434,15 @@ async def _filter_to_scope(
         else:
             normalized_hosts.add(h_clean)
 
+    # Pick a base URL from approved hosts to resolve relative URLs
+    base_url = ""
+    for h in approved_hosts:
+        if "://" in h:
+            base_url = h.rstrip("/")
+            break
+    if not base_url and normalized_hosts:
+        base_url = f"https://{next(iter(normalized_hosts))}"
+
     filtered: list[dict[str, Any]] = []
     for c in candidates:
         url = c.get("url", "")
@@ -432,6 +451,17 @@ async def _filter_to_scope(
             host = (parsed.hostname or "").lower()
         except Exception:
             continue
+
+        # Resolve relative URLs (e.g. "/api/products?limit=100")
+        if not host and url.startswith("/") and base_url:
+            url = base_url + url
+            c = {**c, "url": url}  # shallow copy with fixed URL
+            try:
+                parsed = urlparse(url)
+                host = (parsed.hostname or "").lower()
+            except Exception:
+                continue
+
         if host in normalized_hosts:
             filtered.append(c)
             if len(filtered) >= limit:
@@ -472,6 +502,8 @@ async def execute_technique(
         return await _exec_crlf(workspace_id, approved_hosts, concurrency)
     elif technique_id == "ssti_test":
         return await _exec_ssti(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "csti_test":
+        return await _exec_csti(workspace_id, approved_hosts, concurrency)
     elif technique_id == "header_injection_test":
         return await _exec_header_injection(workspace_id, approved_hosts, concurrency)
     elif technique_id == "graphql_test":
@@ -533,6 +565,52 @@ async def _exec_sqli_fuzz(
 
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, "sqli_candidates")
+
+    # Also test endpoints from JS analysis and dirfuzz that have params
+    extra_candidates: list[dict[str, Any]] = []
+
+    # API endpoints from JS analysis
+    raw_api = await workspace.read_data(workspace_id, "endpoints/api_endpoints.json")
+    api_eps = _extract_items(raw_api)
+    existing_urls = {c.get("url", "") for c in candidates}
+    for ep in api_eps:
+        url = ep.get("url", "") if isinstance(ep, dict) else str(ep)
+        if not url or url in existing_urls:
+            continue
+        # Add common injectable params for debug/admin endpoints
+        if any(kw in url.lower() for kw in ("debug", "admin", "search", "query", "filter")):
+            for param in ("search", "q", "query", "filter", "id"):
+                extra_candidates.append({
+                    "url": url, "param": param, "sample_value": "test", "method": "GET",
+                })
+
+    # Sensitive paths
+    raw_sens = await workspace.read_data(workspace_id, "hosts/sensitive_paths.json")
+    sens = _extract_items(raw_sens)
+    for s in sens:
+        url = s.get("url", "") if isinstance(s, dict) else ""
+        if url and "?" in url:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(url)
+            for param in parse_qs(parsed.query):
+                extra_candidates.append({
+                    "url": url, "param": param, "sample_value": "test", "method": "GET",
+                })
+
+    # Dirfuzz results with interesting paths
+    raw_dirfuzz = await workspace.read_data(workspace_id, "dirfuzz/light_results.json")
+    dirfuzz_items = _extract_items(raw_dirfuzz)
+    for d in dirfuzz_items:
+        url = d.get("url", "") if isinstance(d, dict) else str(d)
+        if not url or url in existing_urls:
+            continue
+        if any(kw in url.lower() for kw in ("debug", "admin", "search", "query", "filter")):
+            for param in ("search", "q", "query", "filter", "id"):
+                extra_candidates.append({
+                    "url": url, "param": param, "sample_value": "test", "method": "GET",
+                })
+
+    candidates.extend(extra_candidates)
     scoped = await _filter_to_scope(candidates, approved_hosts, limit=15)
 
     findings: list[dict[str, Any]] = []
@@ -850,6 +928,34 @@ async def _exec_ssti(
     return findings
 
 
+async def _exec_csti(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Run Client-Side Template Injection tests on XSS + SSTI candidates."""
+    from bughound.tools.testing.injection_tester import test_csti
+
+    # CSTI uses XSS candidates + SSTI candidates (template injection params)
+    pc = await _load_param_classification(workspace_id)
+    xss = _get_param_candidates(pc, "xss_candidates")
+    ssti = _get_param_candidates(pc, "ssti_candidates")
+
+    # Combine and dedupe
+    all_candidates = list(xss) + list(ssti)
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for c in all_candidates:
+        key = f"{c.get('url')}:{c.get('param')}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+
+    scoped = await _filter_to_scope(unique, approved_hosts, limit=15)
+
+    return await _run_injection_batch_direct(
+        scoped, test_csti, "csti", "csti_test", "medium", concurrency,
+    )
+
+
 async def _exec_header_injection(
     workspace_id: str, approved_hosts: set[str], concurrency: int,
 ) -> list[dict[str, Any]]:
@@ -1013,14 +1119,21 @@ async def _exec_jwt(
     }
 
     for token, source in jwt_tokens[:3]:
-        # Try to find the right host
+        # Try to find the right host — handle both URLs and bare hostnames
         from urllib.parse import urlparse
         try:
-            source_host = urlparse(source).hostname or ""
+            parsed_source = urlparse(source)
+            source_host = parsed_source.hostname or ""
+            # urlparse treats bare hostnames (no scheme) as path, not hostname
+            if not source_host and source and "://" not in source:
+                source_host = source.split(":")[0].split("/")[0]
         except Exception:
             source_host = ""
 
         target_url = host_urls.get(source_host.lower(), "")
+        # If no exact match, try matching against approved hosts directly
+        if not target_url and source_host.lower() in approved_hosts:
+            target_url = f"https://{source_host}"
         if not target_url or source_host.lower() not in approved_hosts:
             continue
 
@@ -1494,6 +1607,27 @@ async def _exec_broken_access(
         if host in approved_hosts and url not in seen:
             seen.add(url)
             endpoints.append(url)
+
+    # Generate admin paths to test on all live hosts
+    raw_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw_hosts)
+    admin_paths = [
+        "/admin", "/admin/users", "/admin/orders", "/admin/products",
+        "/admin/settings", "/admin/dashboard", "/admin/config",
+        "/dashboard", "/manage", "/console", "/panel",
+        "/api/admin", "/api/admin/users", "/api/admin/orders",
+        "/api/internal", "/api/debug", "/api/config",
+    ]
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host not in approved_hosts or not base:
+            continue
+        for path in admin_paths:
+            full = f"{base}{path}"
+            if full not in seen:
+                seen.add(full)
+                endpoints.append(full)
 
     if not endpoints:
         return []

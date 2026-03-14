@@ -230,13 +230,23 @@ def classify_parameters(
         if not isinstance(ep, dict):
             continue
         ep_path = ep.get("path", "")
+        ep_method = ep.get("method", "GET")
         parsed = urlparse(ep_path)
         qs = parse_qs(parsed.query, keep_blank_values=True)
         for pname, pvals in qs.items():
             param_entries.append((
                 ep_path, pname, pvals[0] if pvals else "",
-                ep.get("method", "GET"),
+                ep_method,
             ))
+        # Also extract structured params (e.g. from OpenAPI spec body params)
+        for p in ep.get("params", []):
+            if isinstance(p, dict):
+                param_entries.append((
+                    ep_path, p.get("name", ""), p.get("value", ""),
+                    ep_method,
+                ))
+            elif isinstance(p, str):
+                param_entries.append((ep_path, p, "", ep_method))
 
     # From forms — extract input names with form context
     file_upload_candidates: list[dict[str, Any]] = []
@@ -353,6 +363,7 @@ def classify_parameters(
     _uuid_re = re.compile(
         r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I,
     )
+    _hex_re = re.compile(r"^[0-9a-f]{8,}$", re.I)
     _seen_path_idors: set[str] = set()
     for item in urls_data:
         url = item.get("url", item) if isinstance(item, dict) else str(item)
@@ -361,15 +372,22 @@ def classify_parameters(
         parsed = urlparse(url)
         parts = [p for p in parsed.path.split("/") if p]
         for part in parts:
-            if part.isdigit() or _uuid_re.match(part):
-                if url not in _seen_path_idors:
-                    _seen_path_idors.add(url)
+            is_numeric = part.isdigit()
+            is_uuid = bool(_uuid_re.match(part))
+            is_hex = bool(_hex_re.match(part)) and not is_uuid
+            if is_numeric or is_uuid or is_hex:
+                dedup_key = f"{url}:{part}"
+                if dedup_key not in _seen_path_idors:
+                    _seen_path_idors.add(dedup_key)
+                    seg_type = "numeric" if is_numeric else ("uuid" if is_uuid else "hex")
                     path_idor_candidates.append({
                         "url": url,
+                        "param": "path_segment",
+                        "sample_value": part,
+                        "method": "GET",
                         "segment": part,
-                        "segment_type": "numeric" if part.isdigit() else "uuid",
+                        "segment_type": seg_type,
                     })
-                break
 
     stats["path_idor_urls"] = len(path_idor_candidates)
     stats["deserialization_count"] = len(candidates.get("deserialization_candidates", []))

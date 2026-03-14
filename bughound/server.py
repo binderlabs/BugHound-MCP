@@ -1348,7 +1348,7 @@ async def bughound_job_results(job_id: str) -> str:
     if status["status"] not in ("COMPLETED", "FAILED", "TIMED_OUT"):
         return (
             f"Job `{job_id}` is still **{status['status']}** "
-            f"({status['progress_pct']}%). Poll again with `bughound_job_status`."
+            f"({status['progress_pct']}%). Tell the user the current progress and wait for them to check again."
         )
 
     lines = [f"## Job Results: `{job_id}`\n"]

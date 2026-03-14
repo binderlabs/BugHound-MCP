@@ -207,13 +207,15 @@ async def execute_tests(
             "job_id": job_id,
             "message": (
                 f"Testing started for {len(targets)} targets with {total_classes} "
-                "test classes across 5 phases. "
-                "IMPORTANT: Do NOT call bughound_job_status yourself. Do NOT poll or loop. "
-                "STOP HERE and tell the user the job is running. The USER will check status "
-                "manually when they are ready."
+                f"test classes across 5 phases."
             ),
             "workspace_id": workspace_id,
             "estimated_time": f"{len(targets) * 3}-{len(targets) * 8} minutes",
+            "next_step": (
+                "Testing job is running in the background. "
+                "Present the job ID and estimated time to the user. "
+                "Wait for the user to ask you to check status."
+            ),
         }
 
 
@@ -442,13 +444,17 @@ async def _run_tests(
         if attack_surface:
             suggested = attack_surface.get("suggested_test_classes", [])
             all_test_classes.update(suggested)
-        # Always include these high-value, low-cost test classes
         all_test_classes.update([
             "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
             "crlf", "idor", "header_injection", "rce",
             "graphql", "jwt", "misconfig", "default_creds",
-            "cors", "bac", "rate_limiting",
         ])
+
+    # Always merge in low-cost, high-value classes that AI clients often omit
+    all_test_classes.update([
+        "cors", "bac", "rate_limiting",
+        "ssti", "csti", "crlf", "header_injection", "jwt", "graphql",
+    ])
 
     async def _progress(pct: int, msg: str, module: str) -> None:
         if job_manager and job_id:
@@ -792,6 +798,7 @@ async def _run_tests(
         ("crlf", "crlf_test"),
         ("ssti", "ssti_test"),
         ("ssti", "post_ssti"),
+        ("csti", "csti_test"),
         ("deserialization", "cookie_deserialization"),
         ("header_injection", "header_injection_test"),
     ]
