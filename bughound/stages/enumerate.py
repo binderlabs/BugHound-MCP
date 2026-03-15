@@ -15,7 +15,9 @@ import structlog
 from bughound.core import workspace
 from bughound.core.job_manager import JobManager
 from bughound.schemas.models import TargetType, ToolResult, WorkspaceState
-from bughound.tools.recon import amass, assetfinder, crtsh, dns_resolver, findomain, subfinder
+from bughound.tools.recon import (
+    amass, assetfinder, crtsh, dns_resolver, findomain, gotator, puredns, subfinder,
+)
 
 logger = structlog.get_logger()
 
@@ -284,23 +286,94 @@ async def enumerate_deep(
 
         await job_manager.update_progress(jid, 80, "Slow passive merge complete", "merge")
 
-        # Phase 4: active tools (puredns, gotator) if available
-        from bughound.core import tool_runner
+        # Phase 4: permutation + bruteforce (gotator → puredns)
+        current_subs = await workspace.read_data(workspace_id, "subdomains/all.txt")
+        current_list = list(current_subs) if isinstance(current_subs, list) else []
+        active_new: set[str] = set()
 
-        has_puredns = tool_runner.is_available("puredns")
-        has_gotator = tool_runner.is_available("gotator")
-
-        if not has_puredns and not has_gotator:
-            extra_warnings.append(
-                "No active enumeration tools (puredns, gotator) available. "
-                "Deep mode ran passive sources + amass only."
+        # Step 4a: gotator permutation generation
+        if gotator.is_available() and current_list:
+            await job_manager.update_progress(
+                jid, 82, f"Generating permutations from {len(current_list)} subdomains", "gotator",
             )
-            await job_manager.update_progress(jid, 95, "No active tools available", "active")
+            try:
+                perm_result = await gotator.execute(current_list, depth=1, timeout=120)
+                if perm_result.success and perm_result.results:
+                    perm_candidates = perm_result.results
+                    await job_manager.update_progress(
+                        jid, 85, f"Gotator generated {len(perm_candidates)} candidates", "gotator",
+                    )
+
+                    # Resolve permutations with puredns (wildcard filtering)
+                    if puredns.is_available():
+                        await job_manager.update_progress(
+                            jid, 87, f"Resolving {len(perm_candidates)} permutations with puredns", "puredns",
+                        )
+                        resolve_result = await puredns.resolve(perm_candidates, timeout=300)
+                        if resolve_result.success and resolve_result.results:
+                            new_perms = set(resolve_result.results) - set(current_list)
+                            active_new.update(new_perms)
+                            await job_manager.update_progress(
+                                jid, 90, f"Permutation resolved: {len(new_perms)} new subdomains", "puredns",
+                            )
+                    else:
+                        extra_warnings.append("puredns not available — permutations not resolved")
+                else:
+                    extra_warnings.append("gotator produced no permutations")
+            except Exception as exc:
+                extra_warnings.append(f"gotator failed: {exc}")
+        elif not gotator.is_available():
+            extra_warnings.append("gotator not installed, skipping permutation generation")
+
+        # Step 4b: puredns bruteforce (wordlist-based)
+        if puredns.is_available():
+            await job_manager.update_progress(
+                jid, 91, "Running puredns bruteforce with DNS wordlist", "puredns",
+            )
+            try:
+                brute_result = await puredns.bruteforce(target, timeout=600)
+                if brute_result.success and brute_result.results:
+                    new_brute = set(brute_result.results) - set(current_list) - active_new
+                    active_new.update(new_brute)
+                    await job_manager.update_progress(
+                        jid, 94, f"Bruteforce found {len(new_brute)} new subdomains", "puredns",
+                    )
+                else:
+                    msg = brute_result.error.message if brute_result.error else "no results"
+                    extra_warnings.append(f"puredns bruteforce: {msg}")
+            except Exception as exc:
+                extra_warnings.append(f"puredns bruteforce failed: {exc}")
         else:
-            await job_manager.update_progress(jid, 85, "Active tools not yet integrated", "active")
-            extra_warnings.append(
-                "Active enumeration tools (puredns, gotator) not yet integrated."
+            extra_warnings.append("puredns not installed, skipping bruteforce")
+
+        # Merge active results
+        if active_new:
+            all_merged = sorted(set(current_list) | active_new)
+            await workspace.write_data(
+                workspace_id, "subdomains/all.txt", all_merged,
+                generated_by="enumerate_deep_active", target=target,
             )
+            # Resolve DNS for new active subdomains
+            await job_manager.update_progress(
+                jid, 96, f"Resolving DNS for {len(active_new)} new active subdomains", "dns",
+            )
+            new_dns = await dns_resolver.resolve_domains(sorted(active_new))
+            existing_dns = await workspace.read_data(workspace_id, "dns/records.json")
+            dns_map: dict[str, Any] = {}
+            if isinstance(existing_dns, list):
+                for rec in existing_dns:
+                    if isinstance(rec, dict) and "domain" in rec:
+                        domain = rec.pop("domain")
+                        dns_map[domain] = rec
+            dns_map.update(new_dns)
+            dns_list = [{"domain": d, **r} for d, r in sorted(dns_map.items())]
+            await workspace.write_data(
+                workspace_id, "dns/records.json", dns_list,
+                generated_by="dns_resolver", target=target,
+            )
+            await workspace.update_stats(workspace_id, subdomains_found=len(all_merged))
+        else:
+            await job_manager.update_progress(jid, 95, "No new subdomains from active tools", "active")
 
         final_subs = await workspace.read_data(workspace_id, "subdomains/all.txt")
         final_count = len(final_subs) if isinstance(final_subs, list) else fast_count
@@ -309,6 +382,7 @@ async def enumerate_deep(
             "subdomains_found": final_count,
             "fast_passive_count": fast_count,
             "amass_new_count": len(new_from_amass),
+            "active_new_count": len(active_new),
             "resolved_count": light_result.get("data", {}).get("resolved_count", 0),
             "extra_warnings": extra_warnings,
         }
