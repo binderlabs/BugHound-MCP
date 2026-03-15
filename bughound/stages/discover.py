@@ -317,6 +317,8 @@ async def _run_discover(
     crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
     katana_forms: list[dict[str, Any]] = []
     use_deep_crawl = meta.target_type in (TargetType.SINGLE_HOST, TargetType.SINGLE_ENDPOINT)
+    # Determine crawl depth based on target type
+    crawl_depth = 1 if len(crawl_targets) > 3 else 3  # shallow for many hosts, deep for single
 
     if katana.is_available():
         katana_count = 0
@@ -324,6 +326,8 @@ async def _run_discover(
             try:
                 if use_deep_crawl:
                     cr = await katana.execute_deep(ct, timeout=180)
+                elif crawl_depth == 1:
+                    cr = await katana.execute(ct, depth=1, timeout=60)
                 else:
                     cr = await katana.execute_light(ct, timeout=60)
                 if cr.success:
@@ -878,8 +882,11 @@ async def _run_discover(
         if progress_cb:
             await progress_cb(96, "Probing params for reflection & SQL errors", "probe")
         try:
+            # Scale probe limits for broad domain
+            live_count = len([h for h in live_hosts if not h.get("failed")])
+            probe_max = min(500, max(60, live_count * 10))
             param_classification = await param_classifier.probe_reflection(
-                param_classification, concurrency=8, max_params=60,
+                param_classification, concurrency=8, max_params=probe_max,
             )
         except Exception as exc:
             warnings.append(f"Reflection probe failed: {exc}")

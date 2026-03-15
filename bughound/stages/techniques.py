@@ -514,6 +514,20 @@ async def execute_technique(
         else:
             approved_hosts.add(h)
 
+    # For broad domains: auto-approve ALL live subdomains
+    try:
+        meta = await workspace.get_workspace(workspace_id)
+        if meta and meta.target_type and meta.target_type.value == "broad_domain":
+            raw_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+            live_items = raw_hosts.get("data", raw_hosts) if isinstance(raw_hosts, dict) else (raw_hosts or [])
+            for h in live_items:
+                if isinstance(h, dict):
+                    host = (h.get("host") or "").lower().strip()
+                    if host:
+                        approved_hosts.add(host)
+    except Exception:
+        pass  # Graceful fallback — use scan plan hosts only
+
     if technique_id == "sqli_param_fuzz":
         return await _exec_sqli_fuzz(workspace_id, approved_hosts)
     elif technique_id == "sqli_error_test":

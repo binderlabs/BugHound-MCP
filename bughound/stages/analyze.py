@@ -1944,6 +1944,17 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
     scored.sort(key=lambda x: x["score"], reverse=True)
     high_interest = scored[:20]
 
+    # For broad domain with many hosts: add recommended_targets summary
+    recommended_targets: list[dict[str, Any]] = []
+    if len(scored) > 5:
+        for t in scored[:5]:
+            recommended_targets.append({
+                "host": t.get("host", "?"),
+                "score": t.get("score", 0),
+                "risk_level": t.get("risk_level", "?"),
+                "reasons": t.get("reasons", [])[:3],
+            })
+
     # Attack chains (Part 3)
     chains = _detect_attack_chains(host_idx, data)
 
@@ -1973,8 +1984,11 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "workspace_id": workspace_id,
         "target": meta.target,
         "target_type": meta.target_type.value if meta.target_type else "unknown",
+        "total_live_hosts": len(host_idx),
+        "hosts_analyzed_in_detail": min(len(host_idx), 10),
         "stats": stats,
         "high_interest_targets": high_interest,
+        "recommended_targets": recommended_targets,
         "attack_chains": chains,
         "immediate_wins": wins,
         "correlations": correlations,
@@ -2129,6 +2143,41 @@ async def submit_scan_plan(
             "message": "Scan plan validation failed.",
             "rejected_reasons": errors,
         }
+
+    # Auto-expand broad domain: if only root domain submitted, add top live hosts
+    scan_plan_data = scan_plan
+    if meta.target_type and meta.target_type.value == "broad_domain":
+        plan_hosts = {t.get("host", "").lower() for t in targets}
+        root_domain = meta.target.lower().replace("http://", "").replace("https://", "").strip("/")
+
+        # If scan plan only has root domain, expand to live subdomains
+        if len(plan_hosts) <= 1 and root_domain in plan_hosts:
+            # Read attack surface for recommended targets
+            cached = await get_cached_attack_surface(workspace_id)
+            if cached:
+                recommended = cached.get("recommended_targets", [])
+                live_host_count = cached.get("total_live_hosts", 0)
+
+                if recommended:
+                    # Get the test_classes from the original target
+                    original_classes = targets[0].get("test_classes", [])
+
+                    # Replace single target with per-host targets
+                    new_targets = []
+                    for i, rec in enumerate(recommended[:10]):
+                        host = rec.get("host", "")
+                        if host and host != root_domain:
+                            new_targets.append({
+                                "host": host,
+                                "priority": i + 1,
+                                "test_classes": list(original_classes),
+                            })
+
+                    # Keep the original root domain target too
+                    if new_targets:
+                        targets.extend(new_targets)
+                        # Update the scan plan data
+                        scan_plan_data["targets"] = targets
 
     # Tool availability check (warn, don't reject)
     tools_available: list[str] = []
