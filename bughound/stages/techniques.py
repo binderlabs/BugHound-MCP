@@ -40,6 +40,15 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "description": "Test SQL injection on classified parameters using sqlmap",
     },
     {
+        "id": "sqli_error_test",
+        "name": "SQL Injection Testing (Pure-Python)",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification.sqli_candidates"],
+        "vuln_classes": ["sqli"],
+        "description": "Pure-Python SQLi detection — error-based + boolean-blind, no external tools needed",
+    },
+    {
         "id": "xss_param_fuzz",
         "name": "XSS Parameter Fuzzing",
         "phase": "4D",
@@ -313,7 +322,7 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
 
 # Test class → technique ID mapping
 _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
-    "sqli": ["nuclei_scan", "sqli_param_fuzz", "cookie_sqli", "post_sqli"],
+    "sqli": ["nuclei_scan", "sqli_param_fuzz", "sqli_error_test", "cookie_sqli", "post_sqli"],
     "xss": ["nuclei_scan", "xss_param_fuzz", "reflected_xss_test", "stored_xss", "dom_xss", "cookie_xss"],
     "ssrf": ["nuclei_scan", "ssrf_test"],
     "lfi": ["nuclei_scan", "lfi_test"],
@@ -497,6 +506,8 @@ async def execute_technique(
 
     if technique_id == "sqli_param_fuzz":
         return await _exec_sqli_fuzz(workspace_id, approved_hosts)
+    elif technique_id == "sqli_error_test":
+        return await _exec_sqli_pure(workspace_id, approved_hosts, concurrency)
     elif technique_id == "xss_param_fuzz":
         return await _exec_xss_fuzz(workspace_id, approved_hosts)
     elif technique_id == "ssrf_test":
@@ -667,6 +678,18 @@ async def _exec_sqli_fuzz(
             findings.extend(r)
 
     return findings
+
+
+async def _exec_sqli_pure(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Pure-Python SQLi detection — error-based + boolean-blind, no sqlmap needed."""
+    from bughound.tools.testing.injection_tester import test_sqli
+    return await _run_injection_batch(
+        workspace_id, approved_hosts, "sqli_candidates",
+        test_sqli, "sqli", "sqli_error_test", "critical", concurrency,
+        limit=20,
+    )
 
 
 async def _exec_xss_fuzz(

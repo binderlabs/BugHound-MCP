@@ -334,10 +334,18 @@ def classify_parameters(
 
         matched_types = _classify_one_param(param_lower)
 
-        # Catch-all: any GET param not matching specific patterns is still
-        # a potential target — test for common injection classes
-        if not matched_types and method == "GET":
-            matched_types = ["xss", "sqli", "lfi", "ssti"]
+        # Ensure ALL params get tested for core injection classes.
+        # A param matching only XSS (e.g. CityName via *name) should still
+        # be tested for SQLi and LFI — any user input can be injectable.
+        core_types = {"xss", "sqli", "lfi", "ssti"}
+        if matched_types:
+            # Add missing core types to already-matched params
+            for ct in core_types:
+                if ct not in matched_types:
+                    matched_types.append(ct)
+        else:
+            # Completely unmatched params — add all core types
+            matched_types = list(core_types)
 
         param_vuln_count.setdefault(param_lower, set()).update(matched_types)
 

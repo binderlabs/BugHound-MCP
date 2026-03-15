@@ -782,6 +782,7 @@ async def _run_tests(
     # -- Technique definitions -----------------------------------------
     injection_techniques = [
         ("sqli", "sqli_param_fuzz"),
+        ("sqli", "sqli_error_test"),
         ("sqli", "cookie_sqli"),
         ("sqli", "post_sqli"),
         ("xss", "xss_param_fuzz"),

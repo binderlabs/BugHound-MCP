@@ -98,6 +98,98 @@ _SSRF_INDICATORS = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# SQL Injection Testing (pure-Python — error-based + boolean-blind)
+# ---------------------------------------------------------------------------
+
+_SQL_ERROR_RE = re.compile(
+    r"SQL syntax|ORA-\d{5}|PG::SyntaxError|mysql_fetch|"
+    r"sqlite3\.OperationalError|ODBC SQL Server|"
+    r"SQL command not properly ended|"
+    r"You have an error in your SQL|"
+    r"java\.sql\.SQLException|"
+    r"Unclosed quotation mark|"
+    r"unterminated string|"
+    r"quoted string not properly terminated|"
+    r"Microsoft OLE DB|"
+    r"PostgreSQL.*ERROR|"
+    r"Warning.*mysql_",
+    re.I,
+)
+
+
+async def test_sqli(
+    target_url: str, param: str, original_value: str,
+) -> dict[str, Any]:
+    """Test SQL injection with error-based and boolean-blind detection."""
+    async with aiohttp.ClientSession() as session:
+        # Baseline
+        baseline_status, baseline_body, _ = await _send(session, target_url)
+        if baseline_status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        baseline_len = len(baseline_body)
+
+        # Phase 1: Error-based — inject single quote
+        test_url = _replace_param(target_url, param, f"{original_value}'")
+        status, body, _ = await _send(session, test_url)
+        if status > 0:
+            match = _SQL_ERROR_RE.search(body)
+            if match and not _SQL_ERROR_RE.search(baseline_body):
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "technique": "error-based",
+                    "payload": f"{original_value}'",
+                    "evidence": f"SQL error: {match.group(0)}",
+                    "confidence": "high",
+                }
+
+        # Phase 2: Double-quote error
+        test_url = _replace_param(target_url, param, f'{original_value}"')
+        status, body, _ = await _send(session, test_url)
+        if status > 0:
+            match = _SQL_ERROR_RE.search(body)
+            if match and not _SQL_ERROR_RE.search(baseline_body):
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "technique": "error-based",
+                    "payload": f'{original_value}"',
+                    "evidence": f"SQL error: {match.group(0)}",
+                    "confidence": "high",
+                }
+
+        # Phase 3: Boolean-blind — compare true vs false conditions
+        true_url = _replace_param(target_url, param, "1 OR 1=1")
+        false_url = _replace_param(target_url, param, "1 AND 1=2")
+        _, true_body, _ = await _send(session, true_url)
+        _, false_body, _ = await _send(session, false_url)
+
+        if true_body and false_body:
+            true_len = len(true_body)
+            false_len = len(false_body)
+            # Significant size difference between true/false = blind SQLi
+            if (abs(true_len - false_len) > 200
+                    and abs(true_len - baseline_len) < 1000):
+                return {
+                    "vulnerable": True,
+                    "url": target_url,
+                    "param": param,
+                    "technique": "boolean-blind",
+                    "payload": "1 OR 1=1 vs 1 AND 1=2",
+                    "evidence": (
+                        f"Response size diff: true={true_len}, "
+                        f"false={false_len}, baseline={baseline_len}"
+                    ),
+                    "confidence": "medium",
+                }
+
+    return {"vulnerable": False, "url": target_url, "param": param}
+
+
 async def test_ssrf(
     target_url: str, param: str, original_value: str,
 ) -> dict[str, Any]:
