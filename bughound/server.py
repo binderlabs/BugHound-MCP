@@ -1275,8 +1275,29 @@ async def bughound_validate_finding(
 )
 async def bughound_validate_all(workspace_id: str) -> str:
     """Batch-validate all findings."""
-    result = await stage_validate.validate_all(workspace_id)
-    return _format_validate_all_result(result)
+    # Run as background job to avoid MCP client timeout
+    try:
+        job_id = await _job_manager.create_job(workspace_id, "validate_all", "batch validation")
+    except RuntimeError as exc:
+        return f"Error: {exc}"
+
+    async def _run_job(jid: str) -> None:
+        result = await stage_validate.validate_all(workspace_id)
+        summary = {
+            "total_validated": result.get("total_validated", 0),
+            "confirmed": result.get("confirmed", 0),
+            "false_positives": result.get("false_positives", 0),
+            "manual_review": result.get("manual_review", 0),
+        }
+        await _job_manager.complete_job(jid, summary)
+
+    await _job_manager.start_job(job_id, _run_job(job_id))
+    return _format_job_started({
+        "status": "job_started",
+        "job_id": job_id,
+        "message": "Batch validation started for all unvalidated findings.",
+        "estimated_time": "3-10 minutes",
+    })
 
 
 @mcp.tool(

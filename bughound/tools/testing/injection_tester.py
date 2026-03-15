@@ -59,7 +59,7 @@ async def _send(
             ssl=False, timeout=_TIMEOUT,
         ) as resp:
             body = await resp.text(errors="replace")
-            resp_headers = {k: v for k, v in resp.headers.items()}
+            resp_headers = {k.lower(): v for k, v in resp.headers.items()}
             return resp.status, body[:50_000], resp_headers
     except Exception:
         return 0, "", {}
