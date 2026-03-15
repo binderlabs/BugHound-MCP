@@ -562,10 +562,18 @@ async def probe_reflection(
     new_lfi: list[dict[str, Any]] = []
     probed_count = 0
 
-    # Track what's already classified to avoid duplicates
-    existing_xss = {f"{c['url']}:{c['param']}" for c in classification.get("xss_candidates", [])}
-    existing_sqli = {f"{c['url']}:{c['param']}" for c in classification.get("sqli_candidates", [])}
-    existing_lfi = {f"{c['url']}:{c['param']}" for c in classification.get("lfi_candidates", [])}
+    # Index existing candidates by url:param for tagging with probe results
+    def _build_index(candidates: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        idx: dict[str, dict[str, Any]] = {}
+        for c in candidates:
+            dk = f"{c.get('url', '')}:{c.get('param', '')}"
+            if dk not in idx:
+                idx[dk] = c
+        return idx
+
+    xss_index = _build_index(classification.get("xss_candidates", []))
+    sqli_index = _build_index(classification.get("sqli_candidates", []))
+    lfi_index = _build_index(classification.get("lfi_candidates", []))
 
     async def _probe_one(session: aiohttp.ClientSession, url: str, param: str, sample: str) -> None:
         nonlocal probed_count
@@ -582,10 +590,12 @@ async def probe_reflection(
                         body = await resp.text(errors="replace")
                         ct = resp.headers.get("content-type", "")
 
-                        # If marker reflected in HTML body → XSS candidate
-                        if _PROBE_MARKER in body and "text/html" in ct:
+                        # If marker reflected in HTML body → XSS confirmed
+                        if _PROBE_MARKER in body and "text/html" in ct.lower():
                             dk = f"{url}:{param}"
-                            if dk not in existing_xss:
+                            if dk in xss_index:
+                                xss_index[dk]["probe"] = "reflected"
+                            else:
                                 new_xss.append({
                                     "url": url, "param": param,
                                     "sample_value": sample, "method": "GET",
@@ -606,7 +616,9 @@ async def probe_reflection(
 
                         if _SQL_ERROR_RE.search(body):
                             dk = f"{url}:{param}"
-                            if dk not in existing_sqli:
+                            if dk in sqli_index:
+                                sqli_index[dk]["probe"] = "sql_error"
+                            else:
                                 new_sqli.append({
                                     "url": url, "param": param,
                                     "sample_value": sample, "method": "GET",
@@ -615,27 +627,29 @@ async def probe_reflection(
                 except Exception:
                     pass
 
-                # --- Probe 3: LFI check (only if not already LFI) ---
+                # --- Probe 3: LFI check ---
                 dk = f"{url}:{param}"
-                if dk not in existing_lfi:
-                    lfi_url = _replace_param_value(
-                        url, param, "../../../../etc/passwd",
-                    )
-                    try:
-                        async with session.get(
-                            lfi_url, headers=_PROBE_HEADERS,
-                            timeout=_PROBE_TIMEOUT, ssl=False,
-                            allow_redirects=True,
-                        ) as resp:
-                            body = await resp.text(errors="replace")
-                            if _LFI_INDICATOR_RE.search(body):
+                lfi_url = _replace_param_value(
+                    url, param, "../../../../etc/passwd",
+                )
+                try:
+                    async with session.get(
+                        lfi_url, headers=_PROBE_HEADERS,
+                        timeout=_PROBE_TIMEOUT, ssl=False,
+                        allow_redirects=True,
+                    ) as resp:
+                        body = await resp.text(errors="replace")
+                        if _LFI_INDICATOR_RE.search(body):
+                            if dk in lfi_index:
+                                lfi_index[dk]["probe"] = "lfi_confirmed"
+                            else:
                                 new_lfi.append({
                                     "url": url, "param": param,
                                     "sample_value": sample, "method": "GET",
                                     "probe": "lfi_confirmed",
                                 })
-                    except Exception:
-                        pass
+                except Exception:
+                    pass
 
                 probed_count += 1
             except Exception:
@@ -653,23 +667,29 @@ async def probe_reflection(
     if new_lfi:
         classification.setdefault("lfi_candidates", []).extend(new_lfi)
 
+    # Count probe-confirmed (tagged existing + new)
+    tagged_xss = sum(1 for c in classification.get("xss_candidates", []) if c.get("probe"))
+    tagged_sqli = sum(1 for c in classification.get("sqli_candidates", []) if c.get("probe"))
+    tagged_lfi = sum(1 for c in classification.get("lfi_candidates", []) if c.get("probe"))
+
     # Update stats
     stats = classification.get("stats", {})
     stats["probe_total"] = probed_count
-    stats["probe_xss_found"] = len(new_xss)
-    stats["probe_sqli_found"] = len(new_sqli)
-    stats["probe_lfi_found"] = len(new_lfi)
+    stats["probe_xss_found"] = tagged_xss + len(new_xss)
+    stats["probe_sqli_found"] = tagged_sqli + len(new_sqli)
+    stats["probe_lfi_found"] = tagged_lfi + len(new_lfi)
     stats["xss_count"] = len(classification.get("xss_candidates", []))
     stats["sqli_count"] = len(classification.get("sqli_candidates", []))
     stats["lfi_count"] = len(classification.get("lfi_candidates", []))
 
-    if new_xss or new_sqli or new_lfi:
+    total_confirmed = stats["probe_xss_found"] + stats["probe_sqli_found"] + stats["probe_lfi_found"]
+    if total_confirmed > 0:
         logger.info(
             "param_probe.results",
             probed=probed_count,
-            xss_found=len(new_xss),
-            sqli_found=len(new_sqli),
-            lfi_found=len(new_lfi),
+            xss_confirmed=stats["probe_xss_found"],
+            sqli_confirmed=stats["probe_sqli_found"],
+            lfi_confirmed=stats["probe_lfi_found"],
         )
 
     return classification
