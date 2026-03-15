@@ -334,17 +334,28 @@ def classify_parameters(
 
         matched_types = _classify_one_param(param_lower)
 
-        # Ensure ALL params get tested for core injection classes.
-        # A param matching only XSS (e.g. CityName via *name) should still
-        # be tested for SQLi and LFI — any user input can be injectable.
+        # Skip framework/internal params that are never user-injectable
+        _SKIP_PARAMS = {
+            "__viewstate", "__viewstategenerator", "__eventvalidation",
+            "__eventtarget", "__eventargument", "__lastfocus",
+            "__requestverificationtoken", "__previouspage",
+            "csrf_token", "csrfmiddlewaretoken", "_token", "_csrf",
+            "authenticity_token",
+        }
+        if param_lower in _SKIP_PARAMS:
+            # These are anti-CSRF/framework tokens — classify as deserialization
+            # only if they match, otherwise skip entirely
+            if matched_types:
+                param_vuln_count.setdefault(param_lower, set()).update(matched_types)
+            continue
+
+        # Ensure ALL user-input params get tested for core injection classes.
         core_types = {"xss", "sqli", "lfi", "ssti"}
         if matched_types:
-            # Add missing core types to already-matched params
             for ct in core_types:
                 if ct not in matched_types:
                     matched_types.append(ct)
         else:
-            # Completely unmatched params — add all core types
             matched_types = list(core_types)
 
         param_vuln_count.setdefault(param_lower, set()).update(matched_types)
