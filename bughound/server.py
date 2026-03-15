@@ -77,38 +77,45 @@ async def bughound_init(target: str, depth: str = "light") -> str:
     )
     await workspace.add_stage_history(meta.workspace_id, 0, "completed")
 
-    # Format stage list
     stage_names = {
         0: "Initialize", 1: "Enumerate", 2: "Discover",
         3: "Analyze", 4: "Test", 5: "Validate", 6: "Report",
     }
-    stages_str = ", ".join(
-        f"Stage {s} ({stage_names.get(s, '?')})"
-        for s in classification.stages_to_run
-    )
-
-    skips = ""
-    if classification.skip_reasons:
-        skips = "\n**Skipped stages:**\n"
-        for stage, reason in classification.skip_reasons.items():
-            skips += f"  - Stage {stage}: {reason}\n"
 
     next_step = _suggest_next(classification.stages_to_run)
 
     ws_path = workspace.workspace_dir(meta.workspace_id)
 
+    # Build pipeline progress line
+    all_stages = classification.stages_to_run
+    pipeline_parts = []
+    for s in sorted(stage_names.keys()):
+        if s not in all_stages:
+            continue
+        if s == 0:
+            pipeline_parts.append(f"Stage {s} [done]")
+        else:
+            pipeline_parts.append(f"Stage {s}")
+    pipeline_line = " > ".join(pipeline_parts)
+
+    skip_lines = ""
+    if classification.skip_reasons:
+        skip_lines = "\n  Skipped:\n"
+        for stage_num, reason in classification.skip_reasons.items():
+            skip_lines += f"    Stage {stage_num}: {reason}\n"
+
     return (
-        f"## \U0001f3af BugHound Workspace Initialized\n\n"
-        f"| Field | Value |\n"
-        f"|-------|-------|\n"
-        f"| Workspace ID | `{meta.workspace_id}` |\n"
-        f"| Target | `{target}` |\n"
-        f"| Target Type | {classification.target_type.value} |\n"
-        f"| Depth | {depth} |\n"
-        f"| Normalized | {', '.join(classification.normalized_targets)} |\n\n"
-        f"**Pipeline:** {stages_str}\n"
-        f"{skips}\n"
-        f"**Next step:** {next_step}\n"
+        "=" * 45 + "\n"
+        "  BugHound -- Workspace Initialized\n"
+        "=" * 45 + "\n\n"
+        f"  Target:     {target}\n"
+        f"  Type:       {classification.target_type.value}\n"
+        f"  Depth:      {depth}\n"
+        f"  Workspace:  {meta.workspace_id}\n"
+        f"  Normalized: {', '.join(classification.normalized_targets)}\n"
+        f"{skip_lines}\n"
+        f"  Pipeline: {pipeline_line}\n\n"
+        f"  Next: {next_step}\n"
     )
 
 
@@ -1338,22 +1345,42 @@ async def bughound_job_status(job_id: str) -> str:
 
     # Progress bar
     filled = int(pct / 5)
-    bar = "\u2588" * filled + "\u2591" * (20 - filled)
+    bar = "#" * filled + "-" * (20 - filled)
 
-    icon = {"PENDING": "\u23f3", "RUNNING": "\U0001f504", "COMPLETED": "\u2705", "FAILED": "\u274c", "TIMED_OUT": "\u23f0"}.get(st, "\u2753")
+    status_label = {
+        "PENDING": "PENDING",
+        "RUNNING": "RUNNING",
+        "COMPLETED": "COMPLETED",
+        "FAILED": "FAILED",
+        "TIMED_OUT": "TIMED OUT",
+    }.get(st, st)
+
+    # Pick header based on status
+    if st == "COMPLETED":
+        header = "  Job Completed"
+    elif st == "FAILED":
+        header = "  Job Failed"
+    else:
+        header = "  Job Status"
 
     lines = [
-        f"## {icon} Job Status: `{job_id}`\n",
-        f"**Status:** {st}",
-        f"**Progress:** [{bar}] {pct}%",
-        f"**Current:** {status.get('message', '')}",
+        "=" * 45,
+        header,
+        "=" * 45,
+        "",
+        f"  Job:      {job_id}",
+        f"  Status:   {status_label}",
+        f"  Progress: [{bar}] {pct}%",
     ]
+    msg = status.get('message', '')
+    if msg:
+        lines.append(f"  Current:  {msg}")
     if status.get("current_module"):
-        lines.append(f"**Module:** {status['current_module']}")
+        lines.append(f"  Module:   {status['current_module']}")
+    lines.append("")
 
     if status.get("result_summary"):
         rs = status["result_summary"]
-        lines.append("\n### Results\n")
 
         table_rows: list[tuple[str, Any]] = []
         detail_lines: list[str] = []
@@ -1361,28 +1388,31 @@ async def bughound_job_status(job_id: str) -> str:
             if isinstance(v, dict):
                 flat = ", ".join(f"{sk}: {sv}" for sk, sv in v.items() if sv)
                 if flat:
-                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {flat}")
+                    detail_lines.append(f"  {k.replace('_', ' ').title()}: {flat}")
             elif isinstance(v, list):
                 if v:
-                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {len(v)} items")
+                    detail_lines.append(f"  {k.replace('_', ' ').title()}: {len(v)} items")
             elif v or v == 0:
                 table_rows.append((k, v))
 
         if table_rows:
-            lines.append("| Metric | Value |")
-            lines.append("|--------|-------|")
+            lines.append("  | Metric | Value |")
+            lines.append("  |--------|-------|")
             for k, v in table_rows:
-                lines.append(f"| {k.replace('_', ' ').title()} | {v} |")
+                lines.append(f"  | {k.replace('_', ' ').title()} | {v} |")
             lines.append("")
 
         for dl in detail_lines:
             lines.append(dl)
 
     if status.get("error"):
-        lines.append(f"\n**Error:** {status['error']}")
+        lines.append(f"  Error: {status['error']}")
 
     if st in ("RUNNING", "PENDING"):
-        lines.append(f"\nWait at least 30 seconds before checking again.")
+        lines.append(f"  Wait at least 30 seconds before checking again.")
+
+    if st == "COMPLETED":
+        lines.append(f"  Use bughound_job_results for full details.")
 
     return "\n".join(lines) + "\n"
 
@@ -1402,17 +1432,26 @@ async def bughound_job_results(job_id: str) -> str:
 
     if status["status"] not in ("COMPLETED", "FAILED", "TIMED_OUT"):
         return (
-            f"Job `{job_id}` is still **{status['status']}** "
+            f"Job {job_id} is still {status['status']} "
             f"({status['progress_pct']}%). Tell the user the current progress and wait for them to check again."
         )
 
-    lines = [f"## Job Results: `{job_id}`\n"]
-    lines.append(f"**Status:** {status['status']}")
-    lines.append(f"**Workspace:** `{status.get('workspace_id', 'unknown')}`")
+    st = status["status"]
+    ws = status.get("workspace_id", "unknown")
+
+    lines = [
+        "=" * 45,
+        "  Job Results",
+        "=" * 45,
+        "",
+        f"  Job:       {job_id}",
+        f"  Status:    {st}",
+        f"  Workspace: {ws}",
+        "",
+    ]
 
     if status.get("result_summary"):
         rs = status["result_summary"]
-        lines.append("\n### Results\n")
 
         table_rows: list[tuple[str, Any]] = []
         detail_lines: list[str] = []
@@ -1420,25 +1459,25 @@ async def bughound_job_results(job_id: str) -> str:
             if isinstance(v, dict):
                 flat = ", ".join(f"{sk}: {sv}" for sk, sv in v.items() if sv)
                 if flat:
-                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {flat}")
+                    detail_lines.append(f"  {k.replace('_', ' ').title()}: {flat}")
             elif isinstance(v, list):
                 if v:
-                    detail_lines.append(f"**{k.replace('_', ' ').title()}:** {len(v)} items")
+                    detail_lines.append(f"  {k.replace('_', ' ').title()}: {len(v)} items")
             elif v or v == 0:
                 table_rows.append((k, v))
 
         if table_rows:
-            lines.append("| Metric | Value |")
-            lines.append("|--------|-------|")
+            lines.append("  | Metric | Value |")
+            lines.append("  |--------|-------|")
             for k, v in table_rows:
-                lines.append(f"| {k.replace('_', ' ').title()} | {v} |")
+                lines.append(f"  | {k.replace('_', ' ').title()} | {v} |")
             lines.append("")
 
         for dl in detail_lines:
             lines.append(dl)
 
     if status.get("error"):
-        lines.append(f"\n**Error:** {status['error']}")
+        lines.append(f"  Error: {status['error']}")
 
     return "\n".join(lines) + "\n"
 
@@ -1474,64 +1513,72 @@ def _format_enumerate(result: dict[str, Any]) -> str:
     if data.get("skipped"):
         return result["message"]
 
-    lines = [f"## Enumeration Results\n"]
-    lines.append(f"**{result['message']}**\n")
+    lines = [
+        "=" * 45,
+        "  BugHound -- Enumeration Results",
+        "=" * 45,
+        "",
+        f"  {result.get('message', '')}",
+        "",
+    ]
+
+    # Summary table
+    total_subs = data.get("total_subdomains", data.get("subdomains_found", 0))
+    resolved = data.get("resolved", 0)
+    wildcards = data.get("wildcard_domains", 0)
+    lines.append("  | Metric             | Count |")
+    lines.append("  |--------------------|-------|")
+    lines.append(f"  | Subdomains Found   | {total_subs:<5} |")
+    if resolved:
+        lines.append(f"  | Resolved           | {resolved:<5} |")
+    if wildcards:
+        lines.append(f"  | Wildcard Domains   | {wildcards:<5} |")
+    lines.append("")
 
     # Tools used
     tools = data.get("tools_used", {})
     if tools:
-        lines.append("**Tools Used:**")
-        for tool, time in tools.items():
-            lines.append(f"  - {tool}: {time}")
+        tool_parts = [f"{t} ({time})" for t, time in tools.items()]
+        lines.append(f"  Tools: {', '.join(tool_parts)}")
         lines.append("")
 
     # Patterns
     patterns = data.get("patterns", {})
     interesting = patterns.get("interesting_targets", [])
     if interesting:
-        lines.append(f"**Interesting Targets ({len(interesting)}):**")
+        lines.append(f"  Interesting Targets ({len(interesting)}):")
         for t in interesting[:15]:
-            lines.append(f"  - {t}")
+            lines.append(f"    * {t}")
         if len(interesting) > 15:
-            lines.append(f"  - ... and {len(interesting) - 15} more")
+            lines.append(f"    ... and {len(interesting) - 15} more")
         lines.append("")
 
     prefixes = patterns.get("common_prefixes", [])
     if prefixes:
-        lines.append("**Common Naming Patterns:**")
+        lines.append("  Naming Patterns:")
         for p in prefixes[:10]:
-            lines.append(f"  - `{p['prefix']}*` ({p['count']} subdomains)")
+            lines.append(f"    * {p.get('prefix', '?')}* ({p.get('count', 0)} subdomains)")
         lines.append("")
 
     subnets = patterns.get("top_subnets", [])
     if subnets:
-        lines.append("**IP Subnet Clusters:**")
+        lines.append("  IP Subnet Clusters:")
         for s in subnets[:5]:
-            lines.append(f"  - {s['subnet']}: {s['host_count']} hosts")
+            lines.append(f"    * {s.get('subnet', '?')}: {s.get('host_count', 0)} hosts")
         lines.append("")
 
-    # Wildcards
-    wildcards = data.get("wildcard_domains", 0)
     if wildcards:
-        lines.append(f"**Warning:** {wildcards} wildcard DNS domain(s) detected\n")
+        lines.append(f"  [!] {wildcards} wildcard DNS domain(s) detected")
+        lines.append("")
 
     # Warnings
     warnings = result.get("warnings", [])
     if warnings:
-        lines.append("**Warnings:**")
         for w in warnings:
-            lines.append(f"  - {w}")
+            lines.append(f"  [!] {w}")
         lines.append("")
 
-    # Files
-    files = result.get("files_written", [])
-    if files:
-        lines.append("**Files written to workspace:**")
-        for f in files:
-            lines.append(f"  - `{f}`")
-        lines.append("")
-
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Continue to next stage.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -1545,138 +1592,128 @@ def _format_discover(result: dict[str, Any]) -> str:
         return _format_job_started(result)
 
     data = result.get("data", {})
-    lines = [f"## \U0001f50d Discovery Results\n"]
-    lines.append(f"**{result['message']}**\n")
+    lines = [
+        "=" * 45,
+        "  BugHound -- Discovery Results",
+        "=" * 45,
+        "",
+    ]
 
     # Summary table
-    lines.append("| Metric | Value |")
-    lines.append("|--------|-------|")
-    lines.append(f"| Live Hosts | {data.get('live_hosts', 0)} |")
-    lines.append(f"| Hosts with Flags | {data.get('hosts_with_flags', 0)} |")
-    lines.append(f"| WAF Detected | {data.get('waf_detected', 0)} |")
-    lines.append(f"| URLs Discovered | {data.get('urls_discovered', 0)} |")
-    lines.append(f"| JS Files | {data.get('js_files_found', 0)} |")
-    secrets_count = data.get("secrets_found", 0)
-    if secrets_count:
-        lines.append(f"| Secrets Found | {secrets_count} |")
-    hidden = data.get("hidden_endpoints", 0)
-    if hidden:
-        lines.append(f"| Hidden Endpoints | {hidden} |")
+    lines.append("  | Metric             | Count |")
+    lines.append("  |--------------------|-------|")
+    lines.append(f"  | Live Hosts         | {data.get('live_hosts', 0):<5} |")
+    lines.append(f"  | URLs Discovered    | {data.get('urls_discovered', 0):<5} |")
+    lines.append(f"  | JS Files           | {data.get('js_files_found', 0):<5} |")
     params = data.get("parameters_harvested", 0)
     if params:
-        lines.append(f"| Parameters | {params} |")
+        lines.append(f"  | Parameters         | {params:<5} |")
     sp = data.get("sensitive_paths_found", 0)
     if sp:
-        lines.append(f"| Sensitive Paths | {sp} |")
+        lines.append(f"  | Sensitive Paths    | {sp:<5} |")
+    secrets_count = data.get("secrets_found", 0)
+    if secrets_count:
+        lines.append(f"  | Secrets Found      | {secrets_count:<5} |")
+    hidden = data.get("hidden_endpoints", 0)
+    if hidden:
+        lines.append(f"  | Hidden Endpoints   | {hidden:<5} |")
     takeover = data.get("takeover_candidates", 0)
     if takeover:
-        lines.append(f"| Takeover Candidates | {takeover} |")
+        lines.append(f"  | Takeover Candidates| {takeover:<5} |")
     cors = data.get("cors_vulnerable", 0)
     if cors:
-        lines.append(f"| CORS Misconfig | {cors} |")
+        lines.append(f"  | CORS Misconfig     | {cors:<5} |")
     lines.append("")
 
     # Technologies
     techs = data.get("top_technologies", [])
     if techs:
-        lines.append(f"\n**Top Technologies:**")
-        for tech, count in techs[:10]:
-            lines.append(f"  - {tech} ({count} hosts)")
+        tech_names = [f"{t}" for t, _c in techs[:8]]
+        lines.append(f"  Technologies: {', '.join(tech_names)}")
 
     # Intelligence flags
     flags = data.get("flag_distribution", {})
     if flags:
-        lines.append(f"\n**Intelligence Flags:**")
-        for flag, count in flags.items():
-            lines.append(f"  - **{flag}**: {count} hosts")
+        flag_parts = [f"{flag} ({count})" for flag, count in flags.items()]
+        lines.append(f"  Flags: {', '.join(flag_parts)}")
 
-    # URLs with per-tool breakdown
-    urls = data.get("urls_discovered", 0)
-    lines.append(f"\n**URLs Discovered:** {urls}")
+    if techs or flags:
+        lines.append("")
+
+    # Probe results (if available from analyze data embedded in discover)
+    probe_data = data.get("probe_results", {})
+    if probe_data:
+        probe_parts = []
+        for vtype, count in probe_data.items():
+            if count:
+                probe_parts.append(f"{count} {vtype.upper()}")
+        if probe_parts:
+            lines.append(f"  Probe Results: {', '.join(probe_parts)} confirmed")
+            lines.append("")
+
+    # URL sources
     url_sources = data.get("url_sources", {})
     if url_sources:
-        lines.append("**URL Sources:**")
-        for tool, count in url_sources.items():
+        lines.append("  URL Sources:")
+        for tool_name, count in url_sources.items():
             if count == -1:
-                lines.append(f"  - {tool}: not installed (skipped)")
+                lines.append(f"    * {tool_name}: not installed (skipped)")
             else:
-                lines.append(f"  - {tool}: {count} URLs")
-    lines.append(f"**JS Files Found:** {data.get('js_files_found', 0)}")
+                lines.append(f"    * {tool_name}: {count}")
+        lines.append("")
 
-    # Secrets with confidence breakdown
-    secrets = data.get("secrets_found", 0)
-    if secrets:
+    # Secrets breakdown
+    if secrets_count:
         conf = data.get("secrets_by_confidence", {})
         high = conf.get("HIGH", 0)
         med = conf.get("MEDIUM", 0)
         low = conf.get("LOW", 0)
-        lines.append(
-            f"\n**Secrets Found:** {secrets} "
-            f"(HIGH: {high}, MEDIUM: {med}, LOW: {low})"
-        )
+        lines.append(f"  Secrets: {secrets_count} total (HIGH: {high}, MEDIUM: {med}, LOW: {low})")
         stypes = data.get("secret_types", {})
         if stypes:
             for stype, count in stypes.items():
-                lines.append(f"  - {stype}: {count}")
+                lines.append(f"    * {stype}: {count}")
+        lines.append("")
 
-    # Hidden endpoints
-    hidden = data.get("hidden_endpoints", 0)
-    if hidden:
-        lines.append(f"\n**Hidden Endpoints (in JS, not crawled):** {hidden}")
-
-    # Parameters
-    params = data.get("parameters_harvested", 0)
-    if params:
-        lines.append(f"**Parameters Harvested:** {params}")
-
-    # Sensitive paths
-    sp = data.get("sensitive_paths_found", 0)
+    # Sensitive path categories
     if sp:
-        lines.append(f"\n**Sensitive Paths Found:** {sp}")
         sp_cats = data.get("sensitive_path_categories", {})
         if sp_cats:
+            lines.append(f"  Sensitive Paths ({sp}):")
             for cat, count in sp_cats.items():
-                lines.append(f"  - {cat}: {count}")
+                lines.append(f"    * {cat}: {count}")
+            lines.append("")
 
     # Takeover
-    takeover = data.get("takeover_candidates", 0)
-    if takeover:
-        lines.append(f"\n**Subdomain Takeover Candidates:** {takeover}")
     takeover_conf = data.get("takeover_confirmed", 0)
-    if takeover_conf:
-        lines.append(f"**Takeover Confirmed (nuclei):** {takeover_conf}")
+    if takeover:
+        lines.append(f"  Subdomain Takeover: {takeover} candidates" +
+                      (f", {takeover_conf} confirmed" if takeover_conf else ""))
+        lines.append("")
 
     # CORS
-    cors = data.get("cors_vulnerable", 0)
     if cors:
-        lines.append(f"\n**CORS Misconfiguration:** {cors} hosts")
         cors_sev = data.get("cors_severities", {})
         if cors_sev:
-            for sev, count in cors_sev.items():
-                lines.append(f"  - {sev}: {count}")
+            sev_parts = [f"{s}: {c}" for s, c in cors_sev.items()]
+            lines.append(f"  CORS Misconfig: {cors} hosts ({', '.join(sev_parts)})")
+        else:
+            lines.append(f"  CORS Misconfig: {cors} hosts")
+        lines.append("")
 
     # CDN
     cdn = data.get("majority_cdn")
     if cdn:
-        lines.append(f"\n**Majority CDN:** {cdn}")
-
-    lines.append(f"\n**httpx execution time:** {data.get('httpx_time', '?')}")
+        lines.append(f"  CDN: {cdn}")
 
     # Warnings
     warnings = result.get("warnings", [])
     if warnings:
-        lines.append(f"\n**Warnings:**")
         for w in warnings:
-            lines.append(f"  - {w}")
+            lines.append(f"  [!] {w}")
+        lines.append("")
 
-    # Files
-    files = result.get("files_written", [])
-    if files:
-        lines.append(f"\n**Files written to workspace:**")
-        for f in files:
-            lines.append(f"  - `{f}`")
-
-    lines.append(f"\n**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Continue to next stage.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -1689,14 +1726,14 @@ def _format_job_started(result: dict[str, Any]) -> str:
     est = result.get('estimated_time', 'a few minutes')
     msg = result.get('message', '')
     return (
-        f"## \u23f3 Background Job Started\n\n"
-        f"| Field | Value |\n"
-        f"|-------|-------|\n"
-        f"| Job ID | `{job_id}` |\n"
-        f"| Estimated Time | {est} |\n"
-        f"| Details | {msg} |\n\n"
-        f"The job is running in the background.\n"
-        f"When ready, ask to check status of `{job_id}`.\n"
+        "=" * 45 + "\n"
+        "  Background Job Started\n"
+        "=" * 45 + "\n\n"
+        f"  Job ID:         {job_id}\n"
+        f"  Estimated Time: {est}\n"
+        f"  Details:        {msg}\n\n"
+        f"  The job is running in the background.\n"
+        f"  Ask to check status when ready.\n"
     )
 
 
@@ -1706,131 +1743,153 @@ def _format_attack_surface(result: dict[str, Any]) -> str:
         return f"Error: {result['message']}"
 
     stats = result.get("stats", {})
+    target_name = result.get('target', '?')
+    target_type = result.get('target_type', '?')
+
+    # Calculate overall score from high-interest targets
+    targets = result.get("high_interest_targets", [])
+    top_score = targets[0].get("score", 0) if targets else 0
+    top_risk = targets[0].get("risk_level", "LOW") if targets else "LOW"
+
     lines = [
-        f"## Attack Surface Analysis\n",
-        f"**Target:** {result.get('target', '?')} ({result.get('target_type', '?')})\n",
-        "### Stats Overview",
-        f"| Metric | Count |",
-        f"|--------|-------|",
-        f"| Subdomains | {stats.get('total_subdomains', 0)} |",
-        f"| Live Hosts | {stats.get('live_hosts', 0)} |",
-        f"| URLs | {stats.get('total_urls', 0)} |",
-        f"| Parameters | {stats.get('total_parameters', 0)} |",
-        f"| JS Files | {stats.get('js_files', 0)} |",
-        f"| Secrets | {stats.get('secrets_found', 0)} |",
-        f"| Hidden Endpoints | {stats.get('hidden_endpoints', 0)} |",
-        f"| Sensitive Paths | {stats.get('sensitive_paths', 0)} |",
-        f"| CORS Issues | {stats.get('cors_issues', 0)} |",
-        f"| Takeover Candidates | {stats.get('takeover_candidates', 0)} |",
+        "=" * 45,
+        "  BugHound -- Attack Surface Analysis",
+        "=" * 45,
+        "",
+        f"  Target: {target_name} ({target_type})",
+        f"  Score:  {top_score} [{top_risk}]",
         "",
     ]
 
-    # Secrets by confidence
-    sbc = stats.get("secrets_by_confidence", {})
-    if any(sbc.values()):
-        lines.append(f"**Secrets:** HIGH: {sbc.get('HIGH', 0)}, MEDIUM: {sbc.get('MEDIUM', 0)}, LOW: {sbc.get('LOW', 0)}\n")
+    # Probe-confirmed vulnerabilities (from high-interest target data)
+    probe_sections: list[str] = []
+    for t in targets:
+        pc = t.get("probe_confirmed", {})
+        if pc:
+            for vtype, items in pc.items():
+                param_count = len(items)
+                endpoints = set()
+                param_names = []
+                for item in items[:5]:
+                    if isinstance(item, dict):
+                        url = item.get("url", "")
+                        # Extract page name from URL
+                        page = url.split("/")[-1].split("?")[0] if url else "?"
+                        endpoints.add(page)
+                        pname = item.get("parameter", item.get("param", ""))
+                        if pname:
+                            param_names.append(pname)
+                    elif isinstance(item, str):
+                        endpoints.add(item)
+                sev_map = {"sqli": "CRITICAL", "xss": "HIGH", "lfi": "HIGH",
+                           "ssti": "HIGH", "rce": "CRITICAL", "ssrf": "HIGH"}
+                sev = sev_map.get(vtype.lower(), "MEDIUM")
+                ep_str = ", ".join(sorted(endpoints)[:3])
+                param_str = f" ({', '.join(param_names[:4])})" if param_names else ""
+                probe_sections.append(
+                    f"    [{sev}] {vtype.upper()} -- {ep_str}{param_str} [{param_count} params]"
+                )
 
-    # Immediate wins (most important — show first)
-    wins = result.get("immediate_wins", [])
-    if wins:
-        lines.append(f"### Immediate Wins ({len(wins)}) — Report NOW\n")
-        for w in wins:
-            lines.append(f"**[{w.get('severity', '?')}] {w.get('type', '?')}** on `{w.get('host', '?')}`")
-            lines.append(f"  - Path: `{w.get('path', '?')}`")
-            lines.append(f"  - Bounty: {w.get('bounty_estimate', '?')}")
-            lines.append(f"  - Evidence: {w.get('evidence', '?')}")
-            lines.append(f"  - Reproduce: `{w.get('reproduction', '?')}`")
-            lines.append(f"  - Impact: {w.get('impact', '?')}")
-            lines.append("")
+    if probe_sections:
+        lines.append("  Probe-Confirmed Vulnerabilities:")
+        lines.extend(probe_sections)
+        lines.append("")
 
     # Attack chains
     chains = result.get("attack_chains", [])
     if chains:
-        lines.append(f"### Attack Chains ({len(chains)})\n")
+        lines.append(f"  Attack Chains ({len(chains)}):")
+        lines.append("  " + "-" * 43)
         for c in chains:
-            lines.append(f"**[{c.get('severity', '?')}] {c.get('name', '?')}** (est. {c.get('bounty_estimate', '?')})")
-            lines.append(f"  - Hosts: {', '.join(c.get('affected_hosts', []))}")
-            ev = c.get("evidence", {})
-            lines.append(f"  - Trigger: {ev.get('trigger', '?')}")
-            lines.append(f"  - Supporting: {ev.get('supporting', '?')}")
-            steps = c.get("exploitation_steps", [])
-            if steps:
-                lines.append(f"  - Steps:")
-                for i, s in enumerate(steps, 1):
-                    lines.append(f"    {i}. {s}")
-            lines.append("")
+            sev = c.get("severity", "?")
+            name = c.get("name", "?")
+            bounty = c.get("bounty_estimate", "?")
+            lines.append(f"    [{sev}] {name} ({bounty})")
+        lines.append("")
 
-    # High-interest targets
-    targets = result.get("high_interest_targets", [])
-    if targets:
-        lines.append(f"### High-Interest Targets (top {len(targets)})\n")
-        for t in targets:
-            risk = t.get("risk_level", "?")
-            emoji_map = {"CRITICAL": "!!!", "HIGH": "!!", "MEDIUM": "!", "LOW": ""}
-            indicator = emoji_map.get(risk, "")
-            lines.append(f"**{t.get('host', '?')}** — Score: {t.get('score', 0)} [{risk}] {indicator}")
-            lines.append(f"  - URL: {t.get('url', '?')}")
-            if t.get("technologies"):
-                lines.append(f"  - Tech: {', '.join(t['technologies'][:5])}")
-            if t.get("flags"):
-                lines.append(f"  - Flags: {', '.join(t['flags'])}")
-            if t.get("secrets_on_host"):
-                for s in t["secrets_on_host"][:3]:
-                    lines.append(f"  - Secret: [{s.get('confidence')}] {s.get('type')} in {s.get('file')}")
-            if t.get("cors_issue"):
-                ci = t["cors_issue"]
-                lines.append(f"  - CORS: [{ci.get('severity')}] {ci.get('detail')}")
-            if t.get("sensitive_paths_found"):
-                lines.append(f"  - Sensitive: {', '.join(t['sensitive_paths_found'][:5])}")
-            lines.append(f"  - Endpoints: {t.get('hidden_endpoints_count', 0)} hidden, {t.get('api_endpoints_count', 0)} API")
-            lines.append(f"  - Params: {t.get('parameters_count', 0)} | URLs: {t.get('urls_count', 0)}")
-            if t.get("reasons"):
-                lines.append(f"  - Why:")
-                for r in t["reasons"]:
-                    lines.append(f"    - {r}")
-            lines.append("")
+    # Immediate wins
+    wins = result.get("immediate_wins", [])
+    if wins:
+        lines.append(f"  Immediate Wins ({len(wins)}) -- Report NOW:")
+        lines.append("  " + "-" * 43)
+        for w in wins:
+            sev = w.get("severity", "?")
+            wtype = w.get("type", "?")
+            host = w.get("host", "?")
+            lines.append(f"    [{sev}] {wtype} on {host}")
+            path = w.get("path", "")
+            if path:
+                lines.append(f"      Path: {path}")
+            bounty = w.get("bounty_estimate", "")
+            if bounty:
+                lines.append(f"      Bounty: {bounty}")
+        lines.append("")
 
-    # Correlations
+    # AI Reasoning Prompts (from correlations)
     corrs = result.get("correlations", [])
     if corrs:
-        lines.append(f"### Cross-Stage Correlations ({len(corrs)})\n")
-        for c in corrs:
-            lines.append(f"**[{c.get('priority', '?')}] {c.get('type', '?')}**")
-            lines.append(f"  - {c.get('description', '?')}")
-            lines.append(f"  - Significance: {c.get('significance', '?')}")
-            lines.append("")
+        lines.append("  AI Reasoning Prompts:")
+        for c in corrs[:5]:
+            lines.append(f"    * {c.get('description', '?')}")
+        lines.append("")
+
+    # High-interest targets
+    if targets:
+        lines.append(f"  High-Interest Targets ({len(targets)}):")
+        lines.append("  " + "-" * 43)
+        for t in targets:
+            risk = t.get("risk_level", "?")
+            host = t.get("host", "?")
+            score = t.get("score", 0)
+            lines.append(f"    {host} -- Score: {score} [{risk}]")
+            if t.get("technologies"):
+                lines.append(f"      Tech: {', '.join(t['technologies'][:5])}")
+            if t.get("flags"):
+                lines.append(f"      Flags: {', '.join(t['flags'][:5])}")
+            if t.get("secrets_on_host"):
+                for s in t["secrets_on_host"][:2]:
+                    lines.append(f"      Secret: [{s.get('confidence', '?')}] {s.get('type', '?')} in {s.get('file', '?')}")
+            if t.get("cors_issue"):
+                ci = t["cors_issue"]
+                lines.append(f"      CORS: [{ci.get('severity', '?')}] {ci.get('detail', '?')}")
+            if t.get("sensitive_paths_found"):
+                lines.append(f"      Sensitive: {', '.join(t['sensitive_paths_found'][:5])}")
+            params_c = t.get("parameters_count", 0)
+            urls_c = t.get("urls_count", 0)
+            hidden_c = t.get("hidden_endpoints_count", 0)
+            api_c = t.get("api_endpoints_count", 0)
+            lines.append(f"      Params: {params_c} | URLs: {urls_c} | Hidden: {hidden_c} | API: {api_c}")
+        lines.append("")
 
     # Technology playbooks
     pbs = result.get("technology_playbooks", [])
     if pbs:
-        lines.append(f"### Technology Playbooks\n")
+        lines.append("  Technology Playbooks:")
         for pb in pbs:
-            lines.append(f"**{pb.get('technology', '?')}:**")
-            for check in pb.get("checks", []):
+            lines.append(f"    {pb.get('technology', '?')}:")
+            for check in pb.get("checks", [])[:3]:
                 if "path" in check:
-                    lines.append(f"  - `{check['path']}` — {check.get('purpose', '')}")
-                elif "query" in check:
-                    lines.append(f"  - Query: `{check['query'][:60]}...` — {check.get('purpose', '')}")
+                    lines.append(f"      * {check['path']} -- {check.get('purpose', '')}")
                 elif "test" in check:
-                    lines.append(f"  - Test: {check['test']} — {check.get('purpose', '')}")
+                    lines.append(f"      * {check['test']} -- {check.get('purpose', '')}")
                 elif "tool" in check:
-                    lines.append(f"  - Tool: `{check['tool']} {check.get('args', '')}` — {check.get('purpose', '')}")
-            lines.append("")
+                    lines.append(f"      * {check['tool']} {check.get('args', '')} -- {check.get('purpose', '')}")
+        lines.append("")
 
     # Suggested test classes
     tc = result.get("suggested_test_classes", [])
     if tc:
-        lines.append(f"**Suggested test classes:** {', '.join(tc)}\n")
+        lines.append(f"  Test Classes: {', '.join(tc)}")
+        lines.append("")
 
     # Flags summary
     flags_sum = result.get("flags_summary", {})
     if flags_sum:
-        lines.append("**Flags distribution:**")
-        for flag, count in flags_sum.items():
-            lines.append(f"  - {flag}: {count}")
+        flag_parts = [f"{flag} ({count})" for flag, count in flags_sum.items()]
+        lines.append(f"  Flags: {', '.join(flag_parts)}")
         lines.append("")
 
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Continue to next stage.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -1841,33 +1900,34 @@ def _format_scan_plan_result(result: dict[str, Any]) -> str:
 
     if result.get("status") == "rejected":
         lines = [
-            "## \u274c Scan Plan Rejected\n",
-            f"**{result.get('message', '')}**\n",
-            "**Reasons:**",
+            "=" * 45,
+            "  Scan Plan REJECTED",
+            "=" * 45,
+            "",
+            f"  {result.get('message', '')}",
+            "",
+            "  Reasons:",
         ]
         for r in result.get("rejected_reasons", []):
-            lines.append(f"  - {r}")
-        lines.append("\nFix the issues and resubmit.")
+            lines.append(f"    * {r}")
+        lines.append("")
+        lines.append("  Fix the issues and resubmit.")
         return "\n".join(lines) + "\n"
 
     # Approved
-    lines = [
-        "## \u2705 Scan Plan Approved\n",
-        f"| Metric | Value |",
-        f"|--------|-------|",
-        f"| Targets | {result.get('targets_count', 0)} |",
-        f"| Test Classes | {result.get('test_classes_total', 0)} |",
-    ]
-
+    targets_count = result.get("targets_count", 0)
+    test_classes_total = result.get("test_classes_total", 0)
     tools_avail = result.get("tools_available", [])
     tools_missing = result.get("tools_missing", [])
 
-    if tools_avail:
-        lines.append(f"| Tools Available | {', '.join(tools_avail)} |")
-    if tools_missing:
-        lines.append(f"| Tools Missing | {', '.join(tools_missing)} |")
-
-    lines.append("")
+    lines = [
+        "=" * 45,
+        "  Scan Plan Approved",
+        "=" * 45,
+        "",
+        f"  Targets: {targets_count}  |  Test Classes: {test_classes_total}",
+        "",
+    ]
 
     # Show test classes grouped
     test_classes = result.get("test_classes_list", [])
@@ -1878,16 +1938,24 @@ def _format_scan_plan_result(result: dict[str, Any]) -> str:
         other = [c for c in test_classes if c not in injection + auth_access + infra]
 
         if injection:
-            lines.append(f"**Injection Tests:** {', '.join(injection)}")
+            lines.append(f"  Injection:    {', '.join(injection)}")
         if auth_access:
-            lines.append(f"**Auth/Access Tests:** {', '.join(auth_access)}")
+            lines.append(f"  Auth/Access:  {', '.join(auth_access)}")
         if infra:
-            lines.append(f"**Infrastructure Tests:** {', '.join(infra)}")
+            lines.append(f"  Infra:        {', '.join(infra)}")
         if other:
-            lines.append(f"**Other Tests:** {', '.join(other)}")
+            lines.append(f"  Other:        {', '.join(other)}")
         lines.append("")
 
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
+    # Tools status
+    if tools_avail or tools_missing:
+        avail_str = ", ".join(f"{t} [ok]" for t in tools_avail)
+        missing_str = ", ".join(f"{t} [missing]" for t in tools_missing)
+        parts = [p for p in [avail_str, missing_str] if p]
+        lines.append(f"  Tools: {', '.join(parts)}")
+        lines.append("")
+
+    lines.append(f"  Next: {result.get('next_step', 'Submit scan plan and execute tests.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -1897,92 +1965,106 @@ def _format_enrich_target(result: dict[str, Any]) -> str:
         return f"Error: {result['message']}"
 
     fp = result.get("fingerprint", {})
+    host = result.get("host", "?")
+    score = result.get("score", 0)
+    risk = result.get("risk_level", "?")
+
     lines = [
-        f"## Target Dossier: `{result.get('host', '?')}`\n",
-        f"**Score:** {result.get('score', 0)} [{result.get('risk_level', '?')}]\n",
-        "### Fingerprint",
-        f"  - URL: {fp.get('url', '?')}",
-        f"  - Status: {fp.get('status_code', '?')}",
-        f"  - Title: {fp.get('title', '?')}",
-        f"  - Server: {fp.get('web_server', '?')}",
-        f"  - IP: {fp.get('ip', '?')}",
-        f"  - CDN: {fp.get('cdn') or 'None'}",
+        "=" * 45,
+        f"  Target Dossier: {host}",
+        "=" * 45,
+        "",
+        f"  Score: {score} [{risk}]",
+        "",
+        "  Fingerprint:",
+        f"    URL:    {fp.get('url', '?')}",
+        f"    Status: {fp.get('status_code', '?')}",
+        f"    Title:  {fp.get('title', '?')}",
+        f"    Server: {fp.get('web_server', '?')}",
+        f"    IP:     {fp.get('ip', '?')}",
+        f"    CDN:    {fp.get('cdn') or 'None'}",
         "",
     ]
 
     if result.get("flags"):
-        lines.append("### Flags")
-        for f in result["flags"]:
-            lines.append(f"  - {f}")
+        lines.append(f"  Flags: {', '.join(result['flags'])}")
         lines.append("")
 
     if result.get("technologies"):
-        lines.append(f"### Technologies: {', '.join(result['technologies'])}\n")
+        lines.append(f"  Technologies: {', '.join(result['technologies'])}")
+        lines.append("")
 
     waf = result.get("waf")
     if waf:
-        lines.append(f"### WAF: {waf.get('waf', 'None')} ({'detected' if waf.get('detected') else 'not detected'})\n")
+        waf_status = "detected" if waf.get("detected") else "not detected"
+        lines.append(f"  WAF: {waf.get('waf', 'None')} ({waf_status})")
+        lines.append("")
 
     if result.get("reasons"):
-        lines.append("### Risk Factors")
+        lines.append("  Risk Factors:")
         for r in result["reasons"]:
-            lines.append(f"  - {r}")
+            lines.append(f"    * {r}")
         lines.append("")
 
     if result.get("secrets"):
-        lines.append(f"### Secrets ({len(result['secrets'])})")
+        lines.append(f"  Secrets ({len(result['secrets'])}):")
         for s in result["secrets"][:10]:
-            lines.append(f"  - [{s.get('confidence')}] {s.get('type')}: `{s.get('value', '?')}`")
+            lines.append(f"    * [{s.get('confidence', '?')}] {s.get('type', '?')}: {s.get('value', '?')}")
         lines.append("")
 
     if result.get("sensitive_paths"):
-        lines.append(f"### Sensitive Paths ({len(result['sensitive_paths'])})")
-        for sp in result["sensitive_paths"][:10]:
-            lines.append(f"  - [{sp.get('category')}] `{sp.get('path')}` (status {sp.get('status_code', '?')})")
+        lines.append(f"  Sensitive Paths ({len(result['sensitive_paths'])}):")
+        for sp_item in result["sensitive_paths"][:10]:
+            lines.append(f"    * [{sp_item.get('category', '?')}] {sp_item.get('path', '?')} (status {sp_item.get('status_code', '?')})")
         lines.append("")
 
     if result.get("cors_results"):
-        lines.append(f"### CORS Issues ({len(result['cors_results'])})")
+        lines.append(f"  CORS Issues ({len(result['cors_results'])}):")
         for c in result["cors_results"]:
-            lines.append(f"  - [{c.get('severity')}] origin {c.get('origin_tested', '?')} reflected")
+            lines.append(f"    * [{c.get('severity', '?')}] origin {c.get('origin_tested', '?')} reflected")
         lines.append("")
 
     if result.get("hidden_endpoints"):
-        lines.append(f"### Hidden Endpoints ({len(result['hidden_endpoints'])})")
+        lines.append(f"  Hidden Endpoints ({len(result['hidden_endpoints'])}):")
         for ep in result["hidden_endpoints"][:15]:
-            lines.append(f"  - {ep.get('method', 'GET')} `{ep.get('path', '?')}`")
+            lines.append(f"    * {ep.get('method', 'GET')} {ep.get('path', '?')}")
+        if len(result["hidden_endpoints"]) > 15:
+            lines.append(f"    ... and {len(result['hidden_endpoints']) - 15} more")
         lines.append("")
 
     if result.get("api_endpoints"):
-        lines.append(f"### API Endpoints ({len(result['api_endpoints'])})")
+        lines.append(f"  API Endpoints ({len(result['api_endpoints'])}):")
         for ep in result["api_endpoints"][:15]:
-            lines.append(f"  - {ep.get('method', 'GET')} `{ep.get('path', '?')}`")
+            lines.append(f"    * {ep.get('method', 'GET')} {ep.get('path', '?')}")
+        if len(result["api_endpoints"]) > 15:
+            lines.append(f"    ... and {len(result['api_endpoints']) - 15} more")
         lines.append("")
 
     if result.get("parameters"):
-        lines.append(f"### Parameters ({len(result['parameters'])} paths)")
+        lines.append(f"  Parameters ({len(result['parameters'])} paths):")
         for p in result["parameters"][:10]:
             param_names = [pr.get("name", "?") for pr in p.get("params", [])]
-            lines.append(f"  - `{p.get('path', '?')}`: {', '.join(param_names)}")
+            lines.append(f"    * {p.get('path', '?')}: {', '.join(param_names)}")
         lines.append("")
 
     urls_total = result.get("urls_total", 0)
     if urls_total:
-        lines.append(f"### URLs: {urls_total} total (showing first {len(result.get('urls', []))})")
-        for u in result.get("urls", [])[:20]:
-            lines.append(f"  - {u}")
+        shown = result.get("urls", [])[:20]
+        lines.append(f"  URLs: {urls_total} total (showing {len(shown)}):")
+        for u in shown:
+            lines.append(f"    * {u}")
         lines.append("")
 
     if result.get("attack_chains"):
-        lines.append(f"### Attack Chains Involving This Host")
+        lines.append("  Attack Chains:")
         for c in result["attack_chains"]:
-            lines.append(f"  - [{c.get('severity')}] {c.get('name')} (est. {c.get('bounty_estimate', '?')})")
+            lines.append(f"    * [{c.get('severity', '?')}] {c.get('name', '?')} (est. {c.get('bounty_estimate', '?')})")
         lines.append("")
 
     if result.get("dns_records"):
-        lines.append(f"### DNS Records")
+        lines.append("  DNS Records:")
         for rec in result["dns_records"][:5]:
-            lines.append(f"  - {json.dumps(rec)}")
+            lines.append(f"    * {json.dumps(rec)}")
         lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -1993,80 +2075,78 @@ def _format_test_results(result: dict[str, Any]) -> str:
     if result.get("status") == "error":
         return f"Error [{result.get('error_type', '?')}]: {result['message']}"
 
-    sev_icon = {"critical": "\U0001f534", "high": "\U0001f7e0", "medium": "\U0001f7e1", "low": "\U0001f535", "info": "\u26aa"}
+    targets_tested = result.get("targets_tested", 0)
+    findings_total = result.get("findings_total", 0)
+    definitive = result.get("findings_definitive", 0)
+    needs_val = result.get("findings_needing_validation", 0)
 
-    lines = [f"## \U0001f3af Test Results\n"]
+    lines = [
+        "=" * 45,
+        "  BugHound -- Test Results",
+        "=" * 45,
+        "",
+        f"  Targets: {targets_tested}  |  Findings: {findings_total} unique",
+    ]
+    if definitive is not None and needs_val is not None:
+        lines.append(f"  Definitive: {definitive}  |  Needs Validation: {needs_val}")
+    lines.append("")
 
-    lines.append(f"**Targets Tested:** {result.get('targets_tested', 0)}")
-    lines.append(f"**Total Findings:** {result.get('findings_total', 0)}\n")
-
-    # Severity breakdown as table
+    # Severity breakdown
     sev = result.get("findings_by_severity", {})
     if any(sev.values()):
-        lines.append("| Severity | Count |")
-        lines.append("|----------|-------|")
+        lines.append("  Severity Breakdown:")
         for level in ("critical", "high", "medium", "low", "info"):
             count = sev.get(level, 0)
             if count:
-                lines.append(f"| {sev_icon.get(level, '')} {level.upper()} | {count} |")
+                lines.append(f"    {level.upper():<10} {count}")
         lines.append("")
 
-    # By vuln class
+    # By vuln class with tool info
     by_class = result.get("findings_by_class", {})
     if by_class:
-        lines.append("**By Vulnerability Class:**")
-        for cls, count in by_class.items():
-            lines.append(f"  - {cls}: {count}")
+        lines.append("  | Class      | Count |")
+        lines.append("  |------------|-------|")
+        for cls, count in sorted(by_class.items(), key=lambda x: -x[1]):
+            lines.append(f"  | {cls:<10} | {count:<5} |")
         lines.append("")
-
-    # Validation status
-    needs_val = result.get("findings_needing_validation")
-    definitive = result.get("findings_definitive")
-    if needs_val is not None:
-        lines.append(f"**Definitive (report-ready):** {definitive}")
-        lines.append(f"**Needs Validation (Stage 5):** {needs_val}\n")
 
     # Findings list - grouped by severity
     findings = result.get("findings", [])
     if findings:
-        lines.append("### Findings Detail\n")
+        lines.append("  Findings:")
+        lines.append("  " + "-" * 43)
         # Sort by severity
         sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
         sorted_findings = sorted(findings, key=lambda f: sev_order.get(f.get("severity", "info"), 5))
 
-        for f in sorted_findings[:20]:
-            s = f.get("severity", "info")
-            icon = sev_icon.get(s, "")
+        for i, f in enumerate(sorted_findings[:15], 1):
+            s = f.get("severity", "info").upper()
             desc = f.get("description", f.get("template_name", f.get("template_id", "?")))
-            val = "\u2705" if not f.get("needs_validation") else "\u23f3"
+            val_status = "[CONFIRMED]" if not f.get("needs_validation") else "[PENDING]"
+            endpoint = f.get("endpoint", f.get("host", "?"))
+            tool = f.get("tool", "?")
 
-            lines.append(f"- {icon} **[{s.upper()}]** {desc} {val}")
-            lines.append(f"  `{f.get('endpoint', f.get('host', '?'))}`  |  Tool: {f.get('tool', '?')}")
+            # Instance count
+            instances = f.get("instances_count", f.get("instances", 1))
+            inst_str = f" ({instances} instances)" if isinstance(instances, int) and instances > 1 else ""
 
-        if len(findings) > 20:
-            lines.append(f"\n... and {len(findings) - 20} more findings.")
-        lines.append("")
+            lines.append(f"  {i:>2}. [{s}] {desc} {val_status}")
+            lines.append(f"      {endpoint}{inst_str}  |  {tool}")
+            lines.append("")
 
-    # Phase stats summary
-    phase_stats = result.get("phase_stats", {})
-    if phase_stats:
-        lines.append("### Phase Stats\n")
-        lines.append("| Phase | Findings |")
-        lines.append("|-------|----------|")
-        for key, val in phase_stats.items():
-            if val > 0:
-                lines.append(f"| {key} | {val} |")
-        lines.append("")
+        if len(findings) > 15:
+            lines.append(f"  ... and {len(findings) - 15} more findings.")
+            lines.append("")
 
     # Warnings
     warnings = result.get("warnings", [])
     if warnings:
-        lines.append("**\u26a0\ufe0f Warnings:**")
+        lines.append("  Warnings:")
         for w in warnings[:10]:
-            lines.append(f"  - {w}")
+            lines.append(f"    [!] {w}")
         lines.append("")
 
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue to next stage.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Run validation or generate report.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -2075,38 +2155,46 @@ def _format_pipeline_result(result: dict[str, Any]) -> str:
     if result.get("status") == "error":
         return f"Error [{result.get('error_type', '?')}]: {result['message']}"
 
+    pipeline_name = result.get("pipeline_name", "?")
+    input_urls = result.get("input_urls", 0)
+    candidates_found = result.get("candidates_found", 0)
+    exec_time = result.get("execution_time_seconds", 0)
+
     lines = [
-        f"## Pipeline: {result.get('pipeline_name', '?')}\n",
-        f"**Description:** {result.get('description', '')}",
-        f"**Steps:** `{result.get('steps', '?')}`",
-        f"**Input URLs:** {result.get('input_urls', 0)}",
-        f"**Candidates Found:** {result.get('candidates_found', 0)}",
-        f"**Execution Time:** {result.get('execution_time_seconds', 0)}s\n",
+        "=" * 45,
+        f"  Pipeline: {pipeline_name}",
+        "=" * 45,
+        "",
+        f"  {result.get('description', '')}",
+        f"  Steps: {result.get('steps', '?')}",
+        "",
+        f"  Input URLs: {input_urls}  |  Candidates: {candidates_found}  |  Time: {exec_time}s",
+        "",
     ]
 
     tools = result.get("tools_used", {})
     if tools:
-        lines.append("**Tools:**")
-        for t, status in tools.items():
-            lines.append(f"  - {t}: {status}")
+        tool_parts = [f"{t} ({status})" for t, status in tools.items()]
+        lines.append(f"  Tools: {', '.join(tool_parts)}")
         lines.append("")
 
     candidates = result.get("candidates", [])
     if candidates:
-        lines.append("### Candidates\n")
+        lines.append("  Candidates:")
+        lines.append("  " + "-" * 43)
         for c in candidates[:20]:
             if isinstance(c, dict):
                 url = c.get("url", c.get("path", c.get("param", "?")))
                 ctype = c.get("type", "candidate")
-                lines.append(f"  - `{url}` [{ctype}]")
+                lines.append(f"    * {url} [{ctype}]")
             else:
-                lines.append(f"  - `{c}`")
+                lines.append(f"    * {c}")
 
         if len(candidates) > 20:
-            lines.append(f"  - ... and {len(candidates) - 20} more")
+            lines.append(f"    ... and {len(candidates) - 20} more")
         lines.append("")
 
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Continue.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -2117,44 +2205,61 @@ def _format_validation_result(result: dict[str, Any]) -> str:
 
     if result.get("status") == "already_validated":
         return (
-            f"Finding `{result['finding_id']}` already **{result['validation_status']}**. "
+            f"Finding {result['finding_id']} already {result['validation_status']}. "
             "No re-validation needed."
         )
 
-    lines = ["## Validation Result\n"]
-    lines.append(f"**Finding:** `{result.get('finding_id', '?')}`")
-    lines.append(f"**Status:** **{result.get('validation_status', '?')}**")
-    lines.append(f"**Tool:** {result.get('validation_tool', '?')}")
-    lines.append(f"**Time:** {result.get('validation_time_seconds', 0)}s")
+    val_status = result.get("validation_status", "?")
+    finding_id = result.get("finding_id", "?")
+    val_tool = result.get("validation_tool", "?")
+    val_time = result.get("validation_time_seconds", 0)
+
+    lines = [
+        "=" * 45,
+        "  BugHound -- Validation Result",
+        "=" * 45,
+        "",
+        f"  Finding: {finding_id}",
+        f"  Status:  [{val_status}]",
+        f"  Tool:    {val_tool}",
+        f"  Time:    {val_time}s",
+    ]
 
     cvss = result.get("cvss_score")
     if cvss:
-        lines.append(f"**CVSS Score:** {cvss}")
+        lines.append(f"  CVSS:    {cvss}")
+    lines.append("")
 
     evidence = result.get("evidence_summary", "")
     if evidence:
-        lines.append(f"\n**Evidence:**\n```\n{evidence[:500]}\n```")
+        lines.append("  Evidence:")
+        lines.append("  " + "-" * 43)
+        for eline in evidence[:500].split("\n")[:10]:
+            lines.append(f"    {eline}")
+        lines.append("")
 
     curl = result.get("curl_command", "")
     if curl:
-        lines.append(f"\n**Curl:** `{curl[:200]}`")
+        lines.append(f"  Curl: {curl[:200]}")
+        lines.append("")
 
     finding = result.get("finding", {})
     steps = finding.get("reproduction_steps", [])
     if steps:
-        lines.append("\n**Reproduction Steps:**")
+        lines.append("  Reproduction Steps:")
         for step in steps:
-            lines.append(f"  {step}")
+            lines.append(f"    {step}")
+        lines.append("")
 
     impact = finding.get("impact", "")
     if impact:
-        lines.append(f"\n**Impact:** {impact}")
+        lines.append(f"  Impact: {impact}")
 
     assessment = finding.get("severity_assessment", "")
     if assessment:
-        lines.append(f"**Assessment:** {assessment}")
+        lines.append(f"  Assessment: {assessment}")
 
-    lines.append(f"\n**Next step:** {result.get('next_step', 'Continue.')}")
+    lines.append(f"\n  Next: {result.get('next_step', 'Continue.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -2169,21 +2274,28 @@ def _format_validate_all_result(result: dict[str, Any]) -> str:
             f"{result.get('already_validated', 0)} already validated."
         )
 
-    lines = ["## Batch Validation Results\n"]
-    lines.append(f"**Validated:** {result.get('total_validated', 0)} findings")
-    lines.append(f"**Time:** {result.get('validation_time_seconds', 0)}s\n")
-
+    total_validated = result.get("total_validated", 0)
+    val_time = result.get("validation_time_seconds", 0)
     confirmed = result.get("confirmed", 0)
     fp = result.get("false_positives", 0)
     manual = result.get("needs_manual_review", 0)
     errors = result.get("errors", 0)
 
-    lines.append("### Summary")
-    lines.append(f"  - **CONFIRMED:** {confirmed}")
-    lines.append(f"  - **FALSE POSITIVE:** {fp}")
-    lines.append(f"  - **MANUAL REVIEW:** {manual}")
+    lines = [
+        "=" * 45,
+        "  BugHound -- Validation Results",
+        "=" * 45,
+        "",
+        f"  Validated: {total_validated} findings in {val_time}s",
+        "",
+        "  | Status           | Count |",
+        "  |------------------|-------|",
+        f"  | [CONFIRMED]      | {confirmed:<5} |",
+        f"  | [FALSE POSITIVE] | {fp:<5} |",
+        f"  | [MANUAL REVIEW]  | {manual:<5} |",
+    ]
     if errors:
-        lines.append(f"  - **ERRORS:** {errors}")
+        lines.append(f"  | [ERRORS]         | {errors:<5} |")
     lines.append("")
 
     # Show individual results
@@ -2192,36 +2304,31 @@ def _format_validate_all_result(result: dict[str, Any]) -> str:
         # Show confirmed first
         confirmed_items = [r for r in results_list if r.get("validation_status") == "CONFIRMED"]
         if confirmed_items:
-            lines.append("### Confirmed Findings")
-            for r in confirmed_items:
+            lines.append("  Confirmed:")
+            lines.append("  " + "-" * 43)
+            for i, r in enumerate(confirmed_items[:15], 1):
                 sev = r.get("severity", "?").upper()
-                lines.append(
-                    f"  - **[{sev}]** `{r.get('finding_id', '?')}` "
-                    f"({r.get('vulnerability_class', '?')}) — {r.get('validator', '?')}"
-                )
+                fid = r.get("finding_id", "?")
+                vclass = r.get("vulnerability_class", "?")
+                validator = r.get("validator", "?")
+                lines.append(f"  {i:>2}. [{sev}] {vclass} in {fid} -- {validator} confirmed")
+            if len(confirmed_items) > 15:
+                lines.append(f"      ... and {len(confirmed_items) - 15} more")
             lines.append("")
 
         # Show manual review
         manual_items = [r for r in results_list if r.get("validation_status") == "NEEDS_MANUAL_REVIEW"]
         if manual_items:
-            lines.append(f"### Needs Manual Review ({len(manual_items)})")
+            lines.append(f"  Manual Review ({len(manual_items)}):")
             for r in manual_items[:10]:
                 lines.append(
-                    f"  - `{r.get('finding_id', '?')}` ({r.get('vulnerability_class', '?')})"
+                    f"    * {r.get('finding_id', '?')} ({r.get('vulnerability_class', '?')})"
                 )
             if len(manual_items) > 10:
-                lines.append(f"  - ... and {len(manual_items) - 10} more")
+                lines.append(f"      ... and {len(manual_items) - 10} more")
             lines.append("")
 
-    # Files written
-    files = result.get("files_written", [])
-    if files:
-        lines.append("**Files written:**")
-        for f in files:
-            lines.append(f"  - `{f}`")
-        lines.append("")
-
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Generate report with bughound_generate_report.')}")
     return "\n".join(lines) + "\n"
 
 
@@ -2233,48 +2340,57 @@ def _format_immediate_wins_result(result: dict[str, Any]) -> str:
     if result.get("status") == "no_immediate_wins":
         return result.get("message", "No immediate wins found.")
 
-    lines = ["## Immediate Wins Verification\n"]
-    lines.append(f"**Checked:** {result.get('total_checked', 0)}")
-    lines.append(f"**Confirmed:** {result.get('confirmed', 0)}")
-    lines.append(f"**Time:** {result.get('validation_time_seconds', 0)}s\n")
+    total_checked = result.get("total_checked", 0)
+    confirmed_count = result.get("confirmed", 0)
+    val_time = result.get("validation_time_seconds", 0)
+
+    lines = [
+        "=" * 45,
+        "  BugHound -- Immediate Wins Verification",
+        "=" * 45,
+        "",
+        f"  Checked: {total_checked}  |  Confirmed: {confirmed_count}  |  Time: {val_time}s",
+        "",
+    ]
 
     results_list = result.get("results", [])
     confirmed_items = [r for r in results_list if r.get("status") == "CONFIRMED"]
     other_items = [r for r in results_list if r.get("status") != "CONFIRMED"]
 
     if confirmed_items:
-        lines.append("### Confirmed Wins")
-        for r in confirmed_items:
+        lines.append("  Confirmed Wins:")
+        lines.append("  " + "-" * 43)
+        for i, r in enumerate(confirmed_items, 1):
             win_type = r.get("type", "?")
             host = r.get("host", "?")
             url = r.get("url", "")
             cvss = r.get("cvss_score", "")
             impact = r.get("impact", "")
-            lines.append(f"  - **{win_type}** on `{host}`")
+            lines.append(f"  {i:>2}. {win_type} on {host}")
             if url:
-                lines.append(f"    URL: `{url}`")
+                lines.append(f"      URL: {url}")
             if cvss:
-                lines.append(f"    CVSS: {cvss}")
+                lines.append(f"      CVSS: {cvss}")
             if impact:
-                lines.append(f"    Impact: {impact}")
+                lines.append(f"      Impact: {impact}")
             curl = r.get("curl_command", "")
             if curl:
-                lines.append(f"    Curl: `{curl[:120]}`")
-        lines.append("")
+                lines.append(f"      Curl: {curl[:120]}")
+            lines.append("")
 
     if other_items:
-        lines.append(f"### Not Confirmed ({len(other_items)})")
+        lines.append(f"  Not Confirmed ({len(other_items)}):")
         for r in other_items[:5]:
             status = r.get("status", "?")
             reason = r.get("reason", "")
-            lines.append(f"  - {r.get('type', '?')} ({r.get('host', '?')}): {status}")
+            lines.append(f"    * {r.get('type', '?')} ({r.get('host', '?')}): {status}")
             if reason:
-                lines.append(f"    Reason: {reason}")
+                lines.append(f"      Reason: {reason}")
         if len(other_items) > 5:
-            lines.append(f"  - ... and {len(other_items) - 5} more")
+            lines.append(f"      ... and {len(other_items) - 5} more")
         lines.append("")
 
-    lines.append(f"**Next step:** {result.get('next_step', 'Continue.')}")
+    lines.append(f"  Next: {result.get('next_step', 'Continue.')}")
     return "\n".join(lines) + "\n"
 
 
