@@ -1056,12 +1056,7 @@ async def _start_discover_job(
     return {
         "status": "job_started",
         "job_id": job_id,
-        "message": (
-            f"Discovery started for {len(targets)} targets. "
-            "IMPORTANT: Do NOT call bughound_job_status yourself. Do NOT poll or loop. "
-            "STOP HERE and tell the user the job is running. The USER will check status "
-            "manually when they are ready. Estimated time: 3-8 minutes."
-        ),
+        "message": f"Discovery started for {len(targets)} targets.",
         "workspace_id": workspace_id,
         "estimated_time": "3-8 minutes",
     }
