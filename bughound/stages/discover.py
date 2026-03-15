@@ -50,16 +50,26 @@ _DEFAULT_TITLES = {
 
 # Old tech patterns: (regex on tech string, flag message)
 _OLD_TECH_PATTERNS = [
-    (re.compile(r"wordpress\s*[1-5]\.", re.I), "WordPress < 6.x"),
-    (re.compile(r"jquery[/ ]1\.", re.I), "jQuery 1.x (EOL)"),
-    (re.compile(r"jquery[/ ]2\.", re.I), "jQuery 2.x (EOL)"),
-    (re.compile(r"jquery[/ ]3\.[0-4]\.", re.I), "jQuery < 3.5 (prototype pollution)"),
-    (re.compile(r"php[/ ]5\.", re.I), "PHP 5.x (EOL)"),
-    (re.compile(r"php[/ ]7\.[0-3]\.", re.I), "PHP 7.0-7.3 (EOL)"),
-    (re.compile(r"angular[/ ]1\.", re.I), "AngularJS 1.x (EOL, XSS-prone)"),
-    (re.compile(r"apache[/ ]2\.2\.", re.I), "Apache 2.2 (EOL)"),
-    (re.compile(r"nginx[/ ]1\.(1[0-8]|[0-9])\.", re.I), "nginx < 1.19 (old branch)"),
-    (re.compile(r"openssl[/ ]1\.0\.", re.I), "OpenSSL 1.0 (EOL)"),
+    (re.compile(r"wordpress[/: ]*[1-5]\.", re.I), "WordPress < 6.x"),
+    (re.compile(r"jquery[/: ]*1\.", re.I), "jQuery 1.x (EOL, multiple XSS CVEs)"),
+    (re.compile(r"jquery[/: ]*2\.", re.I), "jQuery 2.x (EOL)"),
+    (re.compile(r"jquery[/: ]*3\.[0-4]\.", re.I), "jQuery < 3.5 (CVE-2020-11022, CVE-2020-11023)"),
+    (re.compile(r"php[/: ]*5\.", re.I), "PHP 5.x (EOL)"),
+    (re.compile(r"php[/: ]*7\.[0-3]\.", re.I), "PHP 7.0-7.3 (EOL)"),
+    (re.compile(r"angular[/: ]*1\.", re.I), "AngularJS 1.x (EOL, sandbox escape)"),
+    (re.compile(r"apache[/: ]*2\.2\.", re.I), "Apache 2.2 (EOL)"),
+    (re.compile(r"nginx[/: ]*1\.(1[0-8]|[0-9])\.", re.I), "nginx < 1.19 (old branch)"),
+    (re.compile(r"openssl[/: ]*1\.0\.", re.I), "OpenSSL 1.0 (EOL)"),
+    (re.compile(r"asp\.net[/: ]*[12]\.", re.I), "ASP.NET 1.x/2.x (EOL since 2011)"),
+    (re.compile(r"asp\.net[/: ]*3\.", re.I), "ASP.NET 3.x (EOL)"),
+    (re.compile(r"microsoft asp\.net[/: ]*[12]\.", re.I), "Microsoft ASP.NET 1.x/2.x (EOL)"),
+    (re.compile(r"microsoft asp\.net[/: ]*3\.", re.I), "Microsoft ASP.NET 3.x (EOL)"),
+    (re.compile(r"react[/: ]*1[0-5]\.", re.I), "React < 16 (XSS in SSR)"),
+    (re.compile(r"express[/: ]*[1-3]\.", re.I), "Express.js < 4.x (old)"),
+    (re.compile(r"rails[/: ]*[1-5]\.", re.I), "Ruby on Rails < 6.x"),
+    (re.compile(r"django[/: ]*[12]\.", re.I), "Django 1.x/2.x (EOL)"),
+    (re.compile(r"spring[/: ]*[1-4]\.", re.I), "Spring Framework < 5.x"),
+    (re.compile(r"tomcat[/: ]*[1-8]\.", re.I), "Apache Tomcat < 9.x"),
 ]
 
 

@@ -19,9 +19,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections import Counter
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import aiofiles
 import structlog
@@ -500,6 +501,27 @@ async def _run_tests(
                 f"(from {len(all_urls)} total)", "nuclei",
             )
 
+            # Sanitize URLs before nuclei scan
+            def _sanitize_url(url: str) -> str | None:
+                """Clean URL for nuclei input. Returns None if invalid."""
+                if not url or not isinstance(url, str):
+                    return None
+                # Must start with http(s)
+                if not url.startswith(("http://", "https://")):
+                    return None
+                # Remove tool artifacts from param values
+                if any(tool in url.lower() for tool in ("katana/", "gospider/", "gau/")):
+                    return None
+                # Fix double slashes in path (not in scheme)
+                try:
+                    parsed = urlparse(url)
+                    clean_path = re.sub(r'/{2,}', '/', parsed.path)
+                    return urlunparse(parsed._replace(path=clean_path))
+                except Exception:
+                    return url
+
+            deduped_urls = [u for u in (_sanitize_url(u) for u in deduped_urls) if u]
+
             # Batch large URL sets to avoid timeouts
             _BATCH_SIZE = 50
             url_batches = [
@@ -968,6 +990,48 @@ async def _run_tests(
     # =================================================================
     await _progress(99, "Finalizing results", "finalize")
 
+    # =================================================================
+    # Deduplicate findings by endpoint path + param + vuln class
+    # =================================================================
+    deduped_findings: list[dict[str, Any]] = []
+    dedup_map: dict[str, dict[str, Any]] = {}  # key -> primary finding
+
+    for f in all_findings:
+        endpoint = f.get("endpoint", "")
+        # Extract path without query values for dedup
+        try:
+            parsed_ep = urlparse(endpoint)
+            path = parsed_ep.path or endpoint
+        except Exception:
+            path = endpoint
+
+        vuln_class = f.get("vulnerability_class", "")
+        # Get param from description or payload
+        param = ""
+        desc = f.get("description", "")
+        if "param '" in desc:
+            param = desc.split("param '")[1].split("'")[0]
+        elif "parameter '" in desc:
+            param = desc.split("parameter '")[1].split("'")[0]
+
+        dedup_key = f"{vuln_class}|{path}|{param}"
+
+        if dedup_key in dedup_map:
+            # Add to existing finding's also_affected list
+            existing = dedup_map[dedup_key]
+            existing.setdefault("also_affected", []).append(endpoint)
+            existing["instances_count"] = existing.get("instances_count", 1) + 1
+        else:
+            f["instances_count"] = 1
+            dedup_map[dedup_key] = f
+            deduped_findings.append(f)
+
+    all_findings = deduped_findings
+
+    phase_stats["findings_before_dedup"] = len(all_findings) + sum(
+        f.get("instances_count", 1) - 1 for f in all_findings
+    )
+
     if all_findings:
         await _write_findings(workspace_id, all_findings)
 
@@ -1057,10 +1121,20 @@ def _process_nuclei_findings(
         else:
             confidence = "low"
 
+        # Sanitize endpoint URL (fix double slashes etc.)
+        raw_endpoint = matched_at or host
+        if raw_endpoint and raw_endpoint.startswith(("http://", "https://")):
+            try:
+                _parsed = urlparse(raw_endpoint)
+                _clean_path = re.sub(r'/{2,}', '/', _parsed.path)
+                raw_endpoint = urlunparse(_parsed._replace(path=_clean_path))
+            except Exception:
+                pass
+
         finding = {
             "finding_id": finding_id,
             "host": host,
-            "endpoint": matched_at or host,
+            "endpoint": raw_endpoint,
             "vulnerability_class": vuln_class,
             "severity": severity,
             "tool": "nuclei",
@@ -1269,7 +1343,6 @@ async def _collect_all_urls(workspace_id: str) -> list[str]:
                 urls.add(url)
 
     # 4. OpenAPI spec endpoints — generate parameterized URLs
-    import re
     oas_data = await workspace.read_data(workspace_id, "endpoints/openapi_specs.json")
     oas_items = oas_data.get("data", []) if isinstance(oas_data, dict) else (oas_data or [])
     for spec in oas_items:
@@ -1459,7 +1532,6 @@ async def _get_versioned_hosts(
 
     items = live_hosts.get("data", []) if isinstance(live_hosts, dict) else live_hosts
 
-    import re
     version_re = re.compile(r"\d+\.\d+")
 
     versioned: set[str] = set()
