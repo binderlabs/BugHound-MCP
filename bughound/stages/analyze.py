@@ -1782,7 +1782,7 @@ def _generate_reasoning_prompts(
     # JWT
     auth_items = _extract_items(data.get("auth_discovery"))
     for auth in auth_items:
-        if auth.get("auth_token", "").startswith("eyJ"):
+        if (auth.get("auth_token") or "").startswith("eyJ"):
             prompts.append(
                 f"JWT token found on {auth.get('host', '?')}. "
                 "Consider: is the secret weak (dictionary crackable)? "
