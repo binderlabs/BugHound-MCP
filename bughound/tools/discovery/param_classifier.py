@@ -98,7 +98,8 @@ IDOR_PARAMS: dict[str, Any] = {
         "transaction_id", "payment_id", "subscription_id", "api_key", "token",
         "session", "no", "number", "pid", "ref",
     },
-    "patterns": ["*_id", "*_uuid", "*_ref", "*_no", "*_number", "*_key"],
+    "patterns": ["*_id", "*_uuid", "*_ref", "*_no", "*_number", "*_key",
+                  "*id", "*num"],
 }
 
 RCE_PARAMS: dict[str, Any] = {
@@ -350,7 +351,7 @@ def classify_parameters(
             continue
 
         # Ensure ALL user-input params get tested for core injection classes.
-        core_types = {"xss", "sqli", "lfi", "ssti"}
+        core_types = {"xss", "sqli", "lfi", "ssti", "idor"}
         if matched_types:
             for ct in core_types:
                 if ct not in matched_types:
