@@ -499,10 +499,20 @@ async def execute_technique(
 
     Returns list of finding dicts.
     """
-    # Build set of approved hosts
-    approved_hosts = {
-        t.get("host", "").lower() for t in targets if t.get("host")
-    }
+    # Build set of approved hosts, normalized (strip schemes and ports)
+    from urllib.parse import urlparse as _urlparse
+    approved_hosts: set[str] = set()
+    for t in targets:
+        h = (t.get("host") or "").lower().strip()
+        if not h:
+            continue
+        if "://" in h:
+            parsed_h = _urlparse(h)
+            approved_hosts.add(parsed_h.hostname or h)
+        elif ":" in h:
+            approved_hosts.add(h.split(":")[0])
+        else:
+            approved_hosts.add(h)
 
     if technique_id == "sqli_param_fuzz":
         return await _exec_sqli_fuzz(workspace_id, approved_hosts)
@@ -1048,9 +1058,9 @@ async def _exec_header_injection(
                             "host": host,
                             "endpoint": url,
                             "severity": f.get("severity", "medium"),
-                            "description": f"Header injection: {f['technique']}",
+                            "description": f"Header injection: {f.get('technique', 'unknown')}",
                             "evidence": f.get("evidence", ""),
-                            "payload_used": f["technique"],
+                            "payload_used": f.get("technique", "unknown"),
                             "confidence": "medium",
                             "needs_validation": True,
                         }

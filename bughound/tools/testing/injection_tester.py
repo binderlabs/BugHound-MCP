@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import re
 import time
+import uuid
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -35,7 +36,7 @@ def _replace_param(url: str, param: str, new_value: str) -> str:
     if param not in qs:
         # Append the parameter if not present
         sep = "&" if parsed.query else ""
-        new_query = f"{parsed.query}{sep}{param}={new_value}"
+        new_query = f"{parsed.query}{sep}{urlencode({param: new_value})}"
     else:
         qs[param] = [new_value]
         new_query = urlencode(qs, doseq=True)
@@ -163,8 +164,8 @@ async def test_sqli(
                 }
 
         # Phase 3: Boolean-blind — compare true vs false conditions
-        true_url = _replace_param(target_url, param, "1 OR 1=1")
-        false_url = _replace_param(target_url, param, "1 AND 1=2")
+        true_url = _replace_param(target_url, param, f"{original_value} OR 1=1")
+        false_url = _replace_param(target_url, param, f"{original_value} AND 1=2")
         _, true_body, _ = await _send(session, true_url)
         _, false_body, _ = await _send(session, false_url)
 
@@ -172,14 +173,16 @@ async def test_sqli(
             true_len = len(true_body)
             false_len = len(false_body)
             # Significant size difference between true/false = blind SQLi
-            if (abs(true_len - false_len) > 200
+            # true condition should return MORE data than false condition
+            if (true_len > false_len
+                    and abs(true_len - false_len) > 200
                     and abs(true_len - baseline_len) < 1000):
                 return {
                     "vulnerable": True,
                     "url": target_url,
                     "param": param,
                     "technique": "boolean-blind",
-                    "payload": "1 OR 1=1 vs 1 AND 1=2",
+                    "payload": f"{original_value} OR 1=1 vs {original_value} AND 1=2",
                     "evidence": (
                         f"Response size diff: true={true_len}, "
                         f"false={false_len}, baseline={baseline_len}"
@@ -364,6 +367,14 @@ async def test_lfi(
 ) -> dict[str, Any]:
     """Test Local File Inclusion with traversal payloads."""
     async with aiohttp.ClientSession() as session:
+        # Baseline — check for indicators already present in normal response
+        baseline_status, baseline_body, _ = await _send(session, target_url)
+        if baseline_status == 0:
+            return {"vulnerable": False, "param": param, "url": target_url, "os": None}
+
+        baseline_has_linux = _LFI_LINUX_INDICATORS.search(baseline_body)
+        baseline_has_windows = _LFI_WINDOWS_INDICATORS.search(baseline_body)
+
         # Test Linux payloads
         for payload in _LFI_PAYLOADS_LINUX:
             test_url = _replace_param(target_url, param, payload)
@@ -372,7 +383,7 @@ async def test_lfi(
             if status == 0:
                 continue
 
-            if _LFI_LINUX_INDICATORS.search(body):
+            if _LFI_LINUX_INDICATORS.search(body) and not baseline_has_linux:
                 return {
                     "vulnerable": True,
                     "payload": payload,
@@ -390,7 +401,7 @@ async def test_lfi(
             if status == 0:
                 continue
 
-            if _LFI_WINDOWS_INDICATORS.search(body):
+            if _LFI_WINDOWS_INDICATORS.search(body) and not baseline_has_windows:
                 return {
                     "vulnerable": True,
                     "payload": payload,
@@ -500,12 +511,12 @@ async def test_ssti(
 _CSTI_PAYLOADS = [
     # AngularJS (most common)
     ("{{constructor.constructor('return 1')()}}", "1", "angularjs"),
-    ("{{7*7}}", "49", "angularjs"),
+    ("{{1337*7}}", "9359", "angularjs"),
     # Vue.js
     ("{{_openBlock.constructor('return 1')()}}", "1", "vuejs"),
     # Generic
-    ("${7*7}", "49", "generic_el"),
-    ("#{7*7}", "49", "generic_el"),
+    ("${1337*7}", "9359", "generic_el"),
+    ("#{1337*7}", "9359", "generic_el"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -557,6 +568,9 @@ async def test_reflected_xss(
         content_type = baseline_headers.get("content-type", "")
         is_html = "text/html" in content_type or "text/xml" in content_type
 
+        if not is_html:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
         # Phase 1: Simple reflection check — does the marker appear in response?
         probe_url = _replace_param(target_url, param, _XSS_MARKER)
         status, body, headers = await _send(session, probe_url)
@@ -569,8 +583,8 @@ async def test_reflected_xss(
             # Pure JSON response — no HTML reflection possible
             return {"vulnerable": False, "url": target_url, "param": param}
 
-        if _XSS_MARKER not in body:
-            # Input not reflected at all — no XSS possible
+        if _XSS_MARKER not in body or _XSS_MARKER in baseline_body:
+            # Input not reflected, or marker already in baseline — no XSS possible
             return {"vulnerable": False, "url": target_url, "param": param}
 
         # Detect reflection context
@@ -624,7 +638,7 @@ async def test_reflected_xss(
 
 
 # Polyglot probe — detect which engine is in use
-_CSTI_PROBE = "{{7*7}}${7*7}#{7*7}<%= 7*7 %>"
+_CSTI_PROBE = "{{1337*7}}${1337*7}#{1337*7}<%= 1337*7 %>"
 
 
 async def test_csti(
@@ -644,14 +658,14 @@ async def test_csti(
         if status == 0:
             return {"vulnerable": False, "url": target_url, "param": param}
 
-        # Check if "49" appears (any engine computed 7*7)
-        if "49" in body and "49" not in baseline_body:
+        # Check if "9359" appears (any engine computed 1337*7)
+        if "9359" in body and "9359" not in baseline_body:
             return {
                 "vulnerable": True,
                 "url": probe_url,
                 "param": param,
                 "payload": _CSTI_PROBE,
-                "evidence": "Template expression 7*7=49 computed — CSTI confirmed",
+                "evidence": "Template expression 1337*7=9359 computed — CSTI confirmed",
                 "engine": "unknown",
             }
 
@@ -803,7 +817,6 @@ async def test_idor(
             ]
         elif len(original_value) > 8 and all(c in "0123456789abcdef-" for c in original_value.lower()):
             # UUID-like — try modified versions
-            import uuid
             test_values = [
                 original_value[:-1] + ("0" if original_value[-1] != "0" else "1"),
                 str(uuid.uuid4()),  # completely different UUID
@@ -911,7 +924,6 @@ async def test_path_idor(target_url: str) -> dict[str, Any]:
                     "99999",
                 ]
             elif seg["type"] == "uuid":
-                import uuid
                 last = original[-1]
                 test_values = [
                     original[:-1] + ("0" if last != "0" else "1"),

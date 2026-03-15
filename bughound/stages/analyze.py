@@ -845,11 +845,8 @@ def _detect_attack_chains(
         })
 
     # --- Chain 18: POST Endpoint Injection ---
-    pc = data.get("parameter_classification", [])
-    if isinstance(pc, list) and pc:
-        pc = pc[0] if isinstance(pc[0], dict) else {}
-    elif not isinstance(pc, dict):
-        pc = {}
+    _pc_items = _extract_items(data.get("parameter_classification"))
+    pc = _pc_items[0] if _pc_items and isinstance(_pc_items[0], dict) else {}
     post_endpoints = pc.get("post_endpoints", [])
     if post_endpoints:
         affected = list(set(_host_from_url(ep.get("url", "")) for ep in post_endpoints[:5]))
@@ -1540,7 +1537,7 @@ def _compute_stats(data: dict[str, list]) -> dict[str, Any]:
             "api": len(data.get("api_urls", [])),
             "admin": len(data.get("admin_urls", [])),
             "js": len(data.get("js_files", [])),
-            "static": len(data.get("crawled_urls", [])) - len(data.get("dynamic_urls", [])) - len(data.get("api_urls", [])) - len(data.get("admin_urls", [])),
+            "static": max(0, len(data.get("crawled_urls", [])) - len(data.get("dynamic_urls", [])) - len(data.get("api_urls", [])) - len(data.get("admin_urls", []))),
         },
         "total_parameters": total_params,
         "js_files": len(data["js_files"]),

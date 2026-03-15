@@ -211,11 +211,7 @@ async def execute_tests(
             ),
             "workspace_id": workspace_id,
             "estimated_time": f"{len(targets) * 3}-{len(targets) * 8} minutes",
-            "next_step": (
-                "Testing job is running in the background. "
-                "Present the job ID and estimated time to the user. "
-                "Wait for the user to ask you to check status."
-            ),
+            "next_step": "Testing job is running. Check status when ready.",
         }
 
 

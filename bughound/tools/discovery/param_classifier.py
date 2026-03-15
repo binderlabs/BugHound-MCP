@@ -123,7 +123,7 @@ SSTI_PARAMS: dict[str, Any] = {
 DESERIALIZATION_PARAMS: dict[str, Any] = {
     "exact": {
         "data", "object", "payload", "serialized", "state", "viewstate",
-        "__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION",
+        "__viewstate", "__viewstategenerator", "__eventvalidation",
         "session", "token", "cache", "config", "preferences", "settings",
         "profile", "userdata", "cart", "basket", "checkout",
     },
@@ -135,8 +135,8 @@ DESERIALIZATION_PARAMS: dict[str, Any] = {
 
 MASS_ASSIGNMENT_PARAMS: dict[str, Any] = {
     "exact": {
-        "role", "is_admin", "isAdmin", "admin", "is_staff", "is_superuser",
-        "privilege", "permissions", "user_type", "userType", "access_level",
+        "role", "is_admin", "isadmin", "admin", "is_staff", "is_superuser",
+        "privilege", "permissions", "user_type", "usertype", "access_level",
         "group", "groups", "verified", "email_verified", "active", "approved",
         "balance", "credits", "price", "discount", "status", "level",
         "plan", "subscription", "tier",
@@ -361,11 +361,11 @@ def classify_parameters(
                     "method": method,
                 })
 
-    # High-value params: match 2+ vuln types
+    # High-value params: match 5+ vuln types (at least 1 beyond the 4 core types)
     high_value = sorted([
         {"param": p, "vuln_types": sorted(vtypes), "match_count": len(vtypes)}
         for p, vtypes in param_vuln_count.items()
-        if len(vtypes) >= 2
+        if len(vtypes) >= 5
     ], key=lambda x: x["match_count"], reverse=True)
 
     # Stats
@@ -491,8 +491,8 @@ _SQL_ERROR_RE = re.compile(
     r"unterminated string|syntax error at or near|"
     r"You have an error in your SQL|"
     r"java\.sql\.SQLException|"
-    r"PostgreSQL.*ERROR|"
-    r"Warning.*mysql_|"
+    r"PostgreSQL.*ERROR:\s*syntax|"
+    r"Warning:\s*mysql_|"
     r"SQLite.*error",
     re.I,
 )
@@ -500,8 +500,7 @@ _SQL_ERROR_RE = re.compile(
 # LFI indicators
 _LFI_INDICATOR_RE = re.compile(
     r"root:x:0:0|/bin/bash|/bin/sh|daemon:x:|"
-    r"\[boot loader\]|\\windows\\system32|"
-    r"No such file or directory",
+    r"\[boot loader\]|\\windows\\system32",
     re.I,
 )
 
@@ -568,83 +567,83 @@ async def probe_reflection(
     existing_sqli = {f"{c['url']}:{c['param']}" for c in classification.get("sqli_candidates", [])}
     existing_lfi = {f"{c['url']}:{c['param']}" for c in classification.get("lfi_candidates", [])}
 
-    async def _probe_one(url: str, param: str, sample: str) -> None:
+    async def _probe_one(session: aiohttp.ClientSession, url: str, param: str, sample: str) -> None:
         nonlocal probed_count
         async with sem:
             try:
-                async with aiohttp.ClientSession() as session:
-                    # --- Probe 1: Reflection check ---
-                    marker_url = _replace_param_value(url, param, _PROBE_MARKER)
+                # --- Probe 1: Reflection check ---
+                marker_url = _replace_param_value(url, param, _PROBE_MARKER)
+                try:
+                    async with session.get(
+                        marker_url, headers=_PROBE_HEADERS,
+                        timeout=_PROBE_TIMEOUT, ssl=False,
+                        allow_redirects=True,
+                    ) as resp:
+                        body = await resp.text(errors="replace")
+                        ct = resp.headers.get("content-type", "")
+
+                        # If marker reflected in HTML body → XSS candidate
+                        if _PROBE_MARKER in body and "text/html" in ct:
+                            dk = f"{url}:{param}"
+                            if dk not in existing_xss:
+                                new_xss.append({
+                                    "url": url, "param": param,
+                                    "sample_value": sample, "method": "GET",
+                                    "probe": "reflected",
+                                })
+                except Exception:
+                    pass
+
+                # --- Probe 2: SQLi error check ---
+                sqli_url = _replace_param_value(url, param, "1'")
+                try:
+                    async with session.get(
+                        sqli_url, headers=_PROBE_HEADERS,
+                        timeout=_PROBE_TIMEOUT, ssl=False,
+                        allow_redirects=True,
+                    ) as resp:
+                        body = await resp.text(errors="replace")
+
+                        if _SQL_ERROR_RE.search(body):
+                            dk = f"{url}:{param}"
+                            if dk not in existing_sqli:
+                                new_sqli.append({
+                                    "url": url, "param": param,
+                                    "sample_value": sample, "method": "GET",
+                                    "probe": "sql_error",
+                                })
+                except Exception:
+                    pass
+
+                # --- Probe 3: LFI check (only if not already LFI) ---
+                dk = f"{url}:{param}"
+                if dk not in existing_lfi:
+                    lfi_url = _replace_param_value(
+                        url, param, "../../../../etc/passwd",
+                    )
                     try:
                         async with session.get(
-                            marker_url, headers=_PROBE_HEADERS,
+                            lfi_url, headers=_PROBE_HEADERS,
                             timeout=_PROBE_TIMEOUT, ssl=False,
                             allow_redirects=True,
                         ) as resp:
                             body = await resp.text(errors="replace")
-                            ct = resp.headers.get("content-type", "")
-
-                            # If marker reflected in HTML body → XSS candidate
-                            if _PROBE_MARKER in body and "text/html" in ct:
-                                dk = f"{url}:{param}"
-                                if dk not in existing_xss:
-                                    new_xss.append({
-                                        "url": url, "param": param,
-                                        "sample_value": sample, "method": "GET",
-                                        "probe": "reflected",
-                                    })
+                            if _LFI_INDICATOR_RE.search(body):
+                                new_lfi.append({
+                                    "url": url, "param": param,
+                                    "sample_value": sample, "method": "GET",
+                                    "probe": "lfi_confirmed",
+                                })
                     except Exception:
                         pass
 
-                    # --- Probe 2: SQLi error check ---
-                    sqli_url = _replace_param_value(url, param, "1'")
-                    try:
-                        async with session.get(
-                            sqli_url, headers=_PROBE_HEADERS,
-                            timeout=_PROBE_TIMEOUT, ssl=False,
-                            allow_redirects=True,
-                        ) as resp:
-                            body = await resp.text(errors="replace")
-
-                            if _SQL_ERROR_RE.search(body):
-                                dk = f"{url}:{param}"
-                                if dk not in existing_sqli:
-                                    new_sqli.append({
-                                        "url": url, "param": param,
-                                        "sample_value": sample, "method": "GET",
-                                        "probe": "sql_error",
-                                    })
-                    except Exception:
-                        pass
-
-                    # --- Probe 3: LFI check (only if not already LFI) ---
-                    dk = f"{url}:{param}"
-                    if dk not in existing_lfi:
-                        lfi_url = _replace_param_value(
-                            url, param, "../../../../etc/passwd",
-                        )
-                        try:
-                            async with session.get(
-                                lfi_url, headers=_PROBE_HEADERS,
-                                timeout=_PROBE_TIMEOUT, ssl=False,
-                                allow_redirects=True,
-                            ) as resp:
-                                body = await resp.text(errors="replace")
-                                if _LFI_INDICATOR_RE.search(body):
-                                    new_lfi.append({
-                                        "url": url, "param": param,
-                                        "sample_value": sample, "method": "GET",
-                                        "probe": "lfi_confirmed",
-                                    })
-                        except Exception:
-                            pass
-
-                    probed_count += 1
+                probed_count += 1
             except Exception:
                 pass
 
-    tasks = [_probe_one(url, param, sample) for url, param, sample in all_params]
-    await asyncio.gather(*tasks, return_exceptions=True)
+    async with aiohttp.ClientSession() as session:
+        tasks = [_probe_one(session, url, param, sample) for url, param, sample in all_params]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     # Merge new findings into classification
     if new_xss:

@@ -866,7 +866,7 @@ async def _run_discover(
 
         # Phase 2: Live reflection probes — detect XSS/SQLi/LFI by behavior
         if progress_cb:
-            await progress_cb(82, "Probing params for reflection & SQL errors", "probe")
+            await progress_cb(96, "Probing params for reflection & SQL errors", "probe")
         try:
             param_classification = await param_classifier.probe_reflection(
                 param_classification, concurrency=8, max_params=60,
