@@ -17,7 +17,7 @@ TIMEOUT = 120
 
 # Built-in permutation words (common prefixes/suffixes for subdomain permutation)
 _DEFAULT_PERMS = [
-    "dev", "staging", "stage", "stg", "prod", "production",
+    "dev", "staging", "stage", "stg", "prod", "production", "pro",
     "test", "testing", "uat", "qa", "pre", "preprod",
     "api", "app", "admin", "internal", "int", "ext", "external",
     "v1", "v2", "v3", "new", "old", "beta", "alpha",
@@ -28,6 +28,10 @@ _DEFAULT_PERMS = [
     "vpn", "proxy", "lb", "ns", "dns", "ntp",
     "backup", "bak", "tmp", "temp", "log", "logs",
     "web", "www", "m", "mobile", "wap",
+    "demo", "sandbox", "lab", "try", "trial", "poc",
+    "shop", "store", "pay", "billing", "invoice",
+    "docs", "doc", "wiki", "help", "support", "kb",
+    "status", "monitor", "health", "metrics", "grafana",
 ]
 
 
