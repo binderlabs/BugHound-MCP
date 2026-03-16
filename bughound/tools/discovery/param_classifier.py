@@ -448,6 +448,37 @@ def classify_parameters(
                         "segment_type": seg_type,
                     })
 
+    # Also generate path IDOR candidates for API-style RESTful endpoints
+    # /api/orders/ → test /api/orders/1, /api/orders/2
+    _REST_PATTERNS = re.compile(
+        r"/api/(?:v\d+/)?(\w+)/?$",  # matches /api/orders/, /api/v1/users/
+        re.I,
+    )
+    for item in urls_data:
+        url = item.get("url", item) if isinstance(item, dict) else str(item)
+        if not isinstance(url, str):
+            continue
+        parsed = urlparse(url)
+        match = _REST_PATTERNS.search(parsed.path)
+        if match:
+            resource = match.group(1)
+            # Skip common non-resource paths
+            if resource.lower() in ("auth", "login", "register", "config", "health", "docs", "graphql"):
+                continue
+            # Generate test URL with numeric ID
+            test_url = url.rstrip("/") + "/1"
+            dedup_key = f"{test_url}:path_segment"
+            if dedup_key not in _seen_path_idors:
+                _seen_path_idors.add(dedup_key)
+                path_idor_candidates.append({
+                    "url": test_url,
+                    "param": "path_segment",
+                    "sample_value": "1",
+                    "method": "GET",
+                    "segment": "1",
+                    "segment_type": "inferred_rest",
+                })
+
     stats["path_idor_urls"] = len(path_idor_candidates)
     stats["deserialization_count"] = len(candidates.get("deserialization_candidates", []))
     stats["mass_assignment_count"] = len(candidates.get("mass_assignment_candidates", []))

@@ -434,7 +434,7 @@ async def _load_param_classification(workspace_id: str) -> list[Any]:
 async def _filter_to_scope(
     candidates: list[dict[str, Any]],
     approved_hosts: set[str],
-    limit: int = 10,
+    limit: int = 30,
 ) -> list[dict[str, Any]]:
     """Filter candidates to approved scan plan hosts, with limit."""
     from urllib.parse import urlparse
@@ -657,7 +657,7 @@ async def _exec_sqli_fuzz(
                 })
 
     candidates.extend(extra_candidates)
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=15)
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=30)
 
     findings: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(2)
@@ -804,6 +804,9 @@ async def _run_injection_batch(
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, candidate_key)
     scoped = await _filter_to_scope(candidates, approved_hosts, limit=limit)
+
+    # Prioritize probe-confirmed candidates (they have actual evidence)
+    scoped.sort(key=lambda c: (0 if c.get("probe") else 1))
 
     # For API-only candidates, also generate frontend URL variants
     extra: list[dict[str, Any]] = []

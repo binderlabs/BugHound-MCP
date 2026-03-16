@@ -221,16 +221,30 @@ async def test_ssrf(
                     "url": test_url,
                 }
 
-            # Significant response change could indicate blind SSRF
-            # Require BOTH size change AND status change to reduce false positives
+            # Blind SSRF detection
             size_diff = abs(len(body) - baseline_len) > 500
             status_diff = status != baseline_status and status not in (0, 400, 404)
+            massive_size_diff = abs(len(body) - baseline_len) > 5000
+
+            # Massive size change alone is strong indicator (e.g. redirect to internal page)
+            if massive_size_diff:
+                return {
+                    "vulnerable": True,
+                    "payload": payload,
+                    "evidence": f"Response changed: status {baseline_status}->{status}, size {baseline_len}->{len(body)}",
+                    "type": "potential_blind_ssrf",
+                    "confidence": "medium",
+                    "param": param,
+                    "url": test_url,
+                }
+            # Moderate size + status change together
             if size_diff and status_diff:
                 return {
                     "vulnerable": True,
                     "payload": payload,
                     "evidence": f"Response changed: status {baseline_status}->{status}, size {baseline_len}->{len(body)}",
                     "type": "blind_ssrf",
+                    "confidence": "medium",
                     "param": param,
                     "url": test_url,
                 }
