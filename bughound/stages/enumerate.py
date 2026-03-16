@@ -232,6 +232,8 @@ async def enumerate_deep(
 
         # Phase 2: run amass (slow, thorough) with generous timeout
         amass_subs: set[str] = set()
+        new_from_amass: set[str] = set()
+        active_new: set[str] = set()
         if amass.is_available():
             await job_manager.update_progress(jid, 35, "Running amass (slow, thorough)", "amass")
             try:

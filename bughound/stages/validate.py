@@ -327,7 +327,7 @@ async def validate_all(
 
     # Update workspace state
     await workspace.add_stage_history(workspace_id, 5, "completed")
-    await workspace.update_metadata(workspace_id, state="VALIDATING")
+    await workspace.update_metadata(workspace_id, state="VALIDATED")
 
     return {
         "status": "completed",
@@ -379,7 +379,7 @@ async def validate_immediate_wins(
         immediate_wins = surface.get("immediate_wins", [])
 
     # Also check sensitive paths from discovery
-    sensitive_paths = await workspace.read_data(workspace_id, "sensitive_paths/results.json")
+    sensitive_paths = await workspace.read_data(workspace_id, "hosts/sensitive_paths.json")
     if isinstance(sensitive_paths, dict):
         sp_data = sensitive_paths.get("data", [])
         for sp in sp_data:

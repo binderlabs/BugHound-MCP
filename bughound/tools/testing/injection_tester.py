@@ -222,10 +222,10 @@ async def test_ssrf(
                 }
 
             # Significant response change could indicate blind SSRF
-            # Use OR: either big size change or different status code
+            # Require BOTH size change AND status change to reduce false positives
             size_diff = abs(len(body) - baseline_len) > 500
             status_diff = status != baseline_status and status not in (0, 400, 404)
-            if size_diff or (status_diff and abs(len(body) - baseline_len) > 100):
+            if size_diff and status_diff:
                 return {
                     "vulnerable": True,
                     "payload": payload,
@@ -267,7 +267,7 @@ async def test_open_redirect(
             if status == 0:
                 continue
 
-            location = headers.get("Location", headers.get("location", ""))
+            location = headers.get("location", "")
 
             # Check if redirect points to evil.com
             if "evil.com" in location:
@@ -309,17 +309,10 @@ async def test_open_redirect(
                         "param": param,
                         "url": test_url,
                     }
-                # Even if not via JS, reflection of evil.com in body is noteworthy
-                if status == 200:
-                    return {
-                        "vulnerable": True,
-                        "payload": payload,
-                        "redirected_to": "evil.com (reflected in body)",
-                        "type": "reflected_redirect",
-                        "evidence": body[:500],
-                        "param": param,
-                        "url": test_url,
-                    }
+                # Reflection of evil.com in body without redirect is NOT a
+                # redirect vulnerability — it is at most an informational
+                # finding (e.g. reflected input).  Removed to avoid false
+                # positives.
 
     return {"vulnerable": False, "param": param, "url": target_url, "type": None}
 
@@ -440,11 +433,11 @@ async def test_crlf(
                 continue
 
             # Check if our injected header appears
-            if "X-Injected" in headers:
+            if "x-injected" in headers:
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "injected_header": f"X-Injected: {headers.get('X-Injected', '')}",
+                    "injected_header": f"X-Injected: {headers.get('x-injected', '')}",
                     "param": param,
                     "url": test_url,
                 }
@@ -999,6 +992,9 @@ async def test_cookie_injection(
     """Test cookie-based injection (SQLi, deserialization, XSS)."""
     try:
         async with aiohttp.ClientSession() as session:
+            # Baseline for comparison
+            baseline_status, baseline_body, _ = await _send(session, target_url)
+
             if vuln_type == "sqli":
                 payloads = [
                     "' OR 1=1--",
@@ -1034,7 +1030,7 @@ async def test_cookie_injection(
                             "payload": payload,
                         }
 
-                    if _SQLI_ERROR_INDICATORS.search(body):
+                    if _SQLI_ERROR_INDICATORS.search(body) and not _SQLI_ERROR_INDICATORS.search(baseline_body):
                         return {
                             "vulnerable": True,
                             "type": "error-based-sqli",
@@ -1071,7 +1067,7 @@ async def test_cookie_injection(
                     except Exception:
                         continue
 
-                    if _DESER_INDICATORS.search(body):
+                    if _DESER_INDICATORS.search(body) and not _DESER_INDICATORS.search(baseline_body):
                         return {
                             "vulnerable": True,
                             "type": "deserialization",

@@ -694,6 +694,11 @@ async def probe_reflection(
         tasks = [_probe_one(session, url, param, sample) for url, param, sample in all_params]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    # Count probe-confirmed from existing candidates BEFORE merging new ones
+    tagged_xss = sum(1 for c in classification.get("xss_candidates", []) if c.get("probe"))
+    tagged_sqli = sum(1 for c in classification.get("sqli_candidates", []) if c.get("probe"))
+    tagged_lfi = sum(1 for c in classification.get("lfi_candidates", []) if c.get("probe"))
+
     # Merge new findings into classification
     if new_xss:
         classification.setdefault("xss_candidates", []).extend(new_xss)
@@ -702,12 +707,7 @@ async def probe_reflection(
     if new_lfi:
         classification.setdefault("lfi_candidates", []).extend(new_lfi)
 
-    # Count probe-confirmed (tagged existing + new)
-    tagged_xss = sum(1 for c in classification.get("xss_candidates", []) if c.get("probe"))
-    tagged_sqli = sum(1 for c in classification.get("sqli_candidates", []) if c.get("probe"))
-    tagged_lfi = sum(1 for c in classification.get("lfi_candidates", []) if c.get("probe"))
-
-    # Update stats
+    # Update stats — tagged counts are from existing items, new counts are additive
     stats = classification.get("stats", {})
     stats["probe_total"] = probed_count
     stats["probe_xss_found"] = tagged_xss + len(new_xss)

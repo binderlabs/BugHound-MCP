@@ -38,6 +38,25 @@ def _utcnow() -> datetime:
 
 
 # ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_workspace_id(workspace_id: str) -> None:
+    """Reject workspace IDs with path traversal characters."""
+    if ".." in workspace_id or "/" in workspace_id or "\\" in workspace_id:
+        raise ValueError(f"Invalid workspace_id: {workspace_id!r}")
+
+
+def _validate_data_path(ws_dir: Path, path: str) -> Path:
+    """Validate data path stays within workspace."""
+    dest = (ws_dir / path).resolve()
+    if not str(dest).startswith(str(ws_dir.resolve())):
+        raise ValueError(f"Path escapes workspace: {path!r}")
+    return dest
+
+
+# ---------------------------------------------------------------------------
 # Target sanitization
 # ---------------------------------------------------------------------------
 
@@ -114,6 +133,7 @@ async def create_workspace(
 
 async def get_workspace(workspace_id: str) -> WorkspaceMetadata | None:
     """Load workspace metadata. Returns None if workspace doesn't exist."""
+    _validate_workspace_id(workspace_id)
     meta_path = WORKSPACE_BASE_DIR / workspace_id / "metadata.json"
     if not meta_path.exists():
         return None
@@ -128,6 +148,7 @@ async def get_workspace(workspace_id: str) -> WorkspaceMetadata | None:
 
 async def get_config(workspace_id: str) -> WorkspaceConfig | None:
     """Load workspace config. Returns None if not found."""
+    _validate_workspace_id(workspace_id)
     cfg_path = WORKSPACE_BASE_DIR / workspace_id / "config.json"
     if not cfg_path.exists():
         return None
@@ -225,11 +246,12 @@ async def write_data(
 
     Returns the absolute Path of the written file.
     """
+    _validate_workspace_id(workspace_id)
     ws_dir = WORKSPACE_BASE_DIR / workspace_id
     if not ws_dir.is_dir():
         raise FileNotFoundError(f"Workspace '{workspace_id}' does not exist.")
 
-    dest = ws_dir / path
+    dest = _validate_data_path(ws_dir, path)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if path.endswith(".txt"):
@@ -303,7 +325,9 @@ async def read_data(
     - .txt files: returns list of non-empty lines
     - .json files: returns parsed dict (the full DataWrapper envelope)
     """
-    dest = WORKSPACE_BASE_DIR / workspace_id / path
+    _validate_workspace_id(workspace_id)
+    ws_dir = WORKSPACE_BASE_DIR / workspace_id
+    dest = _validate_data_path(ws_dir, path)
     if not dest.exists():
         return None
 
@@ -334,6 +358,7 @@ async def update_metadata(
     workspace_id: str, **kwargs: Any
 ) -> WorkspaceMetadata | None:
     """Update specific fields in metadata.json. Always bumps updated_at."""
+    _validate_workspace_id(workspace_id)
     meta = await get_workspace(workspace_id)
     if meta is None:
         return None
@@ -357,6 +382,7 @@ async def add_stage_history(
     status: str,
 ) -> None:
     """Append to stage_history in metadata.json."""
+    _validate_workspace_id(workspace_id)
     meta = await get_workspace(workspace_id)
     if meta is None:
         return
@@ -383,6 +409,7 @@ async def add_stage_history(
 
 async def update_stats(workspace_id: str, **kwargs: int) -> None:
     """Update stats counters in metadata.json."""
+    _validate_workspace_id(workspace_id)
     meta = await get_workspace(workspace_id)
     if meta is None:
         return

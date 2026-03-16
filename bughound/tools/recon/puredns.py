@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from bughound.core import tool_runner
-from bughound.schemas.models import ToolResult
+from bughound.schemas.models import ToolError, ToolErrorType, ToolResult
 
 BINARY = "puredns"
 TIMEOUT = 600  # 10 minutes for large wordlists
@@ -46,7 +46,7 @@ async def resolve(
     """Resolve a list of domains, filtering wildcards. Returns valid domains."""
     if not domains:
         return ToolResult(
-            tool=BINARY, success=True, results=[], result_count=0,
+            tool=BINARY, target="", success=True, results=[], result_count=0,
             execution_time_seconds=0,
         )
 
@@ -63,9 +63,12 @@ async def resolve(
     if resolvers:
         args.extend(["-r", str(resolvers)])
 
-    result = await tool_runner.run(
-        BINARY, args, target=f"{len(domains)} domains", timeout=timeout,
-    )
+    try:
+        result = await tool_runner.run(
+            BINARY, args, target=f"{len(domains)} domains", timeout=timeout,
+        )
+    finally:
+        Path(domains_file).unlink(missing_ok=True)
 
     if result.success and result.results:
         # puredns outputs resolved domains one per line
@@ -94,9 +97,12 @@ async def bruteforce(
 
     if not wl_path or not wl_path.exists():
         return ToolResult(
-            tool=BINARY, success=False, results=[],
+            tool=BINARY, target=target, success=False, results=[],
             result_count=0, execution_time_seconds=0,
-            error=type("E", (), {"message": "No DNS wordlist found"})(),
+            error=ToolError(
+                error_type=ToolErrorType.VALIDATION,
+                message="No DNS wordlist found",
+            ),
         )
 
     resolvers = _find_file(_RESOLVER_PATHS)

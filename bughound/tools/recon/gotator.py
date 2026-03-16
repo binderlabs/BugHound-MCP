@@ -50,7 +50,7 @@ async def execute(
     """
     if not subdomains:
         return ToolResult(
-            tool=BINARY, success=True, results=[], result_count=0,
+            tool=BINARY, target="", success=True, results=[], result_count=0,
             execution_time_seconds=0,
         )
 
@@ -76,9 +76,13 @@ async def execute(
         "-mindup",  # minimize duplicates
     ]
 
-    result = await tool_runner.run(
-        BINARY, args, target=f"{len(subdomains)} subdomains", timeout=timeout,
-    )
+    try:
+        result = await tool_runner.run(
+            BINARY, args, target=f"{len(subdomains)} subdomains", timeout=timeout,
+        )
+    finally:
+        Path(subs_file).unlink(missing_ok=True)
+        Path(perms_file).unlink(missing_ok=True)
 
     if result.success and result.results:
         # Deduplicate and filter — remove already-known subdomains
