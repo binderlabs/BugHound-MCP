@@ -182,7 +182,9 @@ async def enumerate_light(workspace_id: str) -> dict[str, Any]:
         },
         "warnings": warnings,
         "next_step": (
-            "Enumeration complete. Present results to user and await further instructions."
+            "Enumeration complete. Present the subdomain list to the user. "
+            "If many subdomains were found, ask the user which ones to focus on. "
+            "The user can pick specific targets for discovery, or scan all."
         ),
     }
 

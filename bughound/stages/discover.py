@@ -81,17 +81,21 @@ _OLD_TECH_PATTERNS = [
 async def discover(
     workspace_id: str,
     job_manager: JobManager | None = None,
+    target_override: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run Stage 2 discovery on a workspace.
 
-    For SINGLE_HOST / SINGLE_ENDPOINT: synchronous, returns results directly.
-    For BROAD_DOMAIN / URL_LIST with many targets: starts async job if job_manager given.
+    target_override: if provided, discover only these specific hosts
+                     instead of all subdomains from Stage 1.
     """
     meta = await workspace.get_workspace(workspace_id)
     if meta is None:
         return _error("not_found", f"Workspace '{workspace_id}' not found.")
 
-    targets = await _resolve_targets(meta)
+    if target_override:
+        targets = target_override
+    else:
+        targets = await _resolve_targets(meta)
     if not targets:
         return _error(
             "invalid_input",

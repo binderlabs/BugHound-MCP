@@ -688,14 +688,26 @@ async def bughound_enumerate_deep(workspace_id: str) -> str:
         "endpoints, check 70+ sensitive paths, detect subdomain takeovers, test "
         "CORS misconfigurations, harvest parameters. Returns intelligence flags per "
         "host for AI reasoning. Always async — returns job_id immediately. "
+        "Optional 'targets' param: comma-separated subdomains to focus on "
+        "(e.g. 'api.example.com,staging.example.com'). If empty, discovers all. "
+        "For broad domains with many subdomains, ask the user which ones to focus on. "
         "IMPORTANT: After receiving the job_id, do NOT automatically call "
         "bughound_job_status. Do NOT poll or loop. Just tell the user the job "
         "is running and wait for them to ask you to check."
     ),
 )
-async def bughound_discover(workspace_id: str) -> str:
-    """Run Stage 2 discovery."""
-    result = await stage_discover.discover(workspace_id, _job_manager)
+async def bughound_discover(workspace_id: str, targets: str = "") -> str:
+    """Run Stage 2 discovery.
+
+    targets: optional comma-separated list of specific subdomains to focus on.
+             If empty, discovers ALL subdomains from Stage 1.
+             Example: "api.example.com,staging.example.com"
+    """
+    target_list = None
+    if targets and targets.strip():
+        target_list = [t.strip() for t in targets.split(",") if t.strip()]
+
+    result = await stage_discover.discover(workspace_id, _job_manager, target_list)
     return _format_discover(result)
 
 
