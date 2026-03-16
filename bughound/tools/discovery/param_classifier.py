@@ -210,14 +210,37 @@ def classify_parameters(
     param_entries: list[tuple[str, str, str, str]] = []
 
     # From crawled URLs — extract query params
+    _paramless_injectable: set[str] = set()  # track parameterless URLs for inference
     for item in urls_data:
         url = item.get("url", item) if isinstance(item, dict) else str(item)
         if not isinstance(url, str):
             continue
         parsed = urlparse(url)
         qs = parse_qs(parsed.query, keep_blank_values=True)
-        for pname, pvals in qs.items():
-            param_entries.append((url, pname, pvals[0] if pvals else "", "GET"))
+        if qs:
+            for pname, pvals in qs.items():
+                param_entries.append((url, pname, pvals[0] if pvals else "", "GET"))
+        else:
+            # No query params — check if URL path suggests injectable endpoint
+            path_lower = parsed.path.lower()
+            _INJECTABLE_PATH_KEYWORDS = (
+                "/api/", "/debug", "/admin", "/search", "/query", "/filter",
+                "/graphql", "/rest/", "/v1/", "/v2/", "/v3/",
+                "/products", "/users", "/orders", "/items", "/blog",
+            )
+            if any(kw in path_lower for kw in _INJECTABLE_PATH_KEYWORDS):
+                _paramless_injectable.add(url)
+
+    # Infer common params for parameterless injectable endpoints
+    _COMMON_TEST_PARAMS = [
+        ("search", "test"), ("q", "test"), ("query", "test"),
+        ("id", "1"), ("filter", "test"), ("key", "test"),
+        ("page", "1"), ("limit", "10"), ("offset", "0"),
+        ("sort", "id"), ("order", "asc"), ("category", "1"),
+    ]
+    for url in _paramless_injectable:
+        for pname, sample in _COMMON_TEST_PARAMS:
+            param_entries.append((url, pname, sample, "GET"))
 
     # From parameters.json — structured param data
     for item in parameters_data:
