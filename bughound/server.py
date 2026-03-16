@@ -104,10 +104,11 @@ async def bughound_init(target: str, depth: str = "light") -> str:
         for stage_num, reason in classification.skip_reasons.items():
             skip_lines += f"    Stage {stage_num}: {reason}\n"
 
+    header = "=" * 45
     return (
-        "=" * 45 + "\n"
-        "  BugHound -- Workspace Initialized\n"
-        "=" * 45 + "\n\n"
+        f"{header}\n"
+        f"  BugHound -- Workspace Initialized\n"
+        f"{header}\n\n"
         f"  Target:     {target}\n"
         f"  Type:       {classification.target_type.value}\n"
         f"  Depth:      {depth}\n"
@@ -1725,10 +1726,11 @@ def _format_job_started(result: dict[str, Any]) -> str:
     job_id = result.get('job_id', '?')
     est = result.get('estimated_time', 'a few minutes')
     msg = result.get('message', '')
+    hdr = "=" * 45
     return (
-        "=" * 45 + "\n"
-        "  Background Job Started\n"
-        "=" * 45 + "\n\n"
+        f"{hdr}\n"
+        f"  Background Job Started\n"
+        f"{hdr}\n\n"
         f"  Job ID:         {job_id}\n"
         f"  Estimated Time: {est}\n"
         f"  Details:        {msg}\n\n"
