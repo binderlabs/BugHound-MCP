@@ -132,9 +132,13 @@ async def test_sqli(
         baseline_len = len(baseline_body)
 
         # Phase 1: Error-based — inject single quote
-        test_url = _replace_param(target_url, param, f"{original_value}'")
-        status, body, _ = await _send(session, test_url)
-        if status > 0:
+        for quote_char, quote_name in [("'", "single-quote"), ('"', "double-quote")]:
+            test_url = _replace_param(target_url, param, f"{original_value}{quote_char}")
+            status, body, _ = await _send(session, test_url)
+            if status == 0:
+                continue
+
+            # Check for SQL error strings in response
             match = _SQL_ERROR_RE.search(body)
             if match and not _SQL_ERROR_RE.search(baseline_body):
                 return {
@@ -142,25 +146,22 @@ async def test_sqli(
                     "url": test_url,
                     "param": param,
                     "technique": "error-based",
-                    "payload": f"{original_value}'",
+                    "payload": f"{original_value}{quote_char}",
                     "evidence": f"SQL error: {match.group(0)}",
                     "confidence": "high",
                 }
 
-        # Phase 2: Double-quote error
-        test_url = _replace_param(target_url, param, f'{original_value}"')
-        status, body, _ = await _send(session, test_url)
-        if status > 0:
-            match = _SQL_ERROR_RE.search(body)
-            if match and not _SQL_ERROR_RE.search(baseline_body):
+            # HTTP 500 on quote injection = strong SQLi indicator
+            # (JSON APIs often return 500 instead of SQL error text)
+            if status == 500 and baseline_status != 500:
                 return {
                     "vulnerable": True,
                     "url": test_url,
                     "param": param,
                     "technique": "error-based",
-                    "payload": f'{original_value}"',
-                    "evidence": f"SQL error: {match.group(0)}",
-                    "confidence": "high",
+                    "payload": f"{original_value}{quote_char}",
+                    "evidence": f"HTTP 500 on {quote_name} injection (baseline was {baseline_status})",
+                    "confidence": "medium",
                 }
 
         # Phase 3: Boolean-blind — compare true vs false conditions
