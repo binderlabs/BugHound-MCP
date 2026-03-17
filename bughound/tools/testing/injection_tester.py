@@ -495,15 +495,21 @@ async def test_ssti(
                 continue
 
             # Check for expected output that wasn't in baseline
+            # Also verify the raw payload is NOT echoed back — if the payload
+            # string itself appears, the server is just reflecting input,
+            # not executing the template expression
             if expected in body and expected not in baseline_body:
-                return {
-                    "vulnerable": True,
-                    "payload": payload,
-                    "template_engine": engine,
-                    "evidence": body[:500],
-                    "param": param,
-                    "url": test_url,
-                }
+                # Strip common template delimiters to check for echo
+                payload_core = payload.replace("{{", "").replace("}}", "").replace("${", "").replace("}", "").replace("#{", "").replace("<%= ", "").replace(" %>", "")
+                if payload_core not in body and payload not in body:
+                    return {
+                        "vulnerable": True,
+                        "payload": payload,
+                        "template_engine": engine,
+                        "evidence": body[:500],
+                        "param": param,
+                        "url": test_url,
+                    }
 
     return {
         "vulnerable": False, "param": param, "url": target_url,
