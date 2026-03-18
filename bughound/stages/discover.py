@@ -1135,7 +1135,7 @@ async def _start_discover_job(
         "job_id": job_id,
         "message": f"Discovery started for {len(targets)} targets.",
         "workspace_id": workspace_id,
-        "estimated_time": "3-8 minutes",
+        "estimated_time": "5-20 minutes",
     }
 
 
