@@ -60,10 +60,38 @@ _MARKER = "BUGHOUND_DOM_XSS"
 # Playwright availability check
 # ---------------------------------------------------------------------------
 
+def _patch_playwright_driver() -> None:
+    """Fix Playwright Node.js driver path if system default is broken."""
+    import os
+    from pathlib import Path
+
+    try:
+        import playwright._impl._driver as driver
+        _, cli_path = driver.compute_driver_executable()
+        if not Path(cli_path).exists():
+            # Search for cli.js in common npm locations
+            # Search npm cache and global installs for a working cli.js
+            search_paths = list(Path.home().glob(".npm/_npx/*/node_modules/playwright/cli.js"))
+            search_paths.extend([
+                Path("/usr/local/lib/node_modules/@playwright/cli/node_modules/playwright/cli.js"),
+                Path.home() / "node_modules/playwright/cli.js",
+            ])
+            for p in search_paths:
+                if p.exists():
+                    original = driver.compute_driver_executable
+                    node_path = os.getenv("PLAYWRIGHT_NODEJS_PATH", "/usr/bin/node")
+                    driver.compute_driver_executable = lambda: (node_path, str(p))
+                    logger.info("playwright.driver_patched", path=str(p))
+                    break
+    except Exception:
+        pass
+
+
 def _playwright_available() -> bool:
     """Check if playwright is installed and usable."""
     try:
         import playwright  # noqa: F401
+        _patch_playwright_driver()
         return True
     except ImportError:
         return False
