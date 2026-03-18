@@ -805,8 +805,12 @@ async def _run_injection_batch(
     candidates = _get_param_candidates(pc, candidate_key)
     scoped = await _filter_to_scope(candidates, approved_hosts, limit=limit)
 
-    # Prioritize probe-confirmed candidates (they have actual evidence)
-    scoped.sort(key=lambda c: (0 if c.get("probe") else 1))
+    # Prioritize: probe-confirmed first, then crawled params, then inferred
+    scoped.sort(key=lambda c: (
+        0 if c.get("probe") else          # probe-confirmed = highest priority
+        1 if c.get("sample_value") not in ("test", "1", "") else  # real sample values
+        2                                   # inferred/generic
+    ))
 
     # For API-only candidates, also generate frontend URL variants
     extra: list[dict[str, Any]] = []

@@ -672,6 +672,18 @@ async def probe_reflection(
 
                 # --- Probe 2: SQLi error check ---
                 sqli_url = _replace_param_value(url, param, "1'")
+                baseline_status = 0
+                try:
+                    # Get baseline status for comparison
+                    async with session.get(
+                        url, headers=_PROBE_HEADERS,
+                        timeout=_PROBE_TIMEOUT, ssl=False,
+                        allow_redirects=True,
+                    ) as base_resp:
+                        baseline_status = base_resp.status
+                except Exception:
+                    pass
+
                 try:
                     async with session.get(
                         sqli_url, headers=_PROBE_HEADERS,
@@ -680,10 +692,17 @@ async def probe_reflection(
                     ) as resp:
                         body = await resp.text(errors="replace")
 
-                        if _SQL_ERROR_RE.search(body):
+                        # SQL error string in response OR HTTP 500 on quote injection
+                        sqli_detected = (
+                            _SQL_ERROR_RE.search(body)
+                            or (resp.status == 500 and baseline_status != 500)
+                        )
+                        probe_type = "sql_error" if _SQL_ERROR_RE.search(body) else "http_500"
+
+                        if sqli_detected:
                             dk = f"{url}:{param}"
                             if dk in sqli_index:
-                                sqli_index[dk]["probe"] = "sql_error"
+                                sqli_index[dk]["probe"] = probe_type
                             else:
                                 new_sqli.append({
                                     "url": url, "param": param,
