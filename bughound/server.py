@@ -735,6 +735,138 @@ async def bughound_get_attack_surface(workspace_id: str) -> str:
 
 
 @mcp.tool(
+    name="bughound_analyze_host",
+    description=(
+        "Deep-dive analysis of a specific host. Returns detailed probe results, "
+        "confirmed vulnerabilities, flags, technologies, parameters, and attack "
+        "chains for ONE host. Use this after bughound_get_attack_surface to "
+        "drill into high-interest targets. Stage 3, read-only, sync."
+    ),
+)
+async def bughound_analyze_host(workspace_id: str, host: str) -> str:
+    """Get detailed analysis for a single host."""
+    result = await stage_analyze.get_attack_surface(workspace_id)
+    if result.get("status") == "error":
+        return f"Error: {result['message']}"
+
+    # Find this host in the scored targets
+    all_targets = result.get("high_interest_targets", [])
+    host_lower = host.strip().lower()
+    target = None
+    for t in all_targets:
+        if t.get("host", "").lower() == host_lower:
+            target = t
+            break
+
+    if not target:
+        available = [t.get("host", "?") for t in all_targets[:10]]
+        return f"Host '{host}' not found. Available hosts:\n" + "\n".join(f"  - {h}" for h in available)
+
+    hdr = "=" * 45
+    lines = [
+        f"{hdr}",
+        f"  Host Analysis: {host}",
+        f"{hdr}",
+        "",
+        f"  Score: {target.get('score', 0)} [{target.get('risk_level', '?')}]",
+        f"  URL: {target.get('url', '?')}",
+    ]
+
+    if target.get("technologies"):
+        lines.append(f"  Tech: {', '.join(target['technologies'][:10])}")
+    if target.get("flags"):
+        lines.append(f"\n  Flags:")
+        for f in target["flags"]:
+            lines.append(f"    - {f}")
+
+    # Probe-confirmed vulns
+    pc = result.get("parameter_classification", {})
+    probe_confirmed = pc.get("probe_confirmed", [])
+    host_probes = [p for p in probe_confirmed if host_lower in p.get("url", "").lower()]
+    if host_probes:
+        lines.append(f"\n  Probe-Confirmed Vulnerabilities ({len(host_probes)}):")
+        for p in host_probes[:10]:
+            lines.append(f"    [{p['vuln_type'].upper()}] {p['url'][:55]} param={p['param']}")
+
+    # Top candidates for this host
+    top_by_type = pc.get("top_candidates_by_type", {})
+    host_candidates = {}
+    for vtype, cands in top_by_type.items():
+        hc = [c for c in cands if host_lower in c.get("url", "").lower()]
+        if hc:
+            host_candidates[vtype] = hc
+    if host_candidates:
+        lines.append(f"\n  Vulnerable Parameters:")
+        for vtype, cands in host_candidates.items():
+            for c in cands[:3]:
+                lines.append(f"    [{vtype.upper()}] {c.get('url', '?')[:50]} param={c.get('param', '?')}")
+
+    # Attack chains involving this host
+    chains = result.get("attack_chains", [])
+    host_chains = [c for c in chains if host_lower in str(c.get("affected_hosts", [])).lower()]
+    if host_chains:
+        lines.append(f"\n  Attack Chains ({len(host_chains)}):")
+        for c in host_chains[:5]:
+            lines.append(f"    [{c.get('severity', '?')}] {c.get('name', '?')[:50]}")
+            steps = c.get("exploitation_steps", [])
+            for s in steps[:3]:
+                lines.append(f"      {s}")
+
+    # Reasoning
+    if target.get("reasons"):
+        lines.append(f"\n  Why this host is interesting:")
+        for r in target["reasons"]:
+            lines.append(f"    - {r}")
+
+    lines.append(f"\n  Suggested test classes: {', '.join(result.get('suggested_test_classes', []))}")
+
+    return "\n".join(lines) + "\n"
+
+
+@mcp.tool(
+    name="bughound_get_immediate_wins",
+    description=(
+        "Get all immediate wins — findings that are ready to report NOW without "
+        "any testing. Includes exposed .git, .env, credentials, actuator endpoints, "
+        "source maps, phpinfo, backups. These should be reported first while "
+        "testing continues. Stage 3, read-only, sync."
+    ),
+)
+async def bughound_get_immediate_wins(workspace_id: str) -> str:
+    """Get report-ready findings from discovery data."""
+    result = await stage_analyze.get_attack_surface(workspace_id)
+    if result.get("status") == "error":
+        return f"Error: {result['message']}"
+
+    wins = result.get("immediate_wins", [])
+    if not wins:
+        return "No immediate wins found. All findings require testing to confirm."
+
+    hdr = "=" * 45
+    lines = [
+        f"{hdr}",
+        f"  Immediate Wins: {len(wins)} report-ready findings",
+        f"{hdr}",
+        "",
+    ]
+
+    for i, w in enumerate(wins, 1):
+        lines.append(f"  {i}. [{w.get('severity', '?')}] {w.get('type', '?')}")
+        lines.append(f"     Host: {w.get('host', '?')}")
+        lines.append(f"     Path: {w.get('path', '?')}")
+        if w.get("evidence"):
+            lines.append(f"     Evidence: {str(w['evidence'])[:80]}")
+        if w.get("reproduction"):
+            lines.append(f"     Reproduce: {w['reproduction'][:80]}")
+        if w.get("bounty_estimate"):
+            lines.append(f"     Est. Bounty: {w['bounty_estimate']}")
+        lines.append("")
+
+    lines.append(f"  These can be reported immediately without running Stage 4 testing.")
+    return "\n".join(lines) + "\n"
+
+
+@mcp.tool(
     name="bughound_submit_scan_plan",
     description=(
         "Submit testing strategy after reviewing attack surface. Validates targets "
