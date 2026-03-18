@@ -1210,7 +1210,7 @@ async def _validate_traversal_findings(
         return findings
 
     timeout = aiohttp.ClientTimeout(total=10)
-    headers = {"User-Agent": "Mozilla/5.0 (BugHound Scanner)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
     async with aiohttp.ClientSession(headers=headers) as session:
         for f in to_check:

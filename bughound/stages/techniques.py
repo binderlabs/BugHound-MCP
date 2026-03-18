@@ -1476,7 +1476,7 @@ async def _exec_spring_actuator(
                 try:
                     async with session.get(
                         f"{base}{path}", ssl=False, timeout=timeout,
-                        headers={"User-Agent": "Mozilla/5.0 (BugHound Scanner)"},
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
                     ) as resp:
                         if resp.status == 200:
                             body = await resp.text(errors="replace")

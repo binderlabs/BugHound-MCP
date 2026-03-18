@@ -533,6 +533,62 @@ async def _run_discover(
             files_written.append("endpoints/hidden_endpoints.json")
 
     # ===================================================================
+    # Phase 2C-map: Check for exposed source maps (.js.map)
+    # ===================================================================
+    source_maps_found: list[dict[str, Any]] = []
+    if js_urls:
+        import aiohttp as _aiohttp
+        _map_sem = asyncio.Semaphore(5)
+
+        async def _check_map(js_url: str) -> dict[str, Any] | None:
+            map_url = js_url + ".map"
+            async with _map_sem:
+                try:
+                    async with _aiohttp.ClientSession() as sess:
+                        async with sess.get(
+                            map_url, ssl=False,
+                            timeout=_aiohttp.ClientTimeout(total=10),
+                        ) as resp:
+                            if resp.status == 200:
+                                body = await resp.text(errors="replace")
+                                if len(body) > 100 and (
+                                    "mappings" in body or "sources" in body
+                                ):
+                                    return {
+                                        "url": map_url,
+                                        "size": len(body),
+                                        "source_js": js_url,
+                                    }
+                except Exception:
+                    pass
+            return None
+
+        map_tasks = [_check_map(u) for u in js_urls[:20]]
+        map_results = await asyncio.gather(*map_tasks, return_exceptions=True)
+        source_maps_found = [r for r in map_results if isinstance(r, dict)]
+
+        if source_maps_found:
+            # Add as sensitive findings flagged on matching hosts
+            for sm in source_maps_found:
+                sm_host = urlparse(sm["url"]).hostname or ""
+                sm_host = sm_host.lower()
+                for fh in flagged_hosts:
+                    fh_host = (fh.get("host") or "").lower()
+                    if not fh_host:
+                        fh_host = urlparse(fh.get("url", "")).hostname or ""
+                        fh_host = fh_host.lower()
+                    if fh_host == sm_host:
+                        flag = f"SOURCE_MAP_EXPOSED: {sm['url']} ({sm['size']} bytes)"
+                        if flag not in fh["flags"]:
+                            fh["flags"].append(flag)
+
+            logger.info(
+                "discover.source_maps",
+                count=len(source_maps_found),
+                urls=[sm["url"] for sm in source_maps_found],
+            )
+
+    # ===================================================================
     # Phase 2C-param: Parameter Summary
     # ===================================================================
     if params_by_path:

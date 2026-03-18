@@ -1588,6 +1588,13 @@ def _suggest_test_classes(
         "REDIRECT_OAUTH_THEFT": "open_redirect",
         "BROKEN_ACCESS_CONTROL": "bac",
         "COOKIE_INJECTION_CHAIN": "deserialization",
+        "FILE_UPLOAD_ABUSE": "rce",
+        "LOGIN_FORM_SQLI": "sqli",
+        "POST_ENDPOINT_INJECTION": "sqli",
+        "JWT_WEAKNESS_CHAIN": "jwt",
+        "MASS_ASSIGNMENT": "mass_assignment",
+        "PATH_IDOR": "idor",
+        "DESERIALIZATION_ATTACK": "deserialization",
     }
     for chain in chains:
         cls = chain_to_class.get(chain.get("chain_id", ""))
@@ -1597,7 +1604,7 @@ def _suggest_test_classes(
     playbook_to_class = {
         "WordPress": "wordpress",
         "GraphQL": "graphql",
-        "Spring Boot Actuator": "spring_actuator",
+        "Spring Boot Actuator": "spring",
         "Node.js / Express": "prototype_pollution",
         "React / Angular SPA": "client_side",
     }
@@ -1856,6 +1863,19 @@ def _generate_reasoning_prompts(
             f"{len(wins)} immediate wins found (report-ready without testing). "
             "Consider: submit these to the bug bounty program first while testing continues."
         )
+
+    # SSRF candidates
+    if data:
+        param_class = _extract_items(data.get("parameter_classification"))
+        pc_data = param_class[0] if param_class and isinstance(param_class[0], dict) else {}
+        ssrf_cands = pc_data.get("ssrf_candidates", [])
+        if ssrf_cands:
+            urls = [c.get("url", "") for c in ssrf_cands[:3]]
+            prompts.append(
+                f"{len(ssrf_cands)} SSRF candidates found on params like 'url', 'src', 'proxy'. "
+                f"Endpoints: {', '.join(urls[:3])}. "
+                "Consider: test with cloud metadata URLs (169.254.169.254), internal IPs, and DNS rebinding."
+            )
 
     # CORS with credentials
     for host, info in host_idx.items():

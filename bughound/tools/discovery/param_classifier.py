@@ -544,7 +544,7 @@ def classify_parameters(
 # ---------------------------------------------------------------------------
 
 _PROBE_TIMEOUT = aiohttp.ClientTimeout(total=10)
-_PROBE_HEADERS = {"User-Agent": "Mozilla/5.0 (BugHound Scanner)"}
+_PROBE_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 _PROBE_MARKER = "bh7r3f"  # unique marker unlikely to appear naturally
 
 # SQL error patterns across databases

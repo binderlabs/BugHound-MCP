@@ -22,7 +22,7 @@ import structlog
 logger = structlog.get_logger()
 
 _TIMEOUT = aiohttp.ClientTimeout(total=15)
-_HEADERS = {"User-Agent": "Mozilla/5.0 (BugHound Scanner)"}
+_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 # ---------------------------------------------------------------------------
 # Cookie classification patterns
