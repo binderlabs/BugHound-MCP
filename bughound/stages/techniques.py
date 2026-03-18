@@ -2114,7 +2114,15 @@ async def _exec_dom_xss(
 
     async def _test_one(host: str) -> list[dict[str, Any]]:
         url = host_urls.get(host, f"https://{host}")
-        params = list(host_params.get(host, set()))[:5]  # top 5 params
+        all_p = list(host_params.get(host, set()))
+        # Prioritize: search/q/query first (most common XSS vectors)
+        _TOP_XSS = {"search", "q", "query", "key", "keyword", "s"}
+        _MED_XSS = {"name", "input", "text", "value", "msg", "content", "body", "title"}
+        all_p.sort(key=lambda p: (
+            0 if p.lower() in _TOP_XSS else
+            1 if p.lower() in _MED_XSS else 2
+        ))
+        params = all_p[:10]  # test up to 10 params
         if not params:
             return []
         async with sem:
