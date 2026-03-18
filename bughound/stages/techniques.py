@@ -803,14 +803,15 @@ async def _run_injection_batch(
 
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, candidate_key)
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=limit)
 
-    # Prioritize: probe-confirmed first, then crawled params, then inferred
-    scoped.sort(key=lambda c: (
+    # Sort candidates BEFORE scope filtering so probe-confirmed don't get cut
+    candidates.sort(key=lambda c: (
         0 if c.get("probe") else          # probe-confirmed = highest priority
         1 if c.get("sample_value") not in ("test", "1", "") else  # real sample values
         2                                   # inferred/generic
     ))
+
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=limit)
 
     # For API-only candidates, also generate frontend URL variants
     extra: list[dict[str, Any]] = []
@@ -2079,23 +2080,42 @@ async def _exec_path_idor(
 async def _exec_dom_xss(
     workspace_id: str, approved_hosts: set[str], concurrency: int,
 ) -> list[dict[str, Any]]:
-    """Test for DOM-based XSS on crawled URLs."""
+    """Test for DOM-based XSS on live hosts using Playwright.
+
+    Instead of testing every crawled URL (slow), test each live host's
+    root URL with XSS-classified params from param classification.
+    """
     from bughound.tools.testing.dom_xss_tester import test_dom_xss
 
-    raw_urls = await workspace.read_data(workspace_id, "urls/crawled.json")
-    urls = _extract_items(raw_urls)
+    # Get unique hosts + their XSS params
+    pc = await _load_param_classification(workspace_id)
+    xss_candidates = _get_param_candidates(pc, "xss_candidates")
 
-    sem = asyncio.Semaphore(concurrency)
+    # Build per-host param list
+    host_params: dict[str, set[str]] = {}
+    host_urls: dict[str, str] = {}
+    for c in xss_candidates:
+        url = c.get("url", "")
+        host = _host_from_url(url)
+        if host in approved_hosts:
+            host_params.setdefault(host, set()).add(c.get("param", ""))
+            if host not in host_urls:
+                # Use the host's root URL for DOM testing
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(url)
+                host_urls[host] = urlunparse(parsed._replace(path="/", query=""))
+
+    sem = asyncio.Semaphore(max(1, concurrency // 2))  # Playwright is heavy
     findings: list[dict[str, Any]] = []
 
-    async def _test_one(u: Any) -> list[dict[str, Any]]:
-        url = u.get("url", "") if isinstance(u, dict) else str(u)
-        host = _host_from_url(url)
-        if host not in approved_hosts:
+    async def _test_one(host: str) -> list[dict[str, Any]]:
+        url = host_urls.get(host, f"https://{host}")
+        params = list(host_params.get(host, set()))[:5]  # top 5 params
+        if not params:
             return []
         async with sem:
             try:
-                result = await test_dom_xss(url)
+                result = await test_dom_xss(url, params=params)
                 if result.get("vulnerable"):
                     out: list[dict[str, Any]] = []
                     if result.get("method") == "playwright":
@@ -2132,9 +2152,8 @@ async def _exec_dom_xss(
                 pass
             return []
 
-    # Test a sample of URLs — DOM XSS testing is slow
-    sample_urls = urls[:20]
-    tasks = [_test_one(u) for u in sample_urls]
+    # Test each unique host (not every URL — Playwright is expensive)
+    tasks = [_test_one(host) for host in host_urls]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for r in results:
         if isinstance(r, list):
