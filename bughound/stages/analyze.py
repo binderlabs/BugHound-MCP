@@ -1619,13 +1619,57 @@ def _suggest_test_classes(
             "rce_count": "rce",
             "redirect_count": "open_redirect",
             "idor_count": "idor",
+            "ssti_count": "ssti",
+            "deserialization_count": "deserialization",
+            "mass_assignment_count": "mass_assignment",
         }
         for stat_key, test_class in param_to_class.items():
             if stats.get(stat_key, 0) >= 1:
                 classes.add(test_class)
 
-    # Always include generic classes
-    classes.add("nuclei_general")
+        # POST endpoints → post injection classes
+        if stats.get("post_endpoints", 0) >= 1:
+            classes.update(["sqli", "xss", "ssti", "rce"])
+
+    # Flag-based class suggestions
+    if data:
+        flags = _extract_items(data.get("flags"))
+        all_flags = set()
+        for f in flags:
+            if isinstance(f, dict):
+                all_flags.update(f.get("flags", []))
+
+        flag_to_class = {
+            "SPRING_ACTUATOR": "spring",
+            "ACTUATOR_FOUND": "spring",
+            "GRAPHQL": "graphql",
+            "GRAPHQL_INTROSPECTION": "graphql",
+            "JWT_DETECTED": "jwt",
+            "INJECTABLE_COOKIES": "deserialization",
+            "INSECURE_COOKIES": "misconfig",
+            "CORS_MISCONFIGURED": "cors",
+            "OLD_TECH": "cve_specific",
+            "ADMIN_PANEL": "bac",
+            "ADMIN_PANEL_FOUND": "bac",
+            "DEBUG_ENABLED": "misconfig",
+        }
+        for flag_str in all_flags:
+            for flag_key, test_class in flag_to_class.items():
+                if flag_key in flag_str:
+                    classes.add(test_class)
+
+        # Check for WordPress endpoints in crawled URLs
+        crawled = _extract_items(data.get("crawled_urls"))
+        has_wp = any("/wp-" in str(u).lower() or "/wp/" in str(u).lower() for u in crawled)
+        if has_wp:
+            classes.add("wordpress")
+
+    # Always include these baseline classes
+    classes.update([
+        "nuclei_general", "cve_specific", "misconfig", "default_creds",
+        "crlf", "header_injection", "bac", "rate_limiting",
+        "cors", "csti",
+    ])
 
     return sorted(classes)
 
