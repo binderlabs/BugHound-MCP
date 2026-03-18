@@ -113,6 +113,7 @@ async def bughound_init(target: str, depth: str = "light") -> str:
         f"  Type:       {classification.target_type.value}\n"
         f"  Depth:      {depth}\n"
         f"  Workspace:  {meta.workspace_id}\n"
+        f"  Path:       {ws_path}\n"
         f"  Normalized: {', '.join(classification.normalized_targets)}\n"
         f"{skip_lines}\n"
         f"  Pipeline: {pipeline_line}\n\n"
