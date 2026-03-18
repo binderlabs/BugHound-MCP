@@ -616,6 +616,15 @@ async def probe_reflection(
                     seen.add(dk)
                     all_params.append((url, param, c.get("sample_value", "")))
 
+    # Prioritize: real crawled params with values > API/debug endpoints > inferred
+    _HIGH_PRIORITY_PARAMS = {"search", "q", "query", "id", "key", "url", "file", "page", "cmd"}
+    _HIGH_PRIORITY_PATHS = ("/api/", "/debug", "/admin", "/search", "/products", "/orders")
+    all_params.sort(key=lambda p: (
+        0 if p[1].lower() in _HIGH_PRIORITY_PARAMS and any(kw in p[0].lower() for kw in _HIGH_PRIORITY_PATHS) else
+        1 if p[2] not in ("test", "1", "") else  # has real sample value
+        2
+    ))
+
     if not all_params:
         return classification
 
