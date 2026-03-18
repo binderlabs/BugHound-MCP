@@ -837,7 +837,9 @@ async def _run_injection_batch(
             return None
         async with sem:
             try:
-                result = await test_func(url, param, sample)
+                result = await asyncio.wait_for(
+                    test_func(url, param, sample), timeout=60,
+                )
                 if result.get(result_key):
                     return {
                         "vulnerability_class": vuln_class,
@@ -1517,7 +1519,9 @@ async def _run_injection_batch_direct(
             return None
         async with sem:
             try:
-                result = await test_func(url, param, sample)
+                result = await asyncio.wait_for(
+                    test_func(url, param, sample), timeout=60,
+                )
                 if result.get("vulnerable"):
                     return {
                         "vulnerability_class": vuln_class,

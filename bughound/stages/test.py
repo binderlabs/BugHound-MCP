@@ -838,7 +838,7 @@ async def _run_tests(
     # Heavy tools that spawn subprocesses — limit concurrency
     _HEAVY_TECHNIQUES = {"sqli_param_fuzz", "xss_param_fuzz", "deep_dirfuzz"}
     heavy_sem = asyncio.Semaphore(2)   # max 2 external-tool techniques
-    light_sem = asyncio.Semaphore(6)   # max 6 pure-Python techniques
+    light_sem = asyncio.Semaphore(10)  # max 10 pure-Python techniques
 
     async def _run_technique(
         technique_id: str, phase_prefix: str,
@@ -850,8 +850,11 @@ async def _run_tests(
                 "technique.parallel_start", technique_id=technique_id,
             )
             try:
-                tech_findings = await techniques.execute_technique(
-                    technique_id, workspace_id, sorted_targets,
+                tech_findings = await asyncio.wait_for(
+                    techniques.execute_technique(
+                        technique_id, workspace_id, sorted_targets,
+                    ),
+                    timeout=300,  # 5 minute max per technique
                 )
                 for f in tech_findings:
                     f["finding_id"] = _make_finding_id(f)
@@ -859,7 +862,17 @@ async def _run_tests(
                     f.setdefault("validation_status", None)
                     if f.get("tool") in _TOOL_DEFINITIVE:
                         f["needs_validation"] = False
+                logger.info(
+                    "technique.parallel_done",
+                    technique_id=technique_id, findings=len(tech_findings),
+                )
                 return technique_id, tech_findings
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "technique.parallel_timeout",
+                    technique_id=technique_id,
+                )
+                return technique_id, []
             except Exception as exc:
                 logger.warning(
                     "technique.parallel_error",
