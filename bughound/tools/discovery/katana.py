@@ -40,8 +40,12 @@ async def execute_light(
 async def execute_deep(
     target: str,
     timeout: int = TIMEOUT,
+    scope: str = "rdn",
 ) -> ToolResult:
-    """Deep crawl — form extraction, JS crawl, deeper depth."""
+    """Deep crawl — form extraction, JS crawl, deeper depth.
+
+    scope: 'fqdn' = exact hostname only, 'rdn' = root domain (includes www).
+    """
     url = target if target.startswith(("http://", "https://")) else f"https://{target}"
 
     result = await tool_runner.run(
@@ -53,7 +57,7 @@ async def execute_deep(
             "-js-crawl",
             "-form-extraction",
             "-automatic-form-fill",
-            "-field-scope", "fqdn",
+            "-field-scope", scope,
         ],
         target=target,
         timeout=timeout,
@@ -65,13 +69,15 @@ async def execute(
     target: str,
     depth: int = 3,
     timeout: int = TIMEOUT,
+    scope: str = "rdn",
 ) -> ToolResult:
-    """Legacy interface — crawl with custom depth."""
+    """Crawl with custom depth and scope."""
     url = target if target.startswith(("http://", "https://")) else f"https://{target}"
 
     result = await tool_runner.run(
         BINARY,
-        ["-u", url, "-d", str(depth), "-jsonl", "-silent", "-js-crawl"],
+        ["-u", url, "-d", str(depth), "-jsonl", "-silent", "-js-crawl",
+         "-field-scope", scope],
         target=target,
         timeout=timeout,
     )
