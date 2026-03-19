@@ -491,7 +491,6 @@ async def _run_discover(
         crawled_paths = set()
         for e in unique_urls:
             try:
-                from urllib.parse import urlparse
                 crawled_paths.add(urlparse(e["url"]).path)
             except Exception:
                 pass
