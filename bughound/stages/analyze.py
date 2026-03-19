@@ -2079,6 +2079,14 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
     async with aiofiles.open(analysis_dir / "attack_surface.json", "w") as f:
         await f.write(json.dumps(result, indent=2, default=str))
 
+    # Generate HTML report
+    try:
+        from bughound.utils.html_report import generate_attack_surface_html, save_html_report
+        html = generate_attack_surface_html(workspace_id, result)
+        await save_html_report(workspace_id, "attack_surface.html", html)
+    except Exception:
+        pass  # Non-critical
+
     return result
 
 

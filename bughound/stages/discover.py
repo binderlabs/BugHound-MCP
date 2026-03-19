@@ -1046,6 +1046,30 @@ async def _run_discover(
         "total": len(unique_urls),
     }
 
+    # Generate HTML report
+    try:
+        from bughound.utils.html_report import generate_discovery_html, save_html_report
+        html = generate_discovery_html(workspace_id, {
+            "target": target_label,
+            "live_hosts": len(live_hosts),
+            "urls_discovered": len(unique_urls),
+            "js_files": len(js_urls),
+            "technologies": [h.get("technologies", []) for h in live_hosts],
+            "flags": flagged_hosts,
+            "probe_stats": param_classification.get("stats", {}),
+            "cors_results": cors_results,
+            "sensitive_paths": sensitive_findings,
+            "auth_results": auth_results,
+            "crawled_urls": all_urls,
+            "parameters_harvested": len(hidden_params) if hidden_params else 0,
+            "forms_discovered": len(unique_forms),
+            "secrets_found": len(js_secrets),
+        })
+        await save_html_report(workspace_id, "discovery.html", html)
+        files_written.append("reports/discovery.html")
+    except Exception as exc:
+        warnings.append(f"HTML report generation failed: {exc}")
+
     return {
         "status": "success",
         "message": (
