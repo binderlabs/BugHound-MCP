@@ -451,6 +451,7 @@ async def _run_tests(
     all_test_classes.update([
         "cors", "bac", "rate_limiting", "cve_specific",
         "ssti", "csti", "crlf", "header_injection", "jwt", "graphql",
+        "ssrf", "open_redirect", "rce", "idor",
     ])
 
     async def _progress(pct: int, msg: str, module: str) -> None:
