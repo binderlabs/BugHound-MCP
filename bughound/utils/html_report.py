@@ -18,6 +18,13 @@ from bughound.config.settings import WORKSPACE_BASE_DIR
 
 logger = structlog.get_logger()
 
+# Logo as base64 data URI (80x80 JPEG, ~4KB)
+_LOGO_B64_PATH = Path(__file__).parent / "logo_b64.txt"
+try:
+    _LOGO_B64 = _LOGO_B64_PATH.read_text().strip()
+except Exception:
+    _LOGO_B64 = ""
+
 
 # ---------------------------------------------------------------------------
 # Shared CSS + HTML scaffolding
@@ -334,7 +341,10 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
     parts.append(f"""
 <header>
 <div class="container">
-    <div class="logo">Bug<span>Hound</span></div>
+    <div style="display:flex;align-items:center;gap:12px">
+        <img src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound" style="width:48px;height:48px;border-radius:50%">
+        <div class="logo">Bug<span>Hound</span></div>
+    </div>
     <div class="header-meta">
         <div class="target">{_esc(target)}</div>
         <div>Stage 2: Discovery Report</div>
@@ -592,7 +602,10 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     parts.append(f"""
 <header>
 <div class="container">
-    <div class="logo">Bug<span>Hound</span></div>
+    <div style="display:flex;align-items:center;gap:12px">
+        <img src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound" style="width:48px;height:48px;border-radius:50%">
+        <div class="logo">Bug<span>Hound</span></div>
+    </div>
     <div class="header-meta">
         <div class="target">{_esc(target)}</div>
         <div>Stage 3: Attack Surface Analysis</div>
