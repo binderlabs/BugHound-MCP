@@ -43,27 +43,29 @@ body{
 }
 .container{max-width:1200px;margin:0 auto;padding:24px;}
 
-/* Sticky header */
-header{
+/* Sticky top bar — header + nav combined */
+.top-bar{
     position:sticky;top:0;z-index:200;
-    background:linear-gradient(135deg,#161b22 0%,#0d1117 100%);
-    border-bottom:2px solid #30363d;
-    padding:14px 0;
+    background:#0d1117;
 }
-header .container{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding-top:10px;padding-bottom:10px;}
+header{
+    background:linear-gradient(135deg,#161b22 0%,#0d1117 100%);
+    border-bottom:1px solid #30363d;
+    padding:10px 0;
+}
+header .container{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding-top:8px;padding-bottom:8px;}
 .logo-group{display:flex;align-items:center;gap:12px;}
-.logo-img{width:48px;height:48px;border-radius:50%;border:2px solid #30363d;object-fit:cover;}
-.logo{font-size:26px;font-weight:700;color:#58a6ff;letter-spacing:-0.5px;}
+.logo-img{width:42px;height:42px;border-radius:50%;border:2px solid #30363d;object-fit:cover;}
+.logo{font-size:24px;font-weight:700;color:#58a6ff;letter-spacing:-0.5px;}
 .logo span{color:#3fb950;}
-.header-meta{text-align:right;color:#8b949e;font-size:13px;}
-.header-meta .target{color:#e6edf3;font-size:16px;font-weight:600;margin-bottom:2px;word-break:break-all;}
-.header-meta .stage-label{color:#58a6ff;font-weight:600;font-size:13px;}
+.header-meta{text-align:right;color:#8b949e;font-size:12px;}
+.header-meta .target{color:#e6edf3;font-size:14px;font-weight:600;margin-bottom:2px;word-break:break-all;}
+.header-meta .stage-label{color:#58a6ff;font-weight:600;font-size:12px;}
 
-/* Sticky nav bar */
+/* Nav inside top-bar */
 .nav{
-    position:sticky;top:72px;z-index:100;
-    background:#161b22;border-bottom:1px solid #30363d;
-    padding:6px 0;overflow-x:auto;white-space:nowrap;
+    background:#161b22;border-bottom:2px solid #30363d;
+    padding:4px 0;overflow-x:auto;white-space:nowrap;
 }
 .nav .container{padding-top:0;padding-bottom:0;display:flex;gap:2px;flex-wrap:nowrap;}
 .nav a{
@@ -76,7 +78,7 @@ header .container{display:flex;align-items:center;justify-content:space-between;
 h2{
     color:#e6edf3;font-size:20px;margin:36px 0 16px 0;
     padding-bottom:8px;border-bottom:1px solid #21262d;
-    scroll-margin-top:120px;
+    scroll-margin-top:110px;
 }
 h3{color:#c9d1d9;font-size:16px;margin:16px 0 8px 0;}
 
@@ -514,8 +516,10 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
     parts: list[str] = []
 
     # --- Header + Nav ---
+    parts.append('<div class="top-bar">')
     parts.append(_header_html(target, "Stage 2: Discovery Report"))
     parts.append(_nav_html(nav_sections))
+    parts.append('</div>')
 
     # --- Summary Dashboard ---
     parts.append('<div class="container">')
@@ -879,8 +883,10 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     parts: list[str] = []
 
     # --- Header + Nav ---
+    parts.append('<div class="top-bar">')
     parts.append(_header_html(target, "Stage 3: Attack Surface Analysis"))
     parts.append(_nav_html(nav_sections))
+    parts.append('</div>')
     parts.append('<div class="container">')
 
     # --- Overall Assessment ---
