@@ -1353,16 +1353,16 @@ async def _exec_wordpress(
     findings: list[dict[str, Any]] = []
     timeout = _aiohttp.ClientTimeout(total=10)
 
-    for h in hosts:
-        host = (h.get("host") or "").lower()
-        url = h.get("url", "")
-        techs = " ".join(h.get("technologies", [])).lower()
-        if not url or host not in approved_hosts or "wordpress" not in techs:
-            continue
+    async with _aiohttp.ClientSession() as session:
+        for h in hosts:
+            host = (h.get("host") or "").lower()
+            url = h.get("url", "")
+            techs = " ".join(h.get("technologies", [])).lower()
+            if not url or host not in approved_hosts or "wordpress" not in techs:
+                continue
 
-        base = url.rstrip("/")
+            base = url.rstrip("/")
 
-        async with _aiohttp.ClientSession() as session:
             # Test xmlrpc.php
             try:
                 async with session.post(
@@ -1461,17 +1461,17 @@ async def _exec_spring_actuator(
         ("/actuator/loggers", "medium", "Logger configuration exposed"),
     ]
 
-    for f in flags:
-        host = (f.get("host") or "").lower()
-        if host not in approved_hosts:
-            continue
-        if not any("ACTUATOR" in flag for flag in f.get("flags", [])):
-            continue
+    async with _aiohttp.ClientSession() as session:
+        for f in flags:
+            host = (f.get("host") or "").lower()
+            if host not in approved_hosts:
+                continue
+            if not any("ACTUATOR" in flag for flag in f.get("flags", [])):
+                continue
 
-        url = f.get("url", f"https://{host}")
-        base = url.rstrip("/")
+            url = f.get("url", f"https://{host}")
+            base = url.rstrip("/")
 
-        async with _aiohttp.ClientSession() as session:
             for path, severity, desc in actuator_paths:
                 try:
                     async with session.get(

@@ -151,18 +151,21 @@ async def test_sqli(
                     "confidence": "high",
                 }
 
-            # HTTP 500 on quote injection = strong SQLi indicator
-            # (JSON APIs often return 500 instead of SQL error text)
+            # HTTP 500 on quote injection — confirm it's specific to quotes
             if status == 500 and baseline_status != 500:
-                return {
-                    "vulnerable": True,
-                    "url": test_url,
-                    "param": param,
-                    "technique": "error-based",
-                    "payload": f"{original_value}{quote_char}",
-                    "evidence": f"HTTP 500 on {quote_name} injection (baseline was {baseline_status})",
-                    "confidence": "medium",
-                }
+                # Verify: normal input doesn't cause 500
+                verify_url = _replace_param(target_url, param, f"{original_value}test123")
+                verify_status, _, _ = await _send(session, verify_url)
+                if verify_status != 500:
+                    return {
+                        "vulnerable": True,
+                        "url": test_url,
+                        "param": param,
+                        "technique": "error-based",
+                        "payload": f"{original_value}{quote_char}",
+                        "evidence": f"HTTP 500 on {quote_name} injection (baseline was {baseline_status}, normal input returned {verify_status})",
+                        "confidence": "medium",
+                    }
 
         # Phase 3: Boolean-blind — compare true vs false conditions
         true_url = _replace_param(target_url, param, f"{original_value} OR 1=1")
@@ -703,7 +706,8 @@ async def test_csti(
             # Also check if the raw payload is reflected unescaped (potential CSTI)
             if payload in body and "{{" not in baseline_body:
                 return {
-                    "vulnerable": True,
+                    "vulnerable": False,
+                    "suspicious": True,
                     "url": test_url,
                     "param": param,
                     "payload": payload,

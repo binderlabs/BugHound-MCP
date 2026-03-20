@@ -575,10 +575,7 @@ def _replace_param_value(url: str, param: str, new_value: str) -> str:
     """Replace a query parameter value in a URL."""
     parsed = urlparse(url)
     qs = parse_qs(parsed.query, keep_blank_values=True)
-    if param in qs:
-        qs[param] = [new_value]
-    else:
-        qs[param] = [new_value]
+    qs[param] = [new_value]
     new_query = urlencode(qs, doseq=True)
     return urlunparse(parsed._replace(query=new_query))
 
@@ -683,9 +680,10 @@ async def probe_reflection(
                 sqli_url = _replace_param_value(url, param, "1'")
                 baseline_status = 0
                 try:
-                    # Get baseline status for comparison
+                    # Get baseline with the param present
+                    baseline_url = _replace_param_value(url, param, sample or "test")
                     async with session.get(
-                        url, headers=_PROBE_HEADERS,
+                        baseline_url, headers=_PROBE_HEADERS,
                         timeout=_PROBE_TIMEOUT, ssl=False,
                         allow_redirects=True,
                     ) as base_resp:

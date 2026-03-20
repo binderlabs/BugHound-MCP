@@ -1182,7 +1182,7 @@ async def _validate_jwt(finding: dict[str, Any]) -> dict[str, Any]:
 async def _validate_bac(finding: dict[str, Any]) -> dict[str, Any]:
     """Validate broken access control."""
     evidence = finding.get("evidence", "")
-    if "bypass" in evidence.lower() or "200" in evidence:
+    if "bypass" in evidence.lower() or "status 200" in evidence.lower() or "returned 200" in evidence.lower():
         return {
             "status": CONFIRMED,
             "evidence": f"BAC confirmed: {evidence[:500]}",

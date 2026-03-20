@@ -2217,7 +2217,8 @@ async def submit_scan_plan(
         }
 
     # Auto-expand broad domain: if only root domain submitted, add top live hosts
-    scan_plan_data = scan_plan
+    scan_plan_data = dict(scan_plan)
+    scan_plan_data["targets"] = list(scan_plan_data.get("targets", []))
     if meta.target_type and meta.target_type.value == "broad_domain":
         plan_hosts = {t.get("host", "").lower() for t in targets}
         root_domain = meta.target.lower().replace("http://", "").replace("https://", "").strip("/")
@@ -2263,7 +2264,7 @@ async def submit_scan_plan(
     # Write scan_plan.json directly (single object, not DataWrapper list)
     plan_path = workspace.workspace_dir(workspace_id) / "scan_plan.json"
     async with aiofiles.open(plan_path, "w") as f:
-        await f.write(json.dumps(scan_plan, indent=2))
+        await f.write(json.dumps(scan_plan_data, indent=2))
 
     # Update stage history
     await workspace.add_stage_history(workspace_id, 3, "completed")

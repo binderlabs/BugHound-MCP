@@ -955,12 +955,23 @@ async def _run_tests(
     auth_items = auth_raw.get("data", []) if isinstance(auth_raw, dict) else (auth_raw or [])
     cookie_findings: list[dict[str, Any]] = []
 
+    # Pre-compute normalized host set BEFORE the loop
+    _plan_hosts = set()
+    for t in sorted_targets:
+        h = t.get("host", "").lower().strip()
+        if "://" in h:
+            from urllib.parse import urlparse as _urlparse_host
+            h = _urlparse_host(h).hostname or h
+        elif ":" in h:
+            h = h.split(":")[0]
+        _plan_hosts.add(h)
+
     for auth in auth_items:
         if not isinstance(auth, dict):
             continue
         target_url = auth.get("target_url", "")
         host = _host_from_url(target_url)
-        if host not in {t.get("host", "").lower() for t in sorted_targets}:
+        if host not in _plan_hosts:
             continue
 
         for flag in auth.get("insecure_cookie_flags", []):

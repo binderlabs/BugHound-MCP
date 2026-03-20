@@ -278,8 +278,8 @@ async def enumerate_deep(
             if isinstance(existing_dns, list):
                 for rec in existing_dns:
                     if isinstance(rec, dict) and "domain" in rec:
-                        domain = rec.pop("domain")
-                        dns_map[domain] = rec
+                        domain = rec["domain"]
+                        dns_map[domain] = {k: v for k, v in rec.items() if k != "domain"}
             dns_map.update(new_dns)
             dns_list = [{"domain": d, **r} for d, r in sorted(dns_map.items())]
             await workspace.write_data(
@@ -367,8 +367,8 @@ async def enumerate_deep(
             if isinstance(existing_dns, list):
                 for rec in existing_dns:
                     if isinstance(rec, dict) and "domain" in rec:
-                        domain = rec.pop("domain")
-                        dns_map[domain] = rec
+                        domain = rec["domain"]
+                        dns_map[domain] = {k: v for k, v in rec.items() if k != "domain"}
             dns_map.update(new_dns)
             dns_list = [{"domain": d, **r} for d, r in sorted(dns_map.items())]
             await workspace.write_data(
@@ -382,12 +382,21 @@ async def enumerate_deep(
         final_subs = await workspace.read_data(workspace_id, "subdomains/all.txt")
         final_count = len(final_subs) if isinstance(final_subs, list) else fast_count
 
+        # Re-count resolved from final DNS data
+        final_dns = await workspace.read_data(workspace_id, "dns/records.json")
+        final_resolved = 0
+        if isinstance(final_dns, list):
+            final_resolved = sum(1 for rec in final_dns if isinstance(rec, dict) and rec.get("resolved"))
+        elif isinstance(final_dns, dict):
+            dns_items = final_dns.get("data", [])
+            final_resolved = sum(1 for rec in dns_items if isinstance(rec, dict) and rec.get("resolved"))
+
         summary = {
             "subdomains_found": final_count,
             "fast_passive_count": fast_count,
             "amass_new_count": len(new_from_amass),
             "active_new_count": len(active_new),
-            "resolved_count": light_result.get("data", {}).get("resolved_count", 0),
+            "resolved_count": final_resolved,
             "extra_warnings": extra_warnings,
         }
         await job_manager.complete_job(jid, summary)

@@ -539,31 +539,31 @@ async def _run_discover(
         import aiohttp as _aiohttp
         _map_sem = asyncio.Semaphore(5)
 
-        async def _check_map(js_url: str) -> dict[str, Any] | None:
+        async def _check_map(js_url: str, sess: _aiohttp.ClientSession) -> dict[str, Any] | None:
             map_url = js_url + ".map"
             async with _map_sem:
                 try:
-                    async with _aiohttp.ClientSession() as sess:
-                        async with sess.get(
-                            map_url, ssl=False,
-                            timeout=_aiohttp.ClientTimeout(total=10),
-                        ) as resp:
-                            if resp.status == 200:
-                                body = await resp.text(errors="replace")
-                                if len(body) > 100 and (
-                                    "mappings" in body or "sources" in body
-                                ):
-                                    return {
-                                        "url": map_url,
-                                        "size": len(body),
-                                        "source_js": js_url,
-                                    }
+                    async with sess.get(
+                        map_url, ssl=False,
+                        timeout=_aiohttp.ClientTimeout(total=10),
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.text(errors="replace")
+                            if len(body) > 100 and (
+                                "mappings" in body or "sources" in body
+                            ):
+                                return {
+                                    "url": map_url,
+                                    "size": len(body),
+                                    "source_js": js_url,
+                                }
                 except Exception:
                     pass
             return None
 
-        map_tasks = [_check_map(u) for u in js_urls[:20]]
-        map_results = await asyncio.gather(*map_tasks, return_exceptions=True)
+        async with _aiohttp.ClientSession() as _map_session:
+            map_tasks = [_check_map(u, _map_session) for u in js_urls[:20]]
+            map_results = await asyncio.gather(*map_tasks, return_exceptions=True)
         source_maps_found = [r for r in map_results if isinstance(r, dict)]
 
         if source_maps_found:
