@@ -211,7 +211,7 @@ async def execute_tests(
                 f"test classes across 5 phases."
             ),
             "workspace_id": workspace_id,
-            "estimated_time": f"{len(targets) * 3}-{len(targets) * 8} minutes",
+            "estimated_time": f"{max(10, len(targets) * 5)}-{max(30, len(targets) * 15)} minutes",
             "next_step": "Testing job is running. Check status when ready.",
         }
 
