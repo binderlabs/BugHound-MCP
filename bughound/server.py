@@ -33,6 +33,7 @@ from bughound.stages import analyze as stage_analyze
 from bughound.stages import discover as stage_discover
 from bughound.stages import enumerate as stage_enumerate
 from bughound.stages import test as stage_test
+from bughound.stages import report as stage_report
 from bughound.stages import validate as stage_validate
 
 # Shared job manager instance (lives for server lifetime)
@@ -1469,6 +1470,26 @@ async def bughound_validate_immediate_wins(workspace_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Stage 6: Report
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool(
+    name="bughound_generate_report",
+    description=(
+        "Generate a security assessment report from all findings. "
+        "Creates professional HTML report, bug bounty markdown, and executive summary. "
+        "report_type: 'full' (default, HTML), 'bug_bounty' (markdown per-finding), "
+        "'executive' (one-page summary), or 'all' (generate all three). Stage 6, sync."
+    ),
+)
+async def bughound_generate_report(workspace_id: str, report_type: str = "all") -> str:
+    """Generate security assessment report(s)."""
+    result = await stage_report.generate_report(workspace_id, report_type)
+    return _format_report_result(result)
+
+
+# ---------------------------------------------------------------------------
 # Jobs
 # ---------------------------------------------------------------------------
 
@@ -2538,6 +2559,38 @@ def _format_immediate_wins_result(result: dict[str, Any]) -> str:
         lines.append("")
 
     lines.append(f"  Next: {result.get('next_step', 'Continue.')}")
+    return "\n".join(lines) + "\n"
+
+
+def _format_report_result(result: dict[str, Any]) -> str:
+    """Format report generation result."""
+    if result.get("status") == "error":
+        return f"Error [{result.get('error_type', '?')}]: {result['message']}"
+
+    hdr = "=" * 45
+    lines = [hdr, "  BugHound -- Report Generated", hdr, ""]
+
+    for report_type, path in result.get("reports", {}).items():
+        lines.append(f"  {report_type}: {path}")
+
+    lines.append("")
+    lines.append(f"  Findings: {result.get('total_findings', 0)}")
+    lines.append(f"  Confirmed: {result.get('confirmed', 0)}")
+    lines.append(f"  Target: {result.get('target', '?')}")
+
+    by_sev = result.get("by_severity", {})
+    if by_sev:
+        sev_parts = []
+        for sev in ("critical", "high", "medium", "low", "info"):
+            count = by_sev.get(sev, 0)
+            if count:
+                sev_parts.append(f"{sev.title()}: {count}")
+        if sev_parts:
+            lines.append(f"  Severity: {', '.join(sev_parts)}")
+
+    lines.append("")
+    lines.append(f"  Next: {result.get('next_step', 'Done.')}")
+
     return "\n".join(lines) + "\n"
 
 

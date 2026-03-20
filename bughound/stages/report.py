@@ -1,1 +1,1275 @@
-"""Stage 6: Generate bug bounty, technical, and executive reports."""
+"""Stage 6: Generate security assessment reports.
+
+Three report types:
+  full       -- Professional HTML security assessment (client-facing)
+  bug_bounty -- Markdown per-finding report (copy-paste for platforms)
+  executive  -- One-page markdown summary for management
+
+All reports merge Stage 4 scan_results with Stage 5 confirmed findings
+to present a unified view with validation status.
+"""
+
+from __future__ import annotations
+
+import html
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import aiofiles
+import structlog
+
+from bughound.config.settings import WORKSPACE_BASE_DIR
+from bughound.core import workspace
+
+logger = structlog.get_logger()
+
+# ---------------------------------------------------------------------------
+# Logo (base64 data URI, shared with html_report.py)
+# ---------------------------------------------------------------------------
+
+_LOGO_B64_PATH = Path(__file__).parent.parent / "utils" / "logo_b64.txt"
+try:
+    _LOGO_B64 = _LOGO_B64_PATH.read_text().strip()
+except Exception:
+    _LOGO_B64 = ""
+
+# ---------------------------------------------------------------------------
+# Severity ordering
+# ---------------------------------------------------------------------------
+
+_SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+_SEV_COLORS = {
+    "critical": "#dc3545",
+    "high": "#fd7e14",
+    "medium": "#ffc107",
+    "low": "#28a745",
+    "info": "#6c757d",
+}
+
+# ---------------------------------------------------------------------------
+# Generic remediation per vulnerability class
+# ---------------------------------------------------------------------------
+
+_REMEDIATION: dict[str, str] = {
+    "sqli": "Use parameterized queries / prepared statements for all database interactions.",
+    "sqli_blind": "Use parameterized queries / prepared statements for all database interactions.",
+    "sqli_error_based": "Use parameterized queries / prepared statements. Disable verbose error messages in production.",
+    "xss": "Implement context-aware output encoding. Use Content-Security-Policy headers.",
+    "xss_reflected": "Implement context-aware output encoding. Use Content-Security-Policy headers.",
+    "xss_stored": "Implement server-side input validation and context-aware output encoding.",
+    "xss_dom": "Avoid using dangerous DOM sinks (innerHTML, document.write). Use textContent instead.",
+    "ssrf": "Validate and whitelist allowed URLs/IP ranges. Block internal network access from user input.",
+    "ssrf_blind": "Validate and whitelist allowed URLs/IP ranges. Block internal network access.",
+    "lfi": "Avoid user input in file paths. Use a whitelist of allowed files if necessary.",
+    "lfi_rce": "Never use user-controlled input in file inclusion. Apply strict input validation.",
+    "rfi": "Disable remote file inclusion. Validate all file paths against a whitelist.",
+    "rce": "Never pass user input to system commands. Use safe APIs and sandboxed execution.",
+    "crlf": "Strip or encode CR/LF characters from all user input used in HTTP headers.",
+    "ssti": "Never pass user input directly to template engines. Use sandboxed template rendering.",
+    "open_redirect": "Validate redirect URLs against a whitelist of allowed domains.",
+    "idor": "Implement proper authorization checks. Use indirect object references.",
+    "cors_misconfiguration": "Restrict Access-Control-Allow-Origin to trusted domains. Never reflect arbitrary origins.",
+    "insecure_cookie": "Set Secure, HttpOnly, and SameSite attributes on all sensitive cookies.",
+    "content_discovery": "Remove or restrict access to sensitive files and directories. Return 404 for non-existent resources.",
+    "file_exposure": "Remove sensitive files from web-accessible directories. Restrict directory listings.",
+    "exposed_git": "Remove .git directory from web root. Add server rules to block access to dotfiles.",
+    "exposed_env": "Remove .env files from web root. Store secrets in environment variables or a secrets manager.",
+    "exposed_credentials": "Rotate all exposed credentials immediately. Remove credential files from web root.",
+    "subdomain_takeover": "Remove dangling DNS records pointing to decommissioned services.",
+    "default_creds": "Change all default credentials. Enforce strong password policies.",
+    "misconfig": "Review and harden server configuration according to security best practices.",
+    "broken_access_control": "Implement proper authorization checks on all endpoints.",
+    "mass_assignment": "Whitelist allowed fields for mass assignment. Use DTOs for input binding.",
+    "rate_limiting": "Implement rate limiting on authentication and sensitive endpoints.",
+    "cookie_injection": "Validate cookie values server-side. Use signed or encrypted cookies.",
+    "graphql_introspection": "Disable GraphQL introspection in production environments.",
+    "jwt_none_algorithm": "Reject JWTs with 'none' algorithm. Enforce algorithm whitelist on verification.",
+    "jwt_weak_secret": "Use strong, randomly generated secrets for JWT signing (256+ bits of entropy).",
+    "exposed_actuator": "Restrict Spring Boot Actuator endpoints to internal networks only.",
+    "exposed_phpinfo": "Remove phpinfo() calls from production. Restrict access to diagnostic pages.",
+    "exposed_backup": "Remove backup files from web-accessible directories.",
+}
+
+# ---------------------------------------------------------------------------
+# Vuln class display names
+# ---------------------------------------------------------------------------
+
+_VULN_DISPLAY: dict[str, str] = {
+    "sqli": "SQL Injection",
+    "sqli_blind": "Blind SQL Injection",
+    "sqli_error_based": "Error-Based SQL Injection",
+    "xss": "Cross-Site Scripting (XSS)",
+    "xss_reflected": "Reflected XSS",
+    "xss_stored": "Stored XSS",
+    "xss_dom": "DOM-Based XSS",
+    "ssrf": "Server-Side Request Forgery (SSRF)",
+    "ssrf_blind": "Blind SSRF",
+    "lfi": "Local File Inclusion (LFI)",
+    "lfi_rce": "LFI to Remote Code Execution",
+    "rfi": "Remote File Inclusion (RFI)",
+    "rce": "Remote Code Execution (RCE)",
+    "crlf": "CRLF Injection",
+    "ssti": "Server-Side Template Injection (SSTI)",
+    "open_redirect": "Open Redirect",
+    "idor": "Insecure Direct Object Reference (IDOR)",
+    "cors_misconfiguration": "CORS Misconfiguration",
+    "insecure_cookie": "Insecure Cookie Configuration",
+    "content_discovery": "Sensitive Content Discovery",
+    "file_exposure": "Sensitive File Exposure",
+    "exposed_git": "Exposed Git Repository",
+    "exposed_env": "Exposed Environment File",
+    "exposed_credentials": "Exposed Credentials",
+    "subdomain_takeover": "Subdomain Takeover",
+    "default_creds": "Default Credentials",
+    "misconfig": "Security Misconfiguration",
+    "broken_access_control": "Broken Access Control",
+    "mass_assignment": "Mass Assignment",
+    "rate_limiting": "Missing Rate Limiting",
+    "cookie_injection": "Cookie Injection",
+    "graphql_introspection": "GraphQL Introspection Enabled",
+    "jwt_none_algorithm": "JWT None Algorithm Bypass",
+    "jwt_weak_secret": "JWT Weak Secret",
+    "exposed_actuator": "Exposed Spring Actuator",
+    "exposed_phpinfo": "Exposed phpinfo()",
+    "exposed_backup": "Exposed Backup Files",
+}
+
+# ---------------------------------------------------------------------------
+# Impact descriptions per vulnerability class
+# ---------------------------------------------------------------------------
+
+_IMPACT: dict[str, str] = {
+    "sqli": "Database compromise, credential extraction, data exfiltration.",
+    "sqli_blind": "Database compromise through blind extraction, data exfiltration.",
+    "sqli_error_based": "Database compromise, credential extraction, data exfiltration.",
+    "xss": "Session hijacking, credential theft, defacement.",
+    "xss_reflected": "Session hijacking, phishing, credential theft.",
+    "xss_stored": "Persistent session hijacking, credential theft, worm propagation.",
+    "xss_dom": "Client-side code execution, session hijacking.",
+    "ssrf": "Internal network scanning, cloud metadata access, service compromise.",
+    "ssrf_blind": "Internal network discovery, potential data exfiltration.",
+    "lfi": "Sensitive data exposure, configuration file leakage.",
+    "lfi_rce": "Full server compromise through code execution via file inclusion.",
+    "rfi": "Remote code execution, full server compromise.",
+    "rce": "Full server takeover, lateral movement, data exfiltration.",
+    "crlf": "HTTP response splitting, cache poisoning, XSS via header injection.",
+    "ssti": "Remote code execution, full server compromise.",
+    "open_redirect": "Phishing attacks, OAuth token theft, credential harvesting.",
+    "idor": "Unauthorized data access, privilege escalation.",
+    "cors_misconfiguration": "Cross-origin data theft, credential exposure.",
+    "insecure_cookie": "Session hijacking, credential theft over unencrypted connections.",
+    "content_discovery": "Information disclosure, attack surface expansion.",
+    "file_exposure": "Sensitive data leakage, source code disclosure.",
+    "exposed_git": "Full source code disclosure, credential extraction from history.",
+    "exposed_env": "Database credentials, API keys, and secrets exposure.",
+    "exposed_credentials": "Direct access to authentication credentials.",
+    "subdomain_takeover": "Phishing, cookie theft, reputation damage.",
+    "default_creds": "Unauthorized administrative access.",
+    "misconfig": "Varies by misconfiguration; may enable further attacks.",
+    "broken_access_control": "Unauthorized access to resources and functionality.",
+    "mass_assignment": "Privilege escalation, unauthorized data modification.",
+    "rate_limiting": "Brute-force attacks, credential stuffing, denial of service.",
+}
+
+
+# ===================================================================
+# PUBLIC API
+# ===================================================================
+
+
+async def generate_report(
+    workspace_id: str,
+    report_type: str = "all",
+) -> dict[str, Any]:
+    """Generate security assessment report(s).
+
+    Parameters
+    ----------
+    workspace_id : str
+        Target workspace.
+    report_type : str
+        One of: 'full' (HTML), 'bug_bounty' (MD), 'executive' (MD), 'all'.
+
+    Returns
+    -------
+    dict with status, file paths, finding counts.
+    """
+    meta = await workspace.get_workspace(workspace_id)
+    if meta is None:
+        return _error("not_found", f"Workspace '{workspace_id}' not found.")
+
+    # Load all data
+    data = await _load_report_data(workspace_id)
+    if not data["findings"]:
+        return _error(
+            "no_findings",
+            "No scan results found. Run bughound_execute_tests first.",
+        )
+
+    # Process findings — merge with validation data, sort, group
+    processed = _process_findings(data)
+
+    target = meta.target
+    report_dir = WORKSPACE_BASE_DIR / workspace_id / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    reports: dict[str, str] = {}
+    valid_types = {"full", "bug_bounty", "executive", "all"}
+    if report_type not in valid_types:
+        return _error(
+            "invalid_type",
+            f"Invalid report_type '{report_type}'. Choose from: {', '.join(sorted(valid_types))}",
+        )
+
+    types_to_generate = (
+        ["full", "bug_bounty", "executive"] if report_type == "all"
+        else [report_type]
+    )
+
+    for rt in types_to_generate:
+        if rt == "full":
+            content = _generate_full_html(target, workspace_id, processed, data)
+            fpath = report_dir / "security_assessment.html"
+            async with aiofiles.open(fpath, "w") as f:
+                await f.write(content)
+            reports["full_html"] = str(fpath)
+
+        elif rt == "bug_bounty":
+            content = _generate_bug_bounty_md(target, processed)
+            fpath = report_dir / "bug_bounty_findings.md"
+            async with aiofiles.open(fpath, "w") as f:
+                await f.write(content)
+            reports["bug_bounty_md"] = str(fpath)
+
+        elif rt == "executive":
+            content = _generate_executive_md(target, processed)
+            fpath = report_dir / "executive_summary.md"
+            async with aiofiles.open(fpath, "w") as f:
+                await f.write(content)
+            reports["executive_md"] = str(fpath)
+
+    # Mark stage complete
+    await workspace.add_stage_history(workspace_id, 6, "completed")
+
+    return {
+        "status": "success",
+        "workspace_id": workspace_id,
+        "target": target,
+        "reports": reports,
+        "total_findings": processed["total"],
+        "confirmed": processed["confirmed_count"],
+        "by_severity": processed["by_severity"],
+        "next_step": "Reports generated. Share file paths with the user.",
+    }
+
+
+# ===================================================================
+# DATA LOADING
+# ===================================================================
+
+
+async def _load_report_data(workspace_id: str) -> dict[str, Any]:
+    """Load all workspace data needed for reports."""
+    # scan_results.json (DataWrapper envelope)
+    scan_results_raw = await workspace.read_data(
+        workspace_id, "vulnerabilities/scan_results.json",
+    )
+    findings: list[dict[str, Any]] = []
+    if isinstance(scan_results_raw, dict) and "data" in scan_results_raw:
+        findings = scan_results_raw.get("data", [])
+    elif isinstance(scan_results_raw, list):
+        findings = scan_results_raw
+
+    # Confirmed findings from vulnerabilities/confirmed/ directory
+    confirmed_dir = WORKSPACE_BASE_DIR / workspace_id / "vulnerabilities" / "confirmed"
+    confirmed_findings: list[dict[str, Any]] = []
+    if confirmed_dir.is_dir():
+        for fpath in sorted(confirmed_dir.glob("*.json")):
+            try:
+                async with aiofiles.open(fpath) as f:
+                    raw = json.loads(await f.read())
+                # Confirmed files are DataWrapper envelopes with a list in "data"
+                if isinstance(raw, dict) and "data" in raw:
+                    for item in raw["data"]:
+                        if isinstance(item, dict):
+                            confirmed_findings.append(item)
+                elif isinstance(raw, list):
+                    for item in raw:
+                        if isinstance(item, dict):
+                            confirmed_findings.append(item)
+                elif isinstance(raw, dict):
+                    confirmed_findings.append(raw)
+            except (json.JSONDecodeError, OSError):
+                continue
+
+    # False positives
+    false_positives_raw = await workspace.read_data(
+        workspace_id, "vulnerabilities/false_positives.json",
+    )
+    false_positives: list[dict[str, Any]] = []
+    if isinstance(false_positives_raw, dict) and "data" in false_positives_raw:
+        false_positives = false_positives_raw.get("data", [])
+    elif isinstance(false_positives_raw, list):
+        false_positives = false_positives_raw
+
+    # Attack surface (direct JSON, not DataWrapper)
+    attack_surface: dict[str, Any] = {}
+    as_path = WORKSPACE_BASE_DIR / workspace_id / "analysis" / "attack_surface.json"
+    if as_path.exists():
+        try:
+            async with aiofiles.open(as_path) as f:
+                attack_surface = json.loads(await f.read())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Metadata (Pydantic model already loaded, but get raw for extra fields)
+    metadata_raw: dict[str, Any] = {}
+    meta_path = WORKSPACE_BASE_DIR / workspace_id / "metadata.json"
+    if meta_path.exists():
+        try:
+            async with aiofiles.open(meta_path) as f:
+                metadata_raw = json.loads(await f.read())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Live hosts
+    live_hosts_raw = await workspace.read_data(
+        workspace_id, "hosts/live_hosts.json",
+    )
+    live_hosts: list[dict[str, Any]] = []
+    if isinstance(live_hosts_raw, dict) and "data" in live_hosts_raw:
+        live_hosts = live_hosts_raw.get("data", [])
+    elif isinstance(live_hosts_raw, list):
+        live_hosts = live_hosts_raw
+
+    # Technologies
+    tech_raw = await workspace.read_data(
+        workspace_id, "hosts/technologies.json",
+    )
+    technologies: list[dict[str, Any]] = []
+    if isinstance(tech_raw, dict) and "data" in tech_raw:
+        technologies = tech_raw.get("data", [])
+    elif isinstance(tech_raw, list):
+        technologies = tech_raw
+
+    return {
+        "findings": findings,
+        "confirmed_findings": confirmed_findings,
+        "false_positives": false_positives,
+        "attack_surface": attack_surface,
+        "metadata": metadata_raw,
+        "live_hosts": live_hosts,
+        "technologies": technologies,
+    }
+
+
+# ===================================================================
+# FINDING PROCESSING
+# ===================================================================
+
+
+def _process_findings(data: dict[str, Any]) -> dict[str, Any]:
+    """Merge, sort, group, and compute stats for all findings."""
+    findings = list(data["findings"])
+    confirmed_map: dict[str, dict[str, Any]] = {}
+    for cf in data.get("confirmed_findings", []):
+        fid = cf.get("finding_id")
+        if fid:
+            confirmed_map[fid] = cf
+
+    false_pos_ids: set[str] = set()
+    for fp in data.get("false_positives", []):
+        fid = fp.get("finding_id")
+        if fid:
+            false_pos_ids.add(fid)
+
+    # Merge validation data into findings
+    merged: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for f in findings:
+        fid = f.get("finding_id", "")
+        if fid in seen_ids:
+            continue
+        seen_ids.add(fid)
+
+        if fid in false_pos_ids:
+            continue  # Skip false positives
+
+        # If we have a confirmed version, use it (richer data)
+        if fid in confirmed_map:
+            merged_finding = {**f, **confirmed_map[fid]}
+            merged_finding["status"] = "CONFIRMED"
+        else:
+            merged_finding = dict(f)
+            if f.get("validation_status") == "CONFIRMED":
+                merged_finding["status"] = "CONFIRMED"
+            elif f.get("validated"):
+                merged_finding["status"] = f.get("validation_status", "PENDING")
+            else:
+                merged_finding["status"] = "PENDING"
+
+        merged.append(merged_finding)
+
+    # Also add any confirmed findings not in scan_results (e.g. immediate wins)
+    for fid, cf in confirmed_map.items():
+        if fid not in seen_ids:
+            seen_ids.add(fid)
+            cf_copy = dict(cf)
+            cf_copy["status"] = "CONFIRMED"
+            merged.append(cf_copy)
+
+    # Sort by severity
+    merged.sort(key=lambda f: _SEV_ORDER.get(f.get("severity", "info").lower(), 5))
+
+    # Group by vulnerability class
+    by_class: dict[str, list[dict[str, Any]]] = {}
+    for f in merged:
+        vc = f.get("vulnerability_class", "other")
+        by_class.setdefault(vc, []).append(f)
+
+    # Stats
+    by_severity: dict[str, int] = {
+        "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0,
+    }
+    confirmed_count = 0
+    pending_count = 0
+    for f in merged:
+        sev = f.get("severity", "info").lower()
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        if f.get("status") == "CONFIRMED":
+            confirmed_count += 1
+        elif f.get("status") == "PENDING":
+            pending_count += 1
+
+    # Overall risk level
+    if by_severity["critical"] > 0:
+        risk_level = "CRITICAL"
+    elif by_severity["high"] > 0:
+        risk_level = "HIGH"
+    elif by_severity["medium"] > 0:
+        risk_level = "MEDIUM"
+    elif by_severity["low"] > 0:
+        risk_level = "LOW"
+    else:
+        risk_level = "INFO"
+
+    return {
+        "findings": merged,
+        "by_class": by_class,
+        "by_severity": by_severity,
+        "total": len(merged),
+        "confirmed_count": confirmed_count,
+        "pending_count": pending_count,
+        "false_positive_count": len(false_pos_ids),
+        "risk_level": risk_level,
+    }
+
+
+# ===================================================================
+# HELPERS
+# ===================================================================
+
+
+def _e(text: Any) -> str:
+    """HTML-escape user-controlled data."""
+    return html.escape(str(text)) if text else ""
+
+
+def _severity_badge_class(severity: str) -> str:
+    return f"badge-{severity.lower()}"
+
+
+def _finding_card_class(severity: str) -> str:
+    sev = severity.lower()
+    if sev == "critical":
+        return "finding-card critical"
+    return f"finding-card {sev}"
+
+
+def _display_name(vulnerability_class: str) -> str:
+    """Get human-readable name for a vulnerability class."""
+    return _VULN_DISPLAY.get(vulnerability_class, vulnerability_class.replace("_", " ").title())
+
+
+def _auto_curl(finding: dict[str, Any]) -> str:
+    """Generate a curl command from a finding if one is not already present."""
+    existing = finding.get("curl_command", "")
+    if existing:
+        return existing
+
+    endpoint = finding.get("endpoint", "")
+    if not endpoint:
+        return ""
+
+    payload = finding.get("payload_used", "")
+    param = finding.get("parameter", "")
+
+    # If we have a complete endpoint URL, use it directly
+    if endpoint.startswith("http"):
+        cmd = f"curl -sk '{endpoint}'"
+        if payload and param:
+            # The endpoint may already contain the payload
+            if payload not in endpoint:
+                cmd = f"curl -sk '{endpoint}' -d '{param}={payload}'"
+        return cmd
+
+    return ""
+
+
+def _auto_summary(target: str, processed: dict[str, Any]) -> str:
+    """Generate an auto-summary paragraph from data."""
+    total = processed["total"]
+    by_sev = processed["by_severity"]
+    confirmed = processed["confirmed_count"]
+    pending = processed["pending_count"]
+    risk = processed["risk_level"]
+
+    parts = []
+    if by_sev.get("critical"):
+        parts.append(f"{by_sev['critical']} critical")
+    if by_sev.get("high"):
+        parts.append(f"{by_sev['high']} high")
+    if by_sev.get("medium"):
+        parts.append(f"{by_sev['medium']} medium")
+    if by_sev.get("low"):
+        parts.append(f"{by_sev['low']} low")
+    if by_sev.get("info"):
+        parts.append(f"{by_sev['info']} informational")
+
+    severity_breakdown = ", ".join(parts) if parts else "no"
+
+    summary = (
+        f"The security assessment of {target} identified {total} "
+        f"finding{'s' if total != 1 else ''}, including {severity_breakdown} "
+        f"severity issue{'s' if total != 1 else ''}. "
+    )
+
+    if confirmed:
+        summary += (
+            f"Of these, {confirmed} "
+            f"{'have' if confirmed != 1 else 'has'} been confirmed through "
+            f"surgical validation. "
+        )
+    if pending:
+        summary += (
+            f"{pending} finding{'s' if pending != 1 else ''} "
+            f"{'are' if pending != 1 else 'is'} pending manual review. "
+        )
+
+    if risk in ("CRITICAL", "HIGH"):
+        summary += "Immediate remediation is strongly recommended."
+    elif risk == "MEDIUM":
+        summary += "Remediation should be prioritized in the next development cycle."
+    else:
+        summary += "The findings represent a low overall risk posture."
+
+    return summary
+
+
+def _now_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _date_str() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+# ===================================================================
+# FULL HTML REPORT
+# ===================================================================
+
+
+_CSS = """\
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+    background:#ffffff;
+    color:#1a1a2e;
+    font-family:'Georgia','Times New Roman',serif;
+    line-height:1.7;
+    max-width:900px;
+    margin:0 auto;
+    padding:40px;
+}
+h1,h2,h3{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;}
+h1{font-size:28px;border-bottom:3px solid #1a1a2e;padding-bottom:10px;margin-bottom:8px;}
+h2{font-size:20px;border-bottom:1px solid #e0e0e0;padding-bottom:6px;margin-top:40px;margin-bottom:16px;color:#1a1a2e;}
+h3{font-size:16px;margin:12px 0 8px 0;color:#333;}
+
+a{color:#0366d6;text-decoration:none;}
+a:hover{text-decoration:underline;}
+
+.report-header{margin-bottom:32px;}
+.report-header .logo-row{display:flex;align-items:center;gap:12px;margin-bottom:8px;}
+.report-header .logo-img{width:36px;height:36px;border-radius:50%;object-fit:cover;}
+.report-header .title{font-size:28px;font-weight:700;color:#1a1a2e;border:none;margin:0;padding:0;}
+.report-header .subtitle{font-size:14px;color:#555;margin-top:4px;}
+.report-meta{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;font-size:14px;margin-top:12px;color:#333;}
+.report-meta .label{font-weight:600;color:#555;}
+
+.risk-banner{
+    padding:16px 24px;border-radius:4px;
+    font-size:18px;font-weight:700;margin:24px 0;
+}
+.risk-critical{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;}
+.risk-high{background:#fff3cd;color:#856404;border:1px solid #ffeeba;}
+.risk-medium{background:#fff3cd;color:#856404;border:1px solid #ffeeba;}
+.risk-low{background:#d4edda;color:#155724;border:1px solid #c3e6cb;}
+.risk-info{background:#e2e3e5;color:#383d41;border:1px solid #d6d8db;}
+
+.summary-text{font-size:15px;line-height:1.8;margin:16px 0;color:#333;}
+
+.stats-grid{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
+    gap:12px;margin:20px 0;
+}
+.stat-box{
+    text-align:center;padding:16px;
+    border:1px solid #e0e0e0;border-radius:4px;background:#fafafa;
+}
+.stat-box .number{font-size:36px;font-weight:700;font-family:'Segoe UI',system-ui,sans-serif;}
+.stat-box .label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;}
+.stat-box.critical .number{color:#dc3545;}
+.stat-box.high .number{color:#fd7e14;}
+.stat-box.medium .number{color:#ffc107;}
+.stat-box.confirmed .number{color:#28a745;}
+
+.severity-bars{margin:20px 0;}
+.sev-bar-row{display:flex;align-items:center;gap:12px;margin:6px 0;font-size:14px;}
+.sev-bar-label{width:80px;text-align:right;font-weight:600;font-family:'Segoe UI',system-ui,sans-serif;}
+.sev-bar-track{flex:1;height:22px;background:#f0f0f0;border-radius:3px;overflow:hidden;}
+.sev-bar-fill{height:100%;border-radius:3px;min-width:2px;}
+.sev-bar-count{width:40px;font-weight:600;font-family:'Segoe UI',system-ui,sans-serif;}
+
+.toc{margin:20px 0;padding:0;}
+.toc li{list-style:none;padding:4px 0;font-size:14px;border-bottom:1px solid #f0f0f0;}
+.toc li a{display:flex;align-items:center;gap:8px;}
+.toc .toc-num{font-weight:700;color:#555;min-width:30px;}
+
+.severity-badge{
+    display:inline-block;padding:2px 10px;border-radius:3px;
+    font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;
+    font-family:'Segoe UI',system-ui,sans-serif;
+}
+.badge-critical{background:#dc3545;color:white;}
+.badge-high{background:#fd7e14;color:white;}
+.badge-medium{background:#ffc107;color:#333;}
+.badge-low{background:#28a745;color:white;}
+.badge-info{background:#6c757d;color:white;}
+
+.status-badge{
+    display:inline-block;padding:2px 8px;border-radius:3px;
+    font-size:11px;font-weight:600;text-transform:uppercase;
+    font-family:'Segoe UI',system-ui,sans-serif;
+}
+.status-confirmed{background:#d4edda;color:#155724;}
+.status-pending{background:#fff3cd;color:#856404;}
+.status-manual{background:#cce5ff;color:#004085;}
+
+.finding-card{
+    border:1px solid #e0e0e0;border-left:4px solid #dc3545;
+    border-radius:4px;padding:20px;margin:20px 0;
+    page-break-inside:avoid;
+}
+.finding-card.high{border-left-color:#fd7e14;}
+.finding-card.medium{border-left-color:#ffc107;}
+.finding-card.low{border-left-color:#28a745;}
+.finding-card.info{border-left-color:#6c757d;}
+
+.finding-card .finding-title{
+    font-size:17px;font-weight:700;margin-bottom:12px;
+    font-family:'Segoe UI',system-ui,sans-serif;
+}
+.finding-card .finding-meta{
+    display:grid;grid-template-columns:auto 1fr;gap:4px 16px;
+    font-size:13px;margin-bottom:16px;color:#444;
+}
+.finding-card .finding-meta .label{font-weight:600;color:#666;}
+
+.evidence-block{
+    background:#f8f9fa;border:1px solid #e9ecef;border-radius:3px;
+    padding:12px;font-family:'Consolas','Monaco',monospace;
+    font-size:13px;white-space:pre-wrap;word-break:break-all;
+    margin:8px 0;max-height:300px;overflow-y:auto;
+}
+
+.curl-command{
+    background:#1a1a2e;color:#00ff41;padding:12px;border-radius:3px;
+    font-family:'Consolas','Monaco',monospace;font-size:13px;
+    overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-all;
+}
+
+.repro-steps{margin:8px 0;padding-left:20px;}
+.repro-steps li{font-size:14px;margin:4px 0;}
+
+.remediation-block{
+    background:#f0f7ff;border:1px solid #cce5ff;border-radius:3px;
+    padding:12px;margin:8px 0;font-size:14px;color:#004085;
+}
+
+.impact-block{
+    background:#fff8e1;border:1px solid #ffeeba;border-radius:3px;
+    padding:12px;margin:8px 0;font-size:14px;color:#856404;
+}
+
+.tech-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;}
+.tech-table th,.tech-table td{border:1px solid #e0e0e0;padding:8px 12px;text-align:left;}
+.tech-table th{background:#f8f9fa;font-weight:600;font-family:'Segoe UI',system-ui,sans-serif;}
+.tech-table tr:nth-child(even){background:#fafafa;}
+
+.footer{
+    margin-top:48px;padding-top:16px;border-top:2px solid #e0e0e0;
+    font-size:12px;color:#888;text-align:center;
+}
+
+@media print{
+    body{padding:20px;font-size:12px;}
+    .finding-card{page-break-inside:avoid;}
+    .curl-command{background:#f0f0f0;color:#333;}
+    .risk-banner{page-break-after:avoid;}
+    h2{page-break-after:avoid;}
+    .stats-grid{page-break-inside:avoid;}
+}
+"""
+
+
+def _generate_full_html(
+    target: str,
+    workspace_id: str,
+    processed: dict[str, Any],
+    data: dict[str, Any],
+) -> str:
+    """Generate the full professional HTML security assessment report."""
+    findings = processed["findings"]
+    by_severity = processed["by_severity"]
+    risk_level = processed["risk_level"]
+    now = _now_str()
+    date = _date_str()
+
+    parts: list[str] = []
+
+    # DOCTYPE and head
+    parts.append("<!DOCTYPE html>")
+    parts.append('<html lang="en">')
+    parts.append("<head>")
+    parts.append('<meta charset="UTF-8">')
+    parts.append('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
+    parts.append(f"<title>Security Assessment - {_e(target)}</title>")
+    parts.append(f"<style>{_CSS}</style>")
+    parts.append("</head>")
+    parts.append("<body>")
+
+    # --- Header ---
+    parts.append('<div class="report-header">')
+    parts.append('<div class="logo-row">')
+    if _LOGO_B64:
+        parts.append(
+            f'<img class="logo-img" src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound">'
+        )
+    parts.append('<span class="title">Security Assessment Report</span>')
+    parts.append("</div>")
+    parts.append(f'<div class="subtitle">Generated by BugHound &mdash; AI-Powered Bug Bounty Reconnaissance</div>')
+    parts.append('<div class="report-meta">')
+    parts.append(f'<span class="label">Target:</span><span>{_e(target)}</span>')
+    parts.append(f'<span class="label">Date:</span><span>{_e(date)}</span>')
+    parts.append(f'<span class="label">Workspace:</span><span>{_e(workspace_id)}</span>')
+    parts.append(f'<span class="label">Report Time:</span><span>{_e(now)}</span>')
+    parts.append("</div>")
+    parts.append("</div>")
+
+    # --- Executive Summary ---
+    parts.append('<h2 id="executive-summary">Executive Summary</h2>')
+
+    risk_css = f"risk-{risk_level.lower()}"
+    parts.append(
+        f'<div class="risk-banner {risk_css}">'
+        f"Overall Risk Level: {_e(risk_level)}"
+        f"</div>"
+    )
+
+    summary_text = _auto_summary(target, processed)
+    parts.append(f'<p class="summary-text">{_e(summary_text)}</p>')
+
+    # Stats grid
+    parts.append('<div class="stats-grid">')
+    parts.append(
+        f'<div class="stat-box">'
+        f'<div class="number">{processed["total"]}</div>'
+        f'<div class="label">Total Findings</div>'
+        f"</div>"
+    )
+    parts.append(
+        f'<div class="stat-box critical">'
+        f'<div class="number">{by_severity.get("critical", 0)}</div>'
+        f'<div class="label">Critical</div>'
+        f"</div>"
+    )
+    parts.append(
+        f'<div class="stat-box high">'
+        f'<div class="number">{by_severity.get("high", 0)}</div>'
+        f'<div class="label">High</div>'
+        f"</div>"
+    )
+    parts.append(
+        f'<div class="stat-box confirmed">'
+        f'<div class="number">{processed["confirmed_count"]}</div>'
+        f'<div class="label">Confirmed</div>'
+        f"</div>"
+    )
+    parts.append(
+        f'<div class="stat-box">'
+        f'<div class="number">{processed["pending_count"]}</div>'
+        f'<div class="label">Needs Review</div>'
+        f"</div>"
+    )
+    parts.append("</div>")
+
+    # --- Severity Breakdown ---
+    parts.append('<h2 id="severity-breakdown">Severity Breakdown</h2>')
+    max_count = max(by_severity.values()) if by_severity else 1
+    if max_count == 0:
+        max_count = 1
+    parts.append('<div class="severity-bars">')
+    for sev in ("critical", "high", "medium", "low", "info"):
+        count = by_severity.get(sev, 0)
+        pct = int((count / max_count) * 100) if max_count else 0
+        color = _SEV_COLORS.get(sev, "#6c757d")
+        parts.append(
+            f'<div class="sev-bar-row">'
+            f'<span class="sev-bar-label">{sev.title()}</span>'
+            f'<div class="sev-bar-track">'
+            f'<div class="sev-bar-fill" style="width:{pct}%;background:{color};"></div>'
+            f"</div>"
+            f'<span class="sev-bar-count">{count}</span>'
+            f"</div>"
+        )
+    parts.append("</div>")
+
+    # --- Table of Contents ---
+    parts.append('<h2 id="toc">Findings Overview</h2>')
+    parts.append('<ol class="toc">')
+    for i, f in enumerate(findings, 1):
+        sev = f.get("severity", "info").lower()
+        vc = f.get("vulnerability_class", "other")
+        title = _display_name(vc)
+        endpoint = f.get("endpoint", "")
+        # Truncate long endpoints for TOC
+        ep_display = endpoint[:80] + "..." if len(endpoint) > 80 else endpoint
+        anchor = f"finding-{i}"
+        parts.append(
+            f"<li>"
+            f'<a href="#{anchor}">'
+            f'<span class="toc-num">#{i}</span>'
+            f'<span class="severity-badge {_severity_badge_class(sev)}">{_e(sev)}</span>'
+            f" {_e(title)}"
+            f' <span style="color:#888;font-size:12px;margin-left:auto;">{_e(ep_display)}</span>'
+            f"</a>"
+            f"</li>"
+        )
+    parts.append("</ol>")
+
+    # --- Detailed Findings ---
+    parts.append('<h2 id="detailed-findings">Detailed Findings</h2>')
+    for i, f in enumerate(findings, 1):
+        sev = f.get("severity", "info").lower()
+        vc = f.get("vulnerability_class", "other")
+        title = _display_name(vc)
+        status = f.get("status", "PENDING")
+        endpoint = f.get("endpoint", "")
+        param = f.get("parameter", "")
+        tool = f.get("tool", "")
+        technique = f.get("technique_id", "")
+        description = f.get("description", "")
+        evidence = f.get("evidence", "")
+        curl_cmd = _auto_curl(f)
+        repro_steps = f.get("reproduction_steps", [])
+        payload = f.get("payload_used", "")
+        cvss = f.get("cvss_score", "")
+        impact = f.get("impact", "") or _IMPACT.get(vc, "")
+        remediation = _REMEDIATION.get(vc, "Review and remediate according to security best practices.")
+        host = f.get("host", "")
+
+        anchor = f"finding-{i}"
+        card_class = _finding_card_class(sev)
+
+        status_css = "status-confirmed" if status == "CONFIRMED" else (
+            "status-manual" if status == "NEEDS_MANUAL_REVIEW" else "status-pending"
+        )
+
+        parts.append(f'<div class="{card_class}" id="{anchor}">')
+        parts.append(
+            f'<div class="finding-title">'
+            f'#{i} <span class="severity-badge {_severity_badge_class(sev)}">{_e(sev)}</span> '
+            f"{_e(title)}"
+            f"</div>"
+        )
+
+        # Meta grid
+        parts.append('<div class="finding-meta">')
+        if endpoint:
+            parts.append(f'<span class="label">Endpoint:</span><span>{_e(endpoint)}</span>')
+        if param:
+            parts.append(f'<span class="label">Parameter:</span><span>{_e(param)}</span>')
+        if host:
+            parts.append(f'<span class="label">Host:</span><span>{_e(host)}</span>')
+        if tool:
+            parts.append(f'<span class="label">Tool:</span><span>{_e(tool)}</span>')
+        if technique:
+            parts.append(f'<span class="label">Technique:</span><span>{_e(technique)}</span>')
+        parts.append(
+            f'<span class="label">Status:</span>'
+            f'<span><span class="status-badge {status_css}">{_e(status)}</span></span>'
+        )
+        if cvss:
+            parts.append(f'<span class="label">CVSS 3.1:</span><span>{_e(str(cvss))}</span>')
+        parts.append("</div>")
+
+        # Description
+        if description:
+            parts.append(f"<h3>Description</h3>")
+            parts.append(f"<p>{_e(description)}</p>")
+
+        # Evidence
+        if evidence:
+            parts.append("<h3>Evidence</h3>")
+            parts.append(f'<div class="evidence-block">{_e(evidence)}</div>')
+
+        # Payload
+        if payload:
+            parts.append("<h3>Payload Used</h3>")
+            parts.append(f'<div class="evidence-block">{_e(payload)}</div>')
+
+        # Reproduction
+        if curl_cmd:
+            parts.append("<h3>Reproduction</h3>")
+            parts.append(f'<div class="curl-command">{_e(curl_cmd)}</div>')
+
+        if repro_steps:
+            parts.append("<h3>Steps to Reproduce</h3>")
+            parts.append('<ol class="repro-steps">')
+            for step in repro_steps:
+                parts.append(f"<li>{_e(step)}</li>")
+            parts.append("</ol>")
+
+        # Impact
+        if impact:
+            parts.append("<h3>Impact</h3>")
+            parts.append(f'<div class="impact-block">{_e(impact)}</div>')
+
+        # Remediation
+        parts.append("<h3>Remediation</h3>")
+        parts.append(f'<div class="remediation-block">{_e(remediation)}</div>')
+
+        parts.append("</div>")  # close finding-card
+
+    # --- Technologies ---
+    technologies = data.get("technologies", [])
+    if technologies:
+        parts.append('<h2 id="technologies">Technologies Detected</h2>')
+        parts.append('<table class="tech-table">')
+        parts.append("<thead><tr><th>Host</th><th>Technologies</th><th>Flags</th></tr></thead>")
+        parts.append("<tbody>")
+        for t in technologies[:50]:
+            if not isinstance(t, dict):
+                continue
+            t_host = t.get("host", t.get("url", ""))
+            techs = t.get("technologies", t.get("tech", []))
+            if isinstance(techs, list):
+                tech_str = ", ".join(str(x) for x in techs)
+            else:
+                tech_str = str(techs)
+            flags = t.get("flags", t.get("security_flags", []))
+            if isinstance(flags, list):
+                flags_str = ", ".join(str(x) for x in flags)
+            else:
+                flags_str = str(flags) if flags else ""
+            parts.append(
+                f"<tr>"
+                f"<td>{_e(t_host)}</td>"
+                f"<td>{_e(tech_str)}</td>"
+                f"<td>{_e(flags_str)}</td>"
+                f"</tr>"
+            )
+        parts.append("</tbody></table>")
+
+    # --- Testing Coverage ---
+    attack_surface = data.get("attack_surface", {})
+    test_classes = attack_surface.get("suggested_test_classes", [])
+    if test_classes:
+        parts.append('<h2 id="testing-coverage">Testing Coverage</h2>')
+        parts.append('<table class="tech-table">')
+        parts.append("<thead><tr><th>Test Class</th><th>Priority</th><th>Reason</th></tr></thead>")
+        parts.append("<tbody>")
+        for tc in test_classes:
+            if isinstance(tc, dict):
+                parts.append(
+                    f"<tr>"
+                    f"<td>{_e(tc.get('test_class', ''))}</td>"
+                    f"<td>{_e(tc.get('priority', ''))}</td>"
+                    f"<td>{_e(tc.get('reason', ''))}</td>"
+                    f"</tr>"
+                )
+            elif isinstance(tc, str):
+                parts.append(f"<tr><td>{_e(tc)}</td><td></td><td></td></tr>")
+        parts.append("</tbody></table>")
+
+    # --- Footer ---
+    parts.append('<div class="footer">')
+    parts.append(f"Generated by BugHound &mdash; AI-Powered Bug Bounty MCP Server<br>")
+    parts.append(f"{_e(now)}")
+    parts.append("</div>")
+
+    parts.append("</body>")
+    parts.append("</html>")
+
+    return "\n".join(parts)
+
+
+# ===================================================================
+# BUG BOUNTY MARKDOWN REPORT
+# ===================================================================
+
+
+def _generate_bug_bounty_md(
+    target: str,
+    processed: dict[str, Any],
+) -> str:
+    """Generate per-finding markdown report for bug bounty platforms."""
+    findings = processed["findings"]
+    lines: list[str] = []
+
+    lines.append(f"# Security Findings \u2014 {target}")
+    lines.append("")
+    lines.append(f"**Date:** {_date_str()}")
+    lines.append(f"**Total Findings:** {processed['total']}")
+    lines.append(f"**Risk Level:** {processed['risk_level']}")
+    lines.append("")
+
+    for i, f in enumerate(findings, 1):
+        sev = f.get("severity", "info").lower()
+        vc = f.get("vulnerability_class", "other")
+        title = _display_name(vc)
+        status = f.get("status", "PENDING")
+        endpoint = f.get("endpoint", "")
+        param = f.get("parameter", "")
+        tool = f.get("tool", "")
+        description = f.get("description", "")
+        evidence = f.get("evidence", "")
+        curl_cmd = _auto_curl(f)
+        repro_steps = f.get("reproduction_steps", [])
+        payload = f.get("payload_used", "")
+        cvss = f.get("cvss_score", "")
+        impact = f.get("impact", "") or _IMPACT.get(vc, "")
+        remediation = _REMEDIATION.get(vc, "Review and remediate according to security best practices.")
+        host = f.get("host", "")
+
+        lines.append(f"## Finding {i}: {title}")
+        lines.append("")
+        lines.append("| Field | Value |")
+        lines.append("|-------|-------|")
+        lines.append(f"| Severity | {sev.title()} |")
+        if endpoint:
+            lines.append(f"| Endpoint | `{endpoint}` |")
+        if param:
+            lines.append(f"| Parameter | `{param}` |")
+        if host:
+            lines.append(f"| Host | {host} |")
+        if tool:
+            lines.append(f"| Tool | {tool} |")
+        lines.append(f"| Status | {status} |")
+        if cvss:
+            lines.append(f"| CVSS 3.1 | {cvss} |")
+        lines.append("")
+
+        if description:
+            lines.append("### Description")
+            lines.append(description)
+            lines.append("")
+
+        if evidence:
+            lines.append("### Evidence")
+            lines.append("```")
+            lines.append(evidence)
+            lines.append("```")
+            lines.append("")
+
+        if payload:
+            lines.append("### Payload")
+            lines.append(f"`{payload}`")
+            lines.append("")
+
+        if curl_cmd or repro_steps:
+            lines.append("### Steps to Reproduce")
+            if curl_cmd:
+                lines.append(f"1. Send: `{curl_cmd}`")
+                step_num = 2
+            else:
+                step_num = 1
+            for step in repro_steps:
+                lines.append(f"{step_num}. {step}")
+                step_num += 1
+            if not repro_steps and curl_cmd:
+                lines.append(f"2. Observe the response for signs of {vc.replace('_', ' ')}")
+            lines.append("")
+
+        if impact:
+            lines.append("### Impact")
+            lines.append(impact)
+            lines.append("")
+
+        if remediation:
+            lines.append("### Remediation")
+            lines.append(remediation)
+            lines.append("")
+
+        lines.append("---")
+        lines.append("")
+
+    lines.append(f"*Generated by BugHound \u2014 {_now_str()}*")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# ===================================================================
+# EXECUTIVE MARKDOWN REPORT
+# ===================================================================
+
+
+def _generate_executive_md(
+    target: str,
+    processed: dict[str, Any],
+) -> str:
+    """Generate a one-page executive summary in markdown."""
+    findings = processed["findings"]
+    by_severity = processed["by_severity"]
+    risk_level = processed["risk_level"]
+    total = processed["total"]
+    confirmed = processed["confirmed_count"]
+    lines: list[str] = []
+
+    lines.append(f"# Executive Security Summary \u2014 {target}")
+    lines.append("")
+    lines.append(f"**Date:** {_date_str()}")
+    lines.append(f"**Risk Level:** {risk_level}")
+    lines.append("")
+
+    # Key findings
+    lines.append("## Key Findings")
+    lines.append("")
+    sev_parts = []
+    if by_severity.get("critical"):
+        sev_parts.append(f"- {by_severity['critical']} Critical vulnerabilities requiring immediate attention")
+    if by_severity.get("high"):
+        sev_parts.append(f"- {by_severity['high']} High severity issues")
+    if by_severity.get("medium"):
+        sev_parts.append(f"- {by_severity['medium']} Medium severity issues")
+    if by_severity.get("low"):
+        sev_parts.append(f"- {by_severity['low']} Low severity issues")
+    if by_severity.get("info"):
+        sev_parts.append(f"- {by_severity['info']} Informational findings")
+    lines.extend(sev_parts)
+    lines.append(f"- {total} total findings, {confirmed} confirmed through validation")
+    lines.append("")
+
+    # Top critical/high findings
+    top_findings = [
+        f for f in findings
+        if f.get("severity", "").lower() in ("critical", "high")
+    ]
+    if top_findings:
+        count_label = min(len(top_findings), 5)
+        lines.append(f"## Top {count_label} Critical/High Issues")
+        lines.append("")
+        for i, f in enumerate(top_findings[:5], 1):
+            vc = f.get("vulnerability_class", "other")
+            title = _display_name(vc)
+            sev = f.get("severity", "info").title()
+            endpoint = f.get("endpoint", "")
+            impact = f.get("impact", "") or _IMPACT.get(vc, "")
+            # Build concise line
+            ep_short = ""
+            if endpoint:
+                try:
+                    parsed = urlparse(endpoint)
+                    ep_short = parsed.path or endpoint
+                except Exception:
+                    ep_short = endpoint
+                if len(ep_short) > 40:
+                    ep_short = ep_short[:37] + "..."
+            impact_short = impact.split(".")[0] if impact else ""
+            line = f"{i}. **{title}** [{sev}]"
+            if ep_short:
+                line += f" \u2014 `{ep_short}`"
+            if impact_short:
+                line += f" ({impact_short})"
+            lines.append(line)
+        lines.append("")
+
+    # Vulnerability class distribution
+    by_class = processed.get("by_class", {})
+    if by_class:
+        lines.append("## Vulnerability Distribution")
+        lines.append("")
+        lines.append("| Vulnerability Type | Count | Highest Severity |")
+        lines.append("|-------------------|-------|-----------------|")
+        # Sort classes by highest severity in each
+        sorted_classes = sorted(
+            by_class.items(),
+            key=lambda kv: min(
+                _SEV_ORDER.get(f.get("severity", "info").lower(), 5)
+                for f in kv[1]
+            ),
+        )
+        for vc, class_findings in sorted_classes:
+            display = _display_name(vc)
+            highest = min(
+                class_findings,
+                key=lambda f: _SEV_ORDER.get(f.get("severity", "info").lower(), 5),
+            )
+            highest_sev = highest.get("severity", "info").title()
+            lines.append(f"| {display} | {len(class_findings)} | {highest_sev} |")
+        lines.append("")
+
+    # Recommendation
+    lines.append("## Recommendation")
+    lines.append("")
+    if risk_level == "CRITICAL":
+        lines.append(
+            "Immediate remediation of critical findings is required before "
+            "production deployment. Critical vulnerabilities may allow complete "
+            "system compromise."
+        )
+    elif risk_level == "HIGH":
+        lines.append(
+            "High severity vulnerabilities should be remediated as a priority. "
+            "These issues pose significant risk to data confidentiality and integrity."
+        )
+    elif risk_level == "MEDIUM":
+        lines.append(
+            "Medium severity findings should be addressed in the next development cycle. "
+            "While not immediately exploitable in all cases, they may contribute to "
+            "attack chains."
+        )
+    else:
+        lines.append(
+            "The overall risk posture is acceptable. Low and informational findings "
+            "should be reviewed and addressed as part of ongoing security hardening."
+        )
+    lines.append("")
+
+    lines.append(f"*Generated by BugHound \u2014 {_now_str()}*")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# ===================================================================
+# ERROR HELPER
+# ===================================================================
+
+
+def _error(error_type: str, message: str) -> dict[str, Any]:
+    return {"status": "error", "error_type": error_type, "message": message}
