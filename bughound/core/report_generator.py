@@ -601,7 +601,7 @@ class ReportGenerator:
         
         # Basic curl command
         if matched_at:
-            return f"curl -X GET '{matched_at}' -H 'User-Agent: BugHound-Security-Scanner'"
+            return f"curl -X GET '{matched_at}' -H 'User-Agent: Mozilla/5.0'"
         else:
             return f"Vulnerability detected using Nuclei template: {template_id}"
     

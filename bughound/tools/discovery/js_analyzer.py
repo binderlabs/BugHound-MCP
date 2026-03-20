@@ -224,7 +224,7 @@ async def _download_js(url: str, timeout: int) -> str | None:
             async with session.get(
                 url,
                 timeout=aiohttp.ClientTimeout(total=timeout),
-                headers={"User-Agent": "Mozilla/5.0 BugHound/1.0"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
                 ssl=False,
             ) as resp:
                 if resp.status != 200:

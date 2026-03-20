@@ -144,7 +144,7 @@ async def check_host(
             async with session.get(
                 f"{base}/bughound_baseline_{random_slug}",
                 timeout=aiohttp.ClientTimeout(total=timeout),
-                headers={"User-Agent": "Mozilla/5.0 BugHound/1.0"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
                 ssl=False,
                 allow_redirects=False,
             ) as resp:
@@ -181,7 +181,7 @@ async def check_host(
                     async with session.get(
                         url,
                         timeout=aiohttp.ClientTimeout(total=timeout),
-                        headers={"User-Agent": "Mozilla/5.0 BugHound/1.0"},
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"},
                         ssl=False,
                         allow_redirects=False,
                     ) as resp:
