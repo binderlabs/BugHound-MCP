@@ -1718,12 +1718,27 @@ def _cvss_key(vuln_class: str, finding: dict[str, Any]) -> str:
 def _sqlmap_confirms(output: str) -> bool:
     """Check if sqlmap output confirms injection."""
     output_lower = output.lower()
-    indicators = [
-        "is vulnerable",
-        "injectable",
-        "sqlmap identified the following injection point",
+    # Negative indicators — sqlmap explicitly says NOT injectable
+    negative = [
+        "does not seem to be injectable",
+        "do not appear to be injectable",
+        "not injectable",
+        "all tested parameters are not",
     ]
-    return any(ind in output_lower for ind in indicators)
+    if any(neg in output_lower for neg in negative):
+        return False
+    # Positive indicators — sqlmap confirmed injection
+    positive = [
+        "is vulnerable",
+        "sqlmap identified the following injection point",
+        "parameter is vulnerable",
+        "type: boolean-based blind",
+        "type: time-based blind",
+        "type: error-based",
+        "type: union query",
+        "type: stacked queries",
+    ]
+    return any(pos in output_lower for pos in positive)
 
 
 def _extract_sqlmap_evidence(output: str) -> str:
