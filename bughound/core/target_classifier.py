@@ -115,7 +115,7 @@ def classify(target: str, depth: str = "light") -> TargetClassification:
     # --- Broad domain: root domain or wildcard ---
     if _ROOT_DOMAIN_RE.match(cleaned):
         # Strip wildcard prefix for normalized form
-        norm = cleaned.lstrip("*.")
+        norm = cleaned.removeprefix("*.")
         return TargetClassification(
             target_type=TargetType.BROAD_DOMAIN,
             original_input=raw,

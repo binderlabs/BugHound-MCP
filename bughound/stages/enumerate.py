@@ -161,7 +161,7 @@ async def enumerate_light(workspace_id: str) -> dict[str, Any]:
 
     # --- Tool timing summary ---
     tool_timing = {
-        name: f"{r.execution_time_seconds}s"
+        name: f"{r.execution_time_seconds}s" if r.success else "failed"
         for name, r in tool_results.items()
     }
 

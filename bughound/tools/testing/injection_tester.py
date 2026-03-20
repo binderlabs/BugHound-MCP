@@ -61,7 +61,8 @@ async def _send(
             body = await resp.text(errors="replace")
             resp_headers = {k.lower(): v for k, v in resp.headers.items()}
             return resp.status, body[:50_000], resp_headers
-    except Exception:
+    except Exception as exc:
+        logger.debug("http_send_error", url=url, error=str(exc))
         return 0, "", {}
 
 
@@ -261,13 +262,13 @@ async def test_ssrf(
 # ---------------------------------------------------------------------------
 
 _REDIRECT_PAYLOADS = [
-    "https://evil.com",
-    "//evil.com",
-    "/\\evil.com",
-    "https://evil.com@legitimate.com",
-    "/%0d%0aLocation:%20https://evil.com",
-    "/evil.com",
-    "https://legitimate.com.evil.com",
+    "https://example.com",
+    "//example.com",
+    "/\\example.com",
+    "https://example.com@legitimate.com",
+    "/%0d%0aLocation:%20https://example.com",
+    "/example.com",
+    "https://legitimate.com.example.com",
 ]
 
 
@@ -287,8 +288,8 @@ async def test_open_redirect(
 
             location = headers.get("location", "")
 
-            # Check if redirect points to evil.com
-            if "evil.com" in location:
+            # Check if redirect points to example.com
+            if "example.com" in location:
                 return {
                     "vulnerable": True,
                     "payload": payload,
@@ -310,7 +311,7 @@ async def test_open_redirect(
                 }
 
             # Check body for JS/meta-based redirects
-            if "evil.com" in body:
+            if "example.com" in body:
                 # Look for window.location, meta refresh, etc.
                 js_redirect = re.search(
                     r'(window\.location|location\.href|location\.replace|'
@@ -321,13 +322,13 @@ async def test_open_redirect(
                     return {
                         "vulnerable": True,
                         "payload": payload,
-                        "redirected_to": "evil.com (body-based)",
+                        "redirected_to": "example.com (body-based)",
                         "type": "js_redirect",
                         "evidence": body[:500],
                         "param": param,
                         "url": test_url,
                     }
-                # Reflection of evil.com in body without redirect is NOT a
+                # Reflection of example.com in body without redirect is NOT a
                 # redirect vulnerability — it is at most an informational
                 # finding (e.g. reflected input).  Removed to avoid false
                 # positives.
@@ -734,12 +735,12 @@ async def test_header_injection(target_url: str) -> dict[str, Any]:
 
         # Test 1: Host header poisoning
         status, body, _ = await _send(
-            session, target_url, headers={"Host": "evil.com"},
+            session, target_url, headers={"Host": "example.com"},
         )
-        if status != 0 and "evil.com" in body:
+        if status != 0 and "example.com" in body:
             results.append({
                 "technique": "host_header_poisoning",
-                "evidence": "Host: evil.com reflected in response body",
+                "evidence": "Host: example.com reflected in response body",
                 "severity": "high",
             })
 
@@ -756,12 +757,12 @@ async def test_header_injection(target_url: str) -> dict[str, Any]:
 
         # Test 3: X-Forwarded-Host reflection
         status, body, _ = await _send(
-            session, target_url, headers={"X-Forwarded-Host": "evil.com"},
+            session, target_url, headers={"X-Forwarded-Host": "example.com"},
         )
-        if status != 0 and "evil.com" in body:
+        if status != 0 and "example.com" in body:
             results.append({
                 "technique": "x_forwarded_host_reflection",
-                "evidence": "X-Forwarded-Host: evil.com reflected in response body",
+                "evidence": "X-Forwarded-Host: example.com reflected in response body",
                 "severity": "medium",
             })
 
@@ -818,7 +819,7 @@ async def test_idor(
         if baseline_status == 0:
             return {"potential_idor": False, "param": param, "url": target_url, "confidence": "low"}
 
-        baseline_hash = hashlib.md5(baseline_body.encode()).hexdigest()
+        baseline_hash = hashlib.md5(baseline_body.encode(), usedforsecurity=False).hexdigest()
 
         # Generate test values based on original
         test_values: list[str] = []
@@ -849,7 +850,7 @@ async def test_idor(
             if status == 0:
                 continue
 
-            body_hash = hashlib.md5(body.encode()).hexdigest()
+            body_hash = hashlib.md5(body.encode(), usedforsecurity=False).hexdigest()
 
             # Different value returns 200 with different content
             if status == 200 and body_hash != baseline_hash and len(body) > 10:
@@ -921,7 +922,7 @@ async def test_path_idor(target_url: str) -> dict[str, Any]:
         if baseline_status == 0:
             return {"potential_idor": False, "url": target_url, "reason": "Could not reach URL"}
 
-        baseline_hash = hashlib.md5(baseline_body.encode()).hexdigest()
+        baseline_hash = hashlib.md5(baseline_body.encode(), usedforsecurity=False).hexdigest()
 
         for seg in segments:
             parts = list(seg["path_parts"])
@@ -966,7 +967,7 @@ async def test_path_idor(target_url: str) -> dict[str, Any]:
                 if status == 0:
                     continue
 
-                body_hash = hashlib.md5(body.encode()).hexdigest()
+                body_hash = hashlib.md5(body.encode(), usedforsecurity=False).hexdigest()
 
                 if status == 200 and body_hash != baseline_hash and len(body) > 100:
                     confidence = "medium" if seg["type"] == "numeric" else "low"
@@ -1118,10 +1119,11 @@ async def test_cookie_injection(
                         ) as resp:
                             body = await resp.text(errors="replace")
                             body = body[:50_000]
+                            ct = resp.headers.get("content-type", "").lower()
                     except Exception:
                         continue
 
-                    if payload in body:
+                    if payload in body and "text/html" in ct:
                         return {
                             "vulnerable": True,
                             "type": "reflected-xss",

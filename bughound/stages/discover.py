@@ -502,7 +502,6 @@ async def _run_discover(
         # Write 2C results — separate HIGH/MEDIUM from LOW for easier AI triage
         if js_secrets:
             high_med = [s for s in js_secrets if s.get("confidence") in ("HIGH", "MEDIUM")]
-            low = [s for s in js_secrets if s.get("confidence") == "LOW"]
 
             await workspace.write_data(
                 workspace_id, "secrets/js_secrets.json", js_secrets,

@@ -844,8 +844,10 @@ async def _run_tests(
     # -- Build runnable task list (filter by test_class + availability) -
     # Heavy tools that spawn subprocesses — limit concurrency
     _HEAVY_TECHNIQUES = {"sqli_param_fuzz", "xss_param_fuzz", "deep_dirfuzz"}
-    heavy_sem = asyncio.Semaphore(2)   # max 2 external-tool techniques
-    light_sem = asyncio.Semaphore(10)  # max 10 pure-Python techniques
+    _HEAVY_SLOTS = 2
+    _LIGHT_SLOTS = 10
+    heavy_sem = asyncio.Semaphore(_HEAVY_SLOTS)
+    light_sem = asyncio.Semaphore(_LIGHT_SLOTS)
 
     async def _run_technique(
         technique_id: str, phase_prefix: str,
@@ -926,7 +928,7 @@ async def _run_tests(
         await _progress(
             50,
             f"Phase 4D+4E: Running {total_tasks} techniques in parallel "
-            f"(heavy={heavy_sem._value} slots, light={light_sem._value} slots)",
+            f"(heavy={_HEAVY_SLOTS} slots, light={_LIGHT_SLOTS} slots)",
             "parallel",
         )
 

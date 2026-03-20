@@ -367,10 +367,6 @@ def classify_parameters(
             "authenticity_token",
         }
         if param_lower in _SKIP_PARAMS:
-            # These are anti-CSRF/framework tokens — classify as deserialization
-            # only if they match, otherwise skip entirely
-            if matched_types:
-                param_vuln_count.setdefault(param_lower, set()).update(matched_types)
             continue
 
         # Ensure ALL user-input params get tested for core injection classes.

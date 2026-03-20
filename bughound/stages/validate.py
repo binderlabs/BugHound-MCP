@@ -718,7 +718,7 @@ async def _validate_xss_pure(finding: dict[str, Any]) -> dict[str, Any]:
     if not endpoint:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": "No endpoint"}
 
-    canary = f"bughound{hashlib.md5(endpoint.encode()).hexdigest()[:8]}"
+    canary = f"bughound{hashlib.md5(endpoint.encode(), usedforsecurity=False).hexdigest()[:8]}"
     test_payloads = [
         (canary, "reflection"),
         (f"<{canary}>", "html_injection"),

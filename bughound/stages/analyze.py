@@ -660,16 +660,16 @@ def _detect_attack_chains(
 
     # CHAIN 6 — Subdomain Takeover (global, not per-host)
     for t in data["takeover_candidates"]:
-        host = (t.get("subdomain") or t.get("host") or "").lower()
+        takeover_host = (t.get("subdomain") or t.get("host") or "").lower()
         if t.get("confirmed") or t.get("vulnerable"):
             chains.append({
                 "chain_id": "SUBDOMAIN_TAKEOVER",
                 "name": "Subdomain Takeover",
                 "severity": "HIGH",
                 "bounty_estimate": "$500-2000",
-                "affected_hosts": [host],
+                "affected_hosts": [takeover_host],
                 "evidence": {
-                    "trigger": f"Dangling DNS for {host}",
+                    "trigger": f"Dangling DNS for {takeover_host}",
                     "supporting": f"CNAME → {t.get('cname', '?')} ({t.get('service', t.get('provider', '?'))})",
                 },
                 "exploitation_steps": [
@@ -683,11 +683,11 @@ def _detect_attack_chains(
 
     # CHAIN 12 — Shared Infrastructure Pivot (global)
     ip_to_hosts: dict[str, list[str]] = {}
-    for host, info in host_idx.items():
+    for infra_host, info in host_idx.items():
         hd = info.get("host_data") or {}
         ip = hd.get("ip") or hd.get("a_record") or ""
         if ip:
-            ip_to_hosts.setdefault(ip, []).append(host)
+            ip_to_hosts.setdefault(ip, []).append(infra_host)
 
     for ip, hosts in ip_to_hosts.items():
         if len(hosts) < 2:
