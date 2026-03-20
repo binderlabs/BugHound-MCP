@@ -2157,6 +2157,10 @@ async def submit_scan_plan(
     out_of_scope: list[str] = []
 
     for i, t in enumerate(targets):
+        # Auto-fix: AI client may send string "host" instead of {"host": "host"}
+        if isinstance(t, str):
+            targets[i] = {"host": t, "test_classes": []}
+            t = targets[i]
         if not isinstance(t, dict):
             errors.append(f"targets[{i}] is not an object")
             continue
