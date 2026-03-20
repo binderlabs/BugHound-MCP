@@ -24,6 +24,7 @@ import aiohttp
 import structlog
 
 from bughound.core import tool_runner, workspace
+from bughound.schemas.models import WorkspaceState
 
 logger = structlog.get_logger()
 
@@ -121,7 +122,7 @@ NEEDS_MANUAL_REVIEW = "NEEDS_MANUAL_REVIEW"
 
 # HTTP helpers
 _TIMEOUT = aiohttp.ClientTimeout(total=15)
-_HEADERS = {"User-Agent": "Mozilla/5.0 (BugHound Validator)"}
+_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
 
 # ---------------------------------------------------------------------------
@@ -327,7 +328,7 @@ async def validate_all(
 
     # Update workspace state
     await workspace.add_stage_history(workspace_id, 5, "completed")
-    await workspace.update_metadata(workspace_id, state="VALIDATED")
+    await workspace.update_metadata(workspace_id, state=WorkspaceState.COMPLETED)
 
     return {
         "status": "completed",
@@ -521,7 +522,7 @@ async def _validate_sqli(
     result = await tool_runner.run("sqlmap", args, target=endpoint, timeout=120)
 
     if result.success:
-        output = "\n".join(result.results)
+        output = "\n".join(str(r) for r in result.results)
         if _sqlmap_confirms(output):
             curl_cmd = _build_curl_from_finding(finding)
             return {
@@ -666,7 +667,7 @@ async def _validate_xss(
     result = await tool_runner.run("dalfox", args, target=endpoint, timeout=60)
 
     if result.success and result.results:
-        output = "\n".join(result.results)
+        output = "\n".join(str(r) for r in result.results)
         try:
             dalfox_results = json.loads(output)
             if isinstance(dalfox_results, list) and dalfox_results:

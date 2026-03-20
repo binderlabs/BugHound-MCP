@@ -375,7 +375,13 @@ async def test_single(
     # Append to workspace
     if findings:
         await _append_findings(workspace_id, findings)
-        await workspace.update_stats(workspace_id, findings_total=len(findings))
+        # Read existing findings to get accurate total
+        existing = await workspace.read_data(workspace_id, "vulnerabilities/scan_results.json")
+        existing_count = 0
+        if existing:
+            existing_items = existing.get("data", existing) if isinstance(existing, dict) else existing
+            existing_count = len(existing_items) if isinstance(existing_items, list) else 0
+        await workspace.update_stats(workspace_id, findings_total=existing_count + len(findings))
 
     return {
         "status": "success",

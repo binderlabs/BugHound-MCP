@@ -1670,7 +1670,7 @@ def _format_enumerate(result: dict[str, Any]) -> str:
 
     # Summary table
     total_subs = data.get("total_subdomains", data.get("subdomains_found", 0))
-    resolved = data.get("resolved", 0)
+    resolved = data.get("resolved_count", data.get("resolved", 0))
     wildcards = data.get("wildcard_domains", 0)
     lines.append("  | Metric             | Count |")
     lines.append("  |--------------------|-------|")

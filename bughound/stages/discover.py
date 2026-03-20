@@ -347,8 +347,8 @@ async def _run_discover(
                                 katana_forms.extend(_json.loads(w[10:]))
                             except _json.JSONDecodeError:
                                 pass
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.append(f"Crawl failed for {ct}: {exc}")
         url_tool_counts["katana"] = katana_count
     elif gospider.is_available():
         gospider_count = 0
@@ -360,8 +360,8 @@ async def _run_discover(
                         u = entry["url"] if isinstance(entry, dict) else str(entry)
                         all_urls.append({"url": u, "source": "gospider"})
                         gospider_count += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                warnings.append(f"Crawl failed for {ct}: {exc}")
         url_tool_counts["gospider"] = gospider_count
     else:
         url_tool_counts["crawler"] = -1
