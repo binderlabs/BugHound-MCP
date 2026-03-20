@@ -70,6 +70,41 @@ COMMON_PATHS: list[str] = [
     "/wp-config.php.bak", "/web.config",
     # Error pages
     "/404", "/500", "/error",
+    # Source control
+    "/.svn/entries", "/.svn/wc.db",
+    "/.hg/", "/.bzr/",
+    "/.git/config", "/.git/logs/HEAD",
+    # CI/CD
+    "/.github/", "/.gitlab-ci.yml", "/Jenkinsfile",
+    "/.circleci/config.yml", "/.travis.yml",
+    # Environment / secrets
+    "/.env.bak", "/.env.old", "/.env.local", "/.env.production",
+    "/.env.staging", "/.env.development",
+    "/config.json", "/config.yml", "/config.yaml",
+    "/secrets.json", "/credentials.json",
+    "/application.yml", "/application.properties",
+    # Backup files
+    "/backup.sql", "/dump.sql", "/database.sql",
+    "/backup.zip", "/backup.tar.gz", "/site.zip",
+    "/.bak", "/db.sqlite3", "/data.db",
+    # Log files
+    "/error.log", "/access.log", "/debug.log",
+    "/application.log", "/app.log",
+    # AWS / Cloud
+    "/.aws/credentials", "/aws.yml",
+    "/firebase.json", "/.firebase",
+    # IDE / Editor files
+    "/.idea/", "/.vscode/", "/.project",
+    "/nbproject/", "/.settings/",
+    # Docker
+    "/docker-compose.yaml", "/.dockerignore",
+    "/Dockerfile.bak",
+    # Other sensitive
+    "/id_rsa", "/.ssh/authorized_keys",
+    "/server.key", "/server.crt", "/private.key",
+    "/.npmrc", "/.yarnrc", "/yarn.lock",
+    "/Makefile", "/Gruntfile.js", "/Gulpfile.js",
+    "/Procfile", "/Vagrantfile",
 ]
 
 WORDPRESS_PATHS: list[str] = [
@@ -119,12 +154,39 @@ JAVA_PATHS: list[str] = [
     "/manager/html", "/manager/status",  # Tomcat
     "/host-manager/html",
     "/solr/admin", "/solr/#/",  # Solr
-    "/jenkins", "/jenkins/login",  # Jenkins
+    "/jenkins", "/jenkins/login", "/jenkins/script",  # Jenkins
     "/jmx-console",  # JBoss
     "/web-console",  # JBoss
     "/invoker/JMXInvokerServlet",
     "/h2-console", "/h2-console/",  # H2
     "/jolokia", "/jolokia/list",  # Jolokia
+    "/struts/webconsole.html",  # Struts
+    "/axis2/axis2-admin/",  # Axis2
+    "/activemq/", "/admin/queues.jsp",  # ActiveMQ
+]
+
+PYTHON_PATHS: list[str] = [
+    "/__debug__/", "/__debug__/sql/",  # Django debug toolbar
+    "/admin/", "/admin/login/",  # Django admin
+    "/_debug_toolbar/",
+    "/flask-admin/", "/flask-debugtoolbar/",
+    "/jupyter/", "/notebooks/",
+    "/flower/",  # Celery monitor
+    "/sentry/",
+]
+
+PHP_PATHS: list[str] = [
+    "/info.php", "/phpinfo.php", "/test.php",
+    "/php-info.php", "/i.php",
+    "/adminer.php", "/adminer/",
+    "/phpmyadmin/", "/pma/",
+    "/.htpasswd", "/.htaccess.bak",
+    "/composer.lock",
+    "/storage/logs/laravel.log",  # Laravel
+    "/debug/default/view",  # Yii
+    "/typo3/", "/typo3conf/",  # TYPO3
+    "/wp-config.php~",  # Editor backup
+    "/config.php.bak", "/config.inc.php.bak",
 ]
 
 # Interesting status codes (not 404)
@@ -186,6 +248,10 @@ async def scan_directories(
             paths.extend(DOTNET_PATHS)
         if any(k in tech_str for k in ("tomcat", "jboss", "wildfly", "solr", "jenkins", "jolokia")):
             paths.extend(JAVA_PATHS)
+        if any(k in tech_str for k in ("python", "django", "flask", "gunicorn", "uvicorn")):
+            paths.extend(PYTHON_PATHS)
+        if any(k in tech_str for k in ("php", "laravel", "wordpress", "drupal", "joomla", "apache")):
+            paths.extend(PHP_PATHS)
 
         # Deduplicate
         paths = sorted(set(paths))
