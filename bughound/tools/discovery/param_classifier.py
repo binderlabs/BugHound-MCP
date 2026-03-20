@@ -370,7 +370,7 @@ def classify_parameters(
             continue
 
         # Ensure ALL user-input params get tested for core injection classes.
-        core_types = {"xss", "sqli", "lfi", "ssti", "idor"}
+        core_types = {"xss", "sqli", "lfi", "ssti", "idor", "rce"}
         if matched_types:
             for ct in core_types:
                 if ct not in matched_types:
