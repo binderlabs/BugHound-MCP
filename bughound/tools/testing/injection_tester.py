@@ -456,11 +456,14 @@ async def test_lfi(
             if status == 0:
                 continue
 
-            if _LFI_LINUX_INDICATORS.search(body) and not baseline_has_linux:
+            lfi_match = _LFI_LINUX_INDICATORS.search(body)
+            if lfi_match and not baseline_has_linux:
+                start = max(0, lfi_match.start() - 20)
+                end = min(len(body), lfi_match.end() + 200)
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "evidence": body[:500],
+                    "evidence": f"LFI confirmed: '{lfi_match.group(0)}' found in response\n{body[start:end].strip()}",
                     "os": "linux",
                     "param": param,
                     "url": test_url,
@@ -474,11 +477,14 @@ async def test_lfi(
             if status == 0:
                 continue
 
-            if _LFI_WINDOWS_INDICATORS.search(body) and not baseline_has_windows:
+            win_lfi = _LFI_WINDOWS_INDICATORS.search(body)
+            if win_lfi and not baseline_has_windows:
+                start = max(0, win_lfi.start() - 20)
+                end = min(len(body), win_lfi.end() + 200)
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "evidence": body[:500],
+                    "evidence": f"LFI confirmed: '{win_lfi.group(0)}' found in response\n{body[start:end].strip()}",
                     "os": "windows",
                     "param": param,
                     "url": test_url,
@@ -579,11 +585,14 @@ async def test_ssti(
                 # Strip common template delimiters to check for echo
                 payload_core = payload.replace("{{", "").replace("}}", "").replace("${", "").replace("}", "").replace("#{", "").replace("<%= ", "").replace(" %>", "")
                 if payload_core not in body and payload not in body:
+                    idx = body.find(expected)
+                    ctx_start = max(0, idx - 30)
+                    ctx_end = min(len(body), idx + len(expected) + 50)
                     return {
                         "vulnerable": True,
                         "payload": payload,
                         "template_engine": engine,
-                        "evidence": body[:500],
+                        "evidence": f"SSTI confirmed: expression '{payload}' evaluated to '{expected}'\nContext: ...{body[ctx_start:ctx_end].strip()}...",
                         "param": param,
                         "url": test_url,
                     }
@@ -1381,11 +1390,15 @@ async def test_rce(
 
                 match = _RCE_OUTPUT_INDICATORS.search(body)
                 if match and not baseline_has_linux:
+                    # Extract evidence around the match, not the whole page
+                    start = max(0, match.start() - 50)
+                    end = min(len(body), match.end() + 100)
+                    evidence_ctx = body[start:end].strip()
                     result.update({
                         "vulnerable": True,
                         "technique": "output-based",
                         "payload": payload,
-                        "evidence": body[:500],
+                        "evidence": f"Command output detected: ...{evidence_ctx}...",
                         "os": "linux",
                         "url": test_url,
                     })
@@ -1400,12 +1413,16 @@ async def test_rce(
                 if status == 0:
                     continue
 
-                if _RCE_WINDOWS_INDICATORS.search(body) and not baseline_has_win:
+                win_match = _RCE_WINDOWS_INDICATORS.search(body)
+                if win_match and not baseline_has_win:
+                    start = max(0, win_match.start() - 50)
+                    end = min(len(body), win_match.end() + 100)
+                    evidence_ctx = body[start:end].strip()
                     result.update({
                         "vulnerable": True,
                         "technique": "output-based",
                         "payload": payload,
-                        "evidence": body[:500],
+                        "evidence": f"Command output detected: ...{evidence_ctx}...",
                         "os": "windows",
                         "url": test_url,
                     })
