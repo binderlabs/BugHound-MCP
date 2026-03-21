@@ -508,14 +508,12 @@ def _auto_curl(finding: dict[str, Any]) -> str:
     param = finding.get("parameter", "")
 
     # If we have a complete endpoint URL, use it directly
+    # Keep URL-encoded — special chars like | must be encoded for curl to work
     if endpoint.startswith("http"):
-        from urllib.parse import unquote
-        # URL-decode the endpoint for a working curl command
-        decoded_endpoint = unquote(endpoint)
-        cmd = f"curl -sk '{decoded_endpoint}'"
+        cmd = f"curl -sk '{endpoint}'"
         if payload and param:
-            if payload not in decoded_endpoint:
-                cmd = f"curl -sk '{decoded_endpoint}' --data '{param}={payload}'"
+            if payload not in endpoint:
+                cmd = f"curl -sk '{endpoint}' --data-urlencode '{param}={payload}'"
         return cmd
 
     return ""
