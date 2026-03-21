@@ -29,6 +29,10 @@ SQLI_PARAMS: dict[str, Any] = {
         "union", "insert", "update", "delete", "search", "filter", "results",
         "num", "count", "page", "field", "view", "process", "show", "col",
         "cat", "category", "item", "product", "article", "key", "idx",
+        # Additional SQL-prone params from Web-Fuzzing-Box
+        "asc", "desc", "order_by", "orderby", "sort_by", "sortby", "group_by",
+        "columns", "sort_order", "sort_field", "sort_column", "order_field",
+        "sql", "ids",
     },
     "patterns": ["*_id", "*_no", "*_num", "*_number", "*_key", "*_pk", "*_fk",
                   "*id", "*num", "*no"],
@@ -72,6 +76,11 @@ REDIRECT_PARAMS: dict[str, Any] = {
         "forward_to", "redir_url", "checkout_url", "success_url",
         "failure_url", "callback", "callback_url", "login_url", "logout_url",
         "back", "back_url", "ref", "referer", "referrer",
+        # Additional redirect-prone params from Web-Fuzzing-Box
+        "backto", "backurl", "checkout", "from_url", "navigation",
+        "next_page", "out", "page_url", "redirect_uri", "return_path",
+        "returnto", "rt", "service", "site", "to", "uri", "url_redirect",
+        "view", "window", "forwardurl", "load_url", "image_url",
     },
     "patterns": ["*_redirect", "*_return", "*_url"],
 }

