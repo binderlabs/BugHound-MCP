@@ -30,6 +30,7 @@ from bughound.stages import discover as stage_discover
 from bughound.stages import analyze as stage_analyze
 from bughound.stages import test as stage_test
 from bughound.stages import validate as stage_validate
+from bughound.stages import report as stage_report
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +491,21 @@ async def main() -> None:
     # Stage 5: Validate
     if not args.skip_validate and findings:
         await run_stage_5(workspace_id, job_manager)
+
+    # Stage 6: Report
+    _print_header(6, "Report")
+    try:
+        report_result = await stage_report.generate_report(workspace_id, "all")
+        if report_result.get("status") == "success":
+            print(f"  Reports generated:")
+            for rt, path in report_result.get("reports", {}).items():
+                print(f"    {rt}: {path}")
+            print(f"  Findings: {report_result.get('total_findings', 0)}")
+            print(f"  Confirmed: {report_result.get('confirmed', 0)}")
+        else:
+            print(f"  Error: {report_result.get('message', '?')}")
+    except Exception as exc:
+        print(f"  Report generation failed: {exc}")
 
     # Final report
     print_final_report(findings)
