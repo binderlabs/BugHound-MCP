@@ -251,6 +251,31 @@ def classify_parameters(
         for pname, sample in _COMMON_TEST_PARAMS:
             param_entries.append((url, pname, sample, "GET"))
 
+    # Infer params from URLs with path templates (OpenAPI style)
+    # e.g., /api/products/1/image → infer "file", "path", "name" params
+    _PATH_SEGMENT_PARAMS = {
+        "image": ["file", "path", "name", "src", "img"],
+        "download": ["file", "path", "name", "filename"],
+        "upload": ["file", "path"],
+        "export": ["format", "type", "file"],
+        "import": ["url", "source", "file"],
+        "preview": ["url", "template", "content", "body"],
+        "render": ["template", "content", "body"],
+        "view": ["file", "page", "doc", "id"],
+        "read": ["file", "path", "name"],
+        "include": ["file", "page", "path"],
+    }
+    for item in urls_data:
+        url = item.get("url", item) if isinstance(item, dict) else str(item)
+        if not isinstance(url, str):
+            continue
+        parsed = urlparse(url)
+        path_parts = [p for p in parsed.path.lower().split("/") if p]
+        for part in path_parts:
+            if part in _PATH_SEGMENT_PARAMS:
+                for inferred_param in _PATH_SEGMENT_PARAMS[part]:
+                    param_entries.append((url, inferred_param, "", "GET"))
+
     # From parameters.json — structured param data
     for item in parameters_data:
         if not isinstance(item, dict):

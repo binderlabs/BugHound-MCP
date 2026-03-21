@@ -501,6 +501,7 @@ async def _run_discover(
 
         js_secrets = js_result.get("secrets", [])
         js_endpoints = js_result.get("endpoints", [])
+        js_hidden_params = js_result.get("hidden_params", [])
         secrets_by_conf = js_result.get("secrets_by_confidence", {})
 
         # Cross-reference: endpoints in JS but not in crawled URLs = hidden
@@ -545,6 +546,14 @@ async def _run_discover(
                 generated_by="js_analyzer", target=target_label,
             )
             files_written.append("endpoints/hidden_endpoints.json")
+
+        if js_hidden_params:
+            await workspace.write_data(
+                workspace_id, "urls/js_hidden_params.json",
+                [{"param": p, "source": "js_analysis"} for p in js_hidden_params],
+                generated_by="js_analyzer", target=target_label,
+            )
+            files_written.append("urls/js_hidden_params.json")
 
     # ===================================================================
     # Phase 2C-map: Check for exposed source maps (.js.map)

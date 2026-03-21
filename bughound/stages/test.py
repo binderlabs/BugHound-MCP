@@ -458,6 +458,7 @@ async def _run_tests(
         "cors", "bac", "rate_limiting", "cve_specific",
         "ssti", "csti", "crlf", "header_injection", "jwt", "graphql",
         "ssrf", "open_redirect", "rce", "idor",
+        "prototype_pollution", "info_leak",
     ])
 
     async def _progress(pct: int, msg: str, module: str) -> None:
@@ -813,6 +814,8 @@ async def _run_tests(
         ("csti", "csti_test"),
         ("deserialization", "cookie_deserialization"),
         ("header_injection", "header_injection_test"),
+        ("prototype_pollution", "prototype_pollution_test"),
+        ("info_leak", "sensitive_leakage_test"),
     ]
 
     tech_specific = [

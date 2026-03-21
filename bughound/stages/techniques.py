@@ -318,6 +318,24 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["cors"],
         "description": "Promote CORS misconfigurations detected in discovery to findings",
     },
+    {
+        "id": "prototype_pollution_test",
+        "name": "Prototype Pollution",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["parameter_classification"],
+        "vuln_classes": ["prototype_pollution"],
+        "description": "Test for client-side prototype pollution via __proto__ and constructor.prototype",
+    },
+    {
+        "id": "sensitive_leakage_test",
+        "name": "Sensitive Field Leakage",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["urls"],
+        "vuln_classes": ["info_leak"],
+        "description": "Check API responses for leaked sensitive fields (password_hash, totp_secret, etc.)",
+    },
 ]
 
 # Test class → technique ID mapping
@@ -353,6 +371,8 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "api_abuse": ["nuclei_scan"],
     "cve_specific": ["nuclei_scan"],
     "nuclei_general": ["nuclei_scan"],
+    "prototype_pollution": ["prototype_pollution_test"],
+    "info_leak": ["sensitive_leakage_test"],
 }
 
 
@@ -590,6 +610,10 @@ async def execute_technique(
         return await _exec_cookie_xss(workspace_id, approved_hosts)
     elif technique_id == "cors_misconfig":
         return await _exec_cors(workspace_id, approved_hosts)
+    elif technique_id == "prototype_pollution_test":
+        return await _exec_prototype_pollution(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "sensitive_leakage_test":
+        return await _exec_sensitive_leakage(workspace_id, approved_hosts, concurrency)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -2271,6 +2295,108 @@ async def _exec_cookie_xss(
                     })
             except Exception as exc:
                 logger.warning("technique.cookie_xss_error", error=str(exc))
+
+    return findings
+
+
+async def _exec_prototype_pollution(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Test for prototype pollution via __proto__ injection."""
+    from bughound.tools.testing.injection_tester import test_prototype_pollution
+
+    pc = await _load_param_classification(workspace_id)
+    # Use XSS + SSTI candidates (template/DOM params are most likely targets)
+    xss = _get_param_candidates(pc, "xss_candidates")
+    ssti = _get_param_candidates(pc, "ssti_candidates")
+
+    all_candidates = list(xss) + list(ssti)
+    seen: set[str] = set()
+    unique: list[dict[str, Any]] = []
+    for c in all_candidates:
+        key = f"{c.get('url')}:{c.get('param')}"
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+
+    scoped = await _filter_to_scope(unique, approved_hosts, limit=15)
+
+    return await _run_injection_batch_direct(
+        scoped, test_prototype_pollution, "prototype_pollution",
+        "prototype_pollution_test", "high", concurrency,
+    )
+
+
+async def _exec_sensitive_leakage(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Check API endpoints for leaked sensitive fields."""
+    from bughound.tools.testing.injection_tester import test_sensitive_leakage
+
+    # Gather all API endpoints from crawled URLs
+    raw_urls = await workspace.read_data(workspace_id, "urls/crawled.json")
+    urls = _extract_items(raw_urls)
+
+    # Filter to API/JSON endpoints
+    api_urls: list[str] = []
+    seen: set[str] = set()
+    for u in urls:
+        url = u.get("url", "") if isinstance(u, dict) else str(u)
+        host = _host_from_url(url)
+        if host not in approved_hosts or url in seen:
+            continue
+        # Focus on API endpoints (most likely to return JSON with sensitive data)
+        if "/api/" in url or url.endswith(".json") or "/rest/" in url:
+            seen.add(url)
+            api_urls.append(url)
+
+    # Also add dir scan findings (admin/debug endpoints)
+    raw_dir = await workspace.read_data(workspace_id, "dirfuzz/light_results.json")
+    dir_findings = _extract_items(raw_dir)
+    for d in dir_findings:
+        url = d.get("url", "")
+        host = _host_from_url(url)
+        if host in approved_hosts and url not in seen:
+            seen.add(url)
+            api_urls.append(url)
+
+    if not api_urls:
+        return []
+
+    # Limit to avoid excessive requests
+    api_urls = api_urls[:30]
+
+    sem = asyncio.Semaphore(concurrency)
+    findings: list[dict[str, Any]] = []
+
+    async def _test_one(url: str) -> dict[str, Any] | None:
+        async with sem:
+            try:
+                result = await asyncio.wait_for(
+                    test_sensitive_leakage(url), timeout=30,
+                )
+                if result.get("vulnerable"):
+                    return {
+                        "vulnerability_class": "info_leak",
+                        "tool": "injection_tester",
+                        "technique_id": "sensitive_leakage_test",
+                        "host": _host_from_url(url),
+                        "endpoint": url,
+                        "severity": "high",
+                        "description": f"Sensitive fields leaked: {', '.join(result.get('fields_found', []))}",
+                        "evidence": result.get("evidence", ""),
+                        "confidence": result.get("confidence", "high"),
+                        "needs_validation": False,
+                    }
+            except Exception:
+                pass
+            return None
+
+    tasks = [_test_one(u) for u in api_urls]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, dict):
+            findings.append(r)
 
     return findings
 

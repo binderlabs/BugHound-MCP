@@ -142,6 +142,47 @@ _CLIENT_ROUTE_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
+# Hidden parameter extraction from JS source code
+# ---------------------------------------------------------------------------
+
+_JS_PARAM_PATTERNS = [
+    re.compile(r'[?&]([a-zA-Z_][a-zA-Z0-9_]{1,30})=', re.I),
+    re.compile(r'\.get\(["\']([a-zA-Z_][a-zA-Z0-9_]{1,30})["\']\)', re.I),
+    re.compile(r'\.query\.([a-zA-Z_][a-zA-Z0-9_]{1,30})', re.I),
+    re.compile(r'\.params\.([a-zA-Z_][a-zA-Z0-9_]{1,30})', re.I),
+    re.compile(r'name=["\']([a-zA-Z_][a-zA-Z0-9_]{1,30})["\']', re.I),
+    re.compile(r'searchParams\.get\(["\']([a-zA-Z_][a-zA-Z0-9_]{1,30})["\']\)', re.I),
+]
+
+_JS_KEYWORD_FILTER = frozenset({
+    'function', 'return', 'var', 'let', 'const', 'class', 'this', 'true',
+    'false', 'null', 'undefined', 'import', 'export', 'default', 'new',
+    'delete', 'typeof', 'void', 'if', 'else', 'for', 'while', 'do',
+    'switch', 'case', 'break', 'continue', 'try', 'catch', 'throw',
+    'finally', 'with', 'debugger', 'instanceof', 'in', 'of', 'async',
+    'await', 'yield', 'from', 'as', 'static', 'get', 'set', 'constructor',
+    'prototype', 'length', 'type', 'value', 'name', 'index', 'key', 'data',
+    'error', 'message', 'status', 'result', 'response', 'request', 'options',
+    'config', 'module', 'require', 'exports', 'window', 'document', 'console',
+    'navigator', 'location', 'history', 'event', 'target', 'src', 'href',
+    'url', 'path', 'method',
+})
+
+
+def extract_params_from_js(js_content: str) -> list[str]:
+    """Extract parameter names from JavaScript source code."""
+    params = set()
+    for pattern in _JS_PARAM_PATTERNS:
+        for match in pattern.findall(js_content):
+            param = match.strip()
+            # Filter out common JS keywords
+            if param.lower() not in _JS_KEYWORD_FILTER:
+                if len(param) >= 2:
+                    params.add(param)
+    return sorted(params)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -170,6 +211,7 @@ async def analyze_js_files(
     sem = asyncio.Semaphore(concurrency)
     all_secrets: list[dict[str, Any]] = []
     all_endpoints: list[dict[str, Any]] = []
+    all_hidden_params: list[str] = []
     errors: list[str] = []
     analyzed = 0
     failed = 0
@@ -184,8 +226,11 @@ async def analyze_js_files(
             analyzed += 1
             secrets = _extract_secrets(content, url)
             endpoints = _extract_endpoints(content, url, target_domain)
+            # Extract hidden params from JS source
+            js_params = extract_params_from_js(content)
             all_secrets.extend(secrets)
             all_endpoints.extend(endpoints)
+            all_hidden_params.extend(js_params)
 
     tasks = [_analyze_one(u) for u in js_urls]
     await asyncio.gather(*tasks, return_exceptions=True)
@@ -203,10 +248,14 @@ async def analyze_js_files(
     for s in all_secrets:
         by_conf[s["confidence"]] = by_conf.get(s["confidence"], 0) + 1
 
+    # Deduplicate hidden params
+    unique_hidden_params = sorted(set(all_hidden_params))
+
     return {
         "secrets": all_secrets,
         "secrets_by_confidence": by_conf,
         "endpoints": unique_endpoints,
+        "hidden_params": unique_hidden_params,
         "files_analyzed": analyzed,
         "files_failed": failed,
         "errors": errors,
