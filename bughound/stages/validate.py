@@ -74,6 +74,12 @@ CVSS_SCORES: dict[str, float] = {
     "exposed_graphql": 5.3,
     "exposed_svn": 7.5,
     "exposed_debug": 7.5,
+    "info_leak": 5.3,
+    "vulnerable_component": 6.5,
+    "misconfig": 5.3,
+    "default_creds": 9.8,
+    "prototype_pollution": 6.1,
+    "csti": 6.1,
 }
 
 # ---------------------------------------------------------------------------

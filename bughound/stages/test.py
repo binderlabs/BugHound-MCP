@@ -459,6 +459,7 @@ async def _run_tests(
         "ssti", "csti", "crlf", "header_injection", "jwt", "graphql",
         "ssrf", "open_redirect", "rce", "idor",
         "prototype_pollution", "info_leak",
+        "vulnerable_component", "deserialization", "default_creds",
     ])
 
     async def _progress(pct: int, msg: str, module: str) -> None:
@@ -816,6 +817,13 @@ async def _run_tests(
         ("header_injection", "header_injection_test"),
         ("prototype_pollution", "prototype_pollution_test"),
         ("info_leak", "sensitive_leakage_test"),
+        ("misconfig", "security_headers_check"),
+        ("misconfig", "transport_security_check"),
+        ("info_leak", "version_disclosure_check"),
+        ("info_leak", "pii_html_leakage"),
+        ("vulnerable_component", "vulnerable_components_check"),
+        ("deserialization", "viewstate_mac_check"),
+        ("default_creds", "default_credentials_test"),
     ]
 
     tech_specific = [

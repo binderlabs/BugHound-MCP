@@ -336,6 +336,69 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["info_leak"],
         "description": "Check API responses for leaked sensitive fields (password_hash, totp_secret, etc.)",
     },
+    {
+        "id": "security_headers_check",
+        "name": "Security Headers Audit",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["live_hosts"],
+        "vuln_classes": ["misconfig"],
+        "description": "Check for missing security headers (CSP, X-Frame-Options, HSTS, etc.)",
+    },
+    {
+        "id": "version_disclosure_check",
+        "name": "Version Disclosure",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["live_hosts"],
+        "vuln_classes": ["info_leak"],
+        "description": "Detect server version disclosure in response headers",
+    },
+    {
+        "id": "transport_security_check",
+        "name": "Transport Security",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["live_hosts"],
+        "vuln_classes": ["misconfig"],
+        "description": "Check HTTPS availability and HSTS enforcement",
+    },
+    {
+        "id": "pii_html_leakage",
+        "name": "PII Leakage in HTML",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["urls"],
+        "vuln_classes": ["info_leak"],
+        "description": "Scan HTML responses for leaked email addresses and PII",
+    },
+    {
+        "id": "vulnerable_components_check",
+        "name": "Vulnerable Components",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["technologies"],
+        "vuln_classes": ["vulnerable_component"],
+        "description": "Detect known vulnerable library/framework versions (jQuery, ASP.NET, etc.)",
+    },
+    {
+        "id": "viewstate_mac_check",
+        "name": "ViewState MAC Validation",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["live_hosts"],
+        "vuln_classes": ["deserialization"],
+        "description": "Test ASP.NET ViewState MAC validation — disabled MAC enables deserialization RCE",
+    },
+    {
+        "id": "default_credentials_test",
+        "name": "Default Credentials",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["auth_discovery"],
+        "vuln_classes": ["default_creds"],
+        "description": "Test login forms with common default credential pairs",
+    },
 ]
 
 # Test class → technique ID mapping
@@ -358,11 +421,11 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "wordpress": ["nuclei_scan", "wordpress_test"],
     "spring": ["nuclei_scan", "spring_actuator_test"],
     "subdomain_takeover": ["nuclei_scan"],
-    "misconfig": ["nuclei_scan"],
-    "default_creds": ["nuclei_scan"],
+    "misconfig": ["nuclei_scan", "security_headers_check", "transport_security_check"],
+    "default_creds": ["nuclei_scan", "default_credentials_test"],
     "file_exposure": ["nuclei_scan"],
     "rce": ["nuclei_scan", "rce_test", "post_rce"],
-    "deserialization": ["cookie_deserialization"],
+    "deserialization": ["cookie_deserialization", "viewstate_mac_check"],
     "cors": ["cors_misconfig"],
     "bac": ["broken_access_control"],
     "rate_limiting": ["rate_limit_test"],
@@ -372,7 +435,8 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "cve_specific": ["nuclei_scan"],
     "nuclei_general": ["nuclei_scan"],
     "prototype_pollution": ["prototype_pollution_test"],
-    "info_leak": ["sensitive_leakage_test"],
+    "info_leak": ["sensitive_leakage_test", "version_disclosure_check", "pii_html_leakage"],
+    "vulnerable_component": ["vulnerable_components_check"],
 }
 
 
@@ -614,6 +678,20 @@ async def execute_technique(
         return await _exec_prototype_pollution(workspace_id, approved_hosts, concurrency)
     elif technique_id == "sensitive_leakage_test":
         return await _exec_sensitive_leakage(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "security_headers_check":
+        return await _exec_security_headers(workspace_id, approved_hosts)
+    elif technique_id == "version_disclosure_check":
+        return await _exec_version_disclosure(workspace_id, approved_hosts)
+    elif technique_id == "transport_security_check":
+        return await _exec_transport_security(workspace_id, approved_hosts)
+    elif technique_id == "pii_html_leakage":
+        return await _exec_pii_leakage(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "vulnerable_components_check":
+        return await _exec_vulnerable_components(workspace_id, approved_hosts)
+    elif technique_id == "viewstate_mac_check":
+        return await _exec_viewstate_mac(workspace_id, approved_hosts)
+    elif technique_id == "default_credentials_test":
+        return await _exec_default_credentials(workspace_id, approved_hosts)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -2397,6 +2475,339 @@ async def _exec_sensitive_leakage(
     for r in results:
         if isinstance(r, dict):
             findings.append(r)
+
+    return findings
+
+
+async def _exec_security_headers(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Check hosts for missing security headers."""
+    from bughound.tools.testing.config_checker import check_security_headers
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    findings: list[dict[str, Any]] = []
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host not in approved_hosts or not base:
+            continue
+        try:
+            result = await asyncio.wait_for(
+                check_security_headers(base), timeout=30,
+            )
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "misconfig",
+                    "tool": "config_checker",
+                    "technique_id": "security_headers_check",
+                    "host": host,
+                    "endpoint": base,
+                    "severity": "medium",
+                    "description": f"Missing security headers: {', '.join(result.get('missing_headers', []))}",
+                    "evidence": result.get("evidence", ""),
+                    "confidence": "high",
+                    "needs_validation": False,
+                })
+        except Exception:
+            pass
+
+    return findings
+
+
+async def _exec_version_disclosure(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Detect server version disclosure in response headers."""
+    from bughound.tools.testing.config_checker import check_version_disclosure
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    findings: list[dict[str, Any]] = []
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host not in approved_hosts or not base:
+            continue
+        try:
+            result = await asyncio.wait_for(
+                check_version_disclosure(base), timeout=30,
+            )
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "info_leak",
+                    "tool": "config_checker",
+                    "technique_id": "version_disclosure_check",
+                    "host": host,
+                    "endpoint": base,
+                    "severity": "medium",
+                    "description": f"Server version disclosed: {result.get('evidence', '')}",
+                    "evidence": result.get("evidence", ""),
+                    "disclosed_versions": result.get("disclosed_versions", {}),
+                    "confidence": "high",
+                    "needs_validation": False,
+                })
+        except Exception:
+            pass
+
+    return findings
+
+
+async def _exec_transport_security(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Check HTTPS availability and HSTS enforcement."""
+    from bughound.tools.testing.config_checker import check_transport_security
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    findings: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host not in approved_hosts or not base or host in seen:
+            continue
+        seen.add(host)
+        try:
+            result = await asyncio.wait_for(
+                check_transport_security(base), timeout=30,
+            )
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "misconfig",
+                    "tool": "config_checker",
+                    "technique_id": "transport_security_check",
+                    "host": host,
+                    "endpoint": base,
+                    "severity": "medium",
+                    "description": result.get("evidence", "No HTTPS available"),
+                    "evidence": result.get("evidence", ""),
+                    "confidence": result.get("confidence", "high"),
+                    "needs_validation": False,
+                })
+        except Exception:
+            pass
+
+    return findings
+
+
+async def _exec_pii_leakage(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Scan HTML pages for leaked PII (emails, etc.)."""
+    from bughound.tools.testing.config_checker import check_pii_leakage_html
+
+    raw_urls = await workspace.read_data(workspace_id, "urls/crawled.json")
+    urls = _extract_items(raw_urls)
+
+    # Pick a subset of interesting URLs (login, admin, profile pages)
+    targets: list[str] = []
+    seen: set[str] = set()
+    _PII_KEYWORDS = ("login", "profile", "account", "user", "admin", "contact",
+                     "register", "signup", "dashboard", "settings", "order")
+    for u in urls:
+        url = u.get("url", "") if isinstance(u, dict) else str(u)
+        host = _host_from_url(url)
+        if host not in approved_hosts or url in seen:
+            continue
+        if any(kw in url.lower() for kw in _PII_KEYWORDS):
+            seen.add(url)
+            targets.append(url)
+    # Also check the root URL of each host
+    raw_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw_hosts)
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host in approved_hosts and base and base not in seen:
+            seen.add(base)
+            targets.append(base)
+
+    if not targets:
+        return []
+    targets = targets[:20]
+
+    sem = asyncio.Semaphore(concurrency)
+    findings: list[dict[str, Any]] = []
+
+    async def _check(url: str) -> dict[str, Any] | None:
+        async with sem:
+            try:
+                result = await asyncio.wait_for(
+                    check_pii_leakage_html(url), timeout=30,
+                )
+                if result.get("vulnerable"):
+                    return {
+                        "vulnerability_class": "info_leak",
+                        "tool": "config_checker",
+                        "technique_id": "pii_html_leakage",
+                        "host": _host_from_url(url),
+                        "endpoint": url,
+                        "severity": "medium",
+                        "description": f"PII leaked: {', '.join(result.get('emails_found', [])[:3])}",
+                        "evidence": result.get("evidence", ""),
+                        "confidence": result.get("confidence", "medium"),
+                        "needs_validation": False,
+                    }
+            except Exception:
+                pass
+            return None
+
+    tasks = [_check(u) for u in targets]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, dict):
+            findings.append(r)
+
+    return findings
+
+
+async def _exec_vulnerable_components(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Detect known vulnerable component versions from tech detection data."""
+    from bughound.tools.testing.config_checker import check_vulnerable_components
+
+    raw = await workspace.read_data(workspace_id, "hosts/technologies.json")
+    techs = _extract_items(raw)
+
+    # Filter to approved hosts
+    approved_techs = [
+        t for t in techs
+        if isinstance(t, dict) and _host_from_url(t.get("host", t.get("url", ""))) in approved_hosts
+    ]
+
+    vuln_findings = check_vulnerable_components(approved_techs)
+
+    findings: list[dict[str, Any]] = []
+    for vf in vuln_findings:
+        findings.append({
+            "vulnerability_class": "vulnerable_component",
+            "tool": "config_checker",
+            "technique_id": "vulnerable_components_check",
+            "host": vf.get("host", ""),
+            "endpoint": vf.get("url", ""),
+            "severity": "medium",
+            "description": vf.get("description", ""),
+            "evidence": vf.get("evidence", ""),
+            "cves": vf.get("cves", []),
+            "confidence": "high",
+            "needs_validation": False,
+        })
+
+    return findings
+
+
+async def _exec_viewstate_mac(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test ASP.NET ViewState MAC validation."""
+    from bughound.tools.testing.config_checker import check_viewstate_mac
+
+    # Check hosts that have ASP.NET detected
+    raw_tech = await workspace.read_data(workspace_id, "hosts/technologies.json")
+    techs = _extract_items(raw_tech)
+    raw_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw_hosts)
+
+    # Find ASP.NET hosts
+    aspnet_hosts: set[str] = set()
+    for t in techs:
+        if not isinstance(t, dict):
+            continue
+        tech_list = [s.lower() for s in t.get("technologies", [])]
+        if any("asp" in s or ".net" in s or "iis" in s for s in tech_list):
+            h = t.get("host", t.get("url", ""))
+            aspnet_hosts.add(_host_from_url(h))
+
+    findings: list[dict[str, Any]] = []
+    # Also check all hosts if we find ViewState on any page
+    targets: set[str] = set()
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host in approved_hosts and base:
+            if host in aspnet_hosts or not aspnet_hosts:
+                targets.add(base)
+
+    # Also crawl URLs that end in .aspx
+    raw_urls = await workspace.read_data(workspace_id, "urls/crawled.json")
+    urls = _extract_items(raw_urls)
+    for u in urls:
+        url = u.get("url", "") if isinstance(u, dict) else str(u)
+        if url.lower().endswith(".aspx") and _host_from_url(url) in approved_hosts:
+            targets.add(url)
+
+    for url in list(targets)[:10]:
+        try:
+            result = await asyncio.wait_for(
+                check_viewstate_mac(url), timeout=30,
+            )
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "deserialization",
+                    "tool": "config_checker",
+                    "technique_id": "viewstate_mac_check",
+                    "host": _host_from_url(url),
+                    "endpoint": url,
+                    "severity": "high",
+                    "description": "ViewState MAC validation disabled — deserialization RCE possible",
+                    "evidence": result.get("evidence", ""),
+                    "confidence": result.get("confidence", "medium"),
+                    "needs_validation": True,
+                })
+                break  # One finding per host is enough
+        except Exception:
+            pass
+
+    return findings
+
+
+async def _exec_default_credentials(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test login forms with common default credential pairs."""
+    from bughound.tools.testing.config_checker import test_default_credentials
+
+    auth_data = await _load_auth_discovery(workspace_id)
+
+    findings: list[dict[str, Any]] = []
+    for ad in auth_data:
+        login_forms = ad.get("login_forms", [])
+        for form in login_forms:
+            action_url = form.get("action_url", form.get("url", ""))
+            if not action_url:
+                continue
+            host = _host_from_url(action_url)
+            if host not in approved_hosts:
+                continue
+
+            try:
+                result = await asyncio.wait_for(
+                    test_default_credentials(action_url, form), timeout=120,
+                )
+                if result.get("vulnerable"):
+                    creds = result.get("credentials", [{}])[0]
+                    findings.append({
+                        "vulnerability_class": "default_creds",
+                        "tool": "config_checker",
+                        "technique_id": "default_credentials_test",
+                        "host": host,
+                        "endpoint": action_url,
+                        "severity": "high",
+                        "description": f"Default credentials accepted: {creds.get('username', '?')}:{creds.get('password', '?')}",
+                        "evidence": result.get("evidence", ""),
+                        "confidence": "high",
+                        "needs_validation": False,
+                    })
+                    break  # Found working creds, stop testing this form
+            except Exception:
+                pass
 
     return findings
 

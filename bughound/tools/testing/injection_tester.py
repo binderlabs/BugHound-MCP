@@ -1555,7 +1555,29 @@ async def test_rce(
 
                 match = _RCE_OUTPUT_INDICATORS.search(body)
                 if match and not baseline_has_linux:
-                    # Extract evidence around the match, not the whole page
+                    # Verify this is genuine RCE, not LFI false positive.
+                    # Payloads like ";cat /etc/passwd" can trigger on LFI
+                    # endpoints that interpret the path component as a file
+                    # read. Send a unique echo marker that only RCE can produce.
+                    marker = f"BUGHOUND_RCE_{uuid.uuid4().hex[:8]}"
+                    # Extract the command separator from the triggering payload
+                    sep_match = re.match(r"^(%[0-9a-fA-F]{2}|[;|&\n`]|&&|\|\||%00[;|]|\$\()", payload)
+                    if sep_match:
+                        sep = sep_match.group(0)
+                        # Build confirmation payload: for $() use $(echo marker),
+                        # for backtick use `echo marker`, otherwise sep + echo marker
+                        if sep == "$(":
+                            confirm_payload = f"$(echo {marker})"
+                        elif sep == "`":
+                            confirm_payload = f"`echo {marker}`"
+                        else:
+                            confirm_payload = f"{sep}echo {marker}"
+                        confirm_url = _replace_param(target_url, param, original_value + confirm_payload)
+                        _, confirm_body, _ = await _send(session, confirm_url)
+                        if marker not in confirm_body:
+                            # Marker absent — likely LFI, not RCE; skip
+                            continue
+                    # Confirmed RCE (or no separator extracted — keep original logic)
                     start = max(0, match.start() - 50)
                     end = min(len(body), match.end() + 100)
                     evidence_ctx = body[start:end].strip()
@@ -1563,7 +1585,7 @@ async def test_rce(
                         "vulnerable": True,
                         "technique": "output-based",
                         "payload": payload,
-                        "evidence": f"Command output detected: ...{evidence_ctx}...",
+                        "evidence": f"Command output detected (confirmed via unique marker): ...{evidence_ctx}...",
                         "os": "linux",
                         "url": test_url,
                     })
@@ -1580,6 +1602,24 @@ async def test_rce(
 
                 win_match = _RCE_WINDOWS_INDICATORS.search(body)
                 if win_match and not baseline_has_win:
+                    # Verify genuine RCE — not a false positive from LFI or
+                    # similar file-read vuln that happens to show win.ini content.
+                    marker = f"BUGHOUND_RCE_{uuid.uuid4().hex[:8]}"
+                    sep_match = re.match(r"^(%[0-9a-fA-F]{2}|[;|&\n`]|&&|\|\||%00[;|]|\$\()", payload)
+                    if sep_match:
+                        sep = sep_match.group(0)
+                        if sep == "$(":
+                            confirm_payload = f"$(echo {marker})"
+                        elif sep == "`":
+                            confirm_payload = f"`echo {marker}`"
+                        else:
+                            confirm_payload = f"{sep}echo {marker}"
+                        confirm_url = _replace_param(target_url, param, original_value + confirm_payload)
+                        _, confirm_body, _ = await _send(session, confirm_url)
+                        if marker not in confirm_body:
+                            # Marker absent — likely LFI, not RCE; skip
+                            continue
+                    # Confirmed RCE
                     start = max(0, win_match.start() - 50)
                     end = min(len(body), win_match.end() + 100)
                     evidence_ctx = body[start:end].strip()
@@ -1587,7 +1627,7 @@ async def test_rce(
                         "vulnerable": True,
                         "technique": "output-based",
                         "payload": payload,
-                        "evidence": f"Command output detected: ...{evidence_ctx}...",
+                        "evidence": f"Command output detected (confirmed via unique marker): ...{evidence_ctx}...",
                         "os": "windows",
                         "url": test_url,
                     })

@@ -70,6 +70,9 @@ COMMON_PATHS: list[str] = [
     "/wp-config.php.bak", "/web.config",
     # Error pages
     "/404", "/500", "/error",
+    # CMS discovery
+    "/spip.php", "/spip/", "/joomla/", "/drupal/",
+    "/typo3/", "/magento/", "/umbraco/",
     # Source control
     "/.svn/entries", "/.svn/wc.db",
     "/.hg/", "/.bzr/",
@@ -148,6 +151,20 @@ DOTNET_PATHS: list[str] = [
     "/elmah", "/elmah.axd",
     "/error.aspx", "/errorlog.axd",
     "/bin/web.dll",
+    # ASP.NET sitemap / help / discovery
+    "/SiteMap.aspx", "/Sitemap.aspx", "/sitemap.aspx",
+    "/Help.aspx", "/help.aspx",
+    "/Default.aspx", "/default.aspx",
+    "/LogIn.aspx", "/Login.aspx", "/login.aspx",
+    "/Register.aspx", "/register.aspx",
+    "/Admin.aspx", "/admin.aspx",
+    # IIS-specific
+    "/iisstart.htm", "/iishelp/",
+    "/aspnet_client/", "/ScriptResource.axd",
+    "/WebResource.axd",
+    # SignalR / MVC
+    "/signalr/hubs", "/signalr/negotiate",
+    "/_vti_bin/", "/_vti_cnf/",
 ]
 
 JAVA_PATHS: list[str] = [

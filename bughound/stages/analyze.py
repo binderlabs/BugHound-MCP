@@ -1659,6 +1659,9 @@ def _suggest_test_classes(
             "ADMIN_PANEL": "bac",
             "ADMIN_PANEL_FOUND": "bac",
             "DEBUG_ENABLED": "misconfig",
+            "VIEWSTATE": "deserialization",
+            "ASP_NET": "deserialization",
+            "LOGIN_FORM": "default_creds",
         }
         for flag_str in all_flags:
             for flag_key, test_class in flag_to_class.items():
@@ -1675,7 +1678,8 @@ def _suggest_test_classes(
     classes.update([
         "nuclei_general", "cve_specific", "misconfig", "default_creds",
         "crlf", "header_injection", "bac", "rate_limiting",
-        "cors", "csti",
+        "cors", "csti", "info_leak", "vulnerable_component",
+        "deserialization", "prototype_pollution",
     ])
 
     return sorted(classes)

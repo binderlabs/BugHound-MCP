@@ -91,6 +91,12 @@ _REMEDIATION: dict[str, str] = {
     "exposed_actuator": "Restrict Spring Boot Actuator endpoints to internal networks only.",
     "exposed_phpinfo": "Remove phpinfo() calls from production. Restrict access to diagnostic pages.",
     "exposed_backup": "Remove backup files from web-accessible directories.",
+    "info_leak": "Remove sensitive information from responses. Suppress version headers and error details.",
+    "vulnerable_component": "Update to the latest supported version. Monitor CVE databases for new advisories.",
+    "deserialization": "Never deserialize untrusted data. Enable ViewState MAC validation. Use signed serialization.",
+    "prototype_pollution": "Freeze Object.prototype. Validate input object keys. Use Map instead of plain objects.",
+    "csti": "Sanitize user input before template rendering. Use strict template escaping.",
+    "header_injection": "Validate and sanitize all user input used in HTTP headers. Strip newline characters.",
 }
 
 # ---------------------------------------------------------------------------
@@ -135,6 +141,12 @@ _VULN_DISPLAY: dict[str, str] = {
     "exposed_actuator": "Exposed Spring Actuator",
     "exposed_phpinfo": "Exposed phpinfo()",
     "exposed_backup": "Exposed Backup Files",
+    "info_leak": "Information Disclosure",
+    "vulnerable_component": "Known Vulnerable Component",
+    "deserialization": "Insecure Deserialization",
+    "prototype_pollution": "Prototype Pollution",
+    "csti": "Client-Side Template Injection",
+    "header_injection": "HTTP Header Injection",
 }
 
 # ---------------------------------------------------------------------------
@@ -172,6 +184,12 @@ _IMPACT: dict[str, str] = {
     "broken_access_control": "Unauthorized access to resources and functionality.",
     "mass_assignment": "Privilege escalation, unauthorized data modification.",
     "rate_limiting": "Brute-force attacks, credential stuffing, denial of service.",
+    "info_leak": "Sensitive information disclosure, aids targeted attacks.",
+    "vulnerable_component": "Known CVEs in component, potential remote code execution.",
+    "deserialization": "Remote code execution via crafted serialized objects.",
+    "prototype_pollution": "Client-side code execution, XSS, privilege escalation.",
+    "csti": "Client-side code execution, XSS via template injection.",
+    "header_injection": "HTTP response manipulation, session fixation, XSS.",
 }
 
 
