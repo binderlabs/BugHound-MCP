@@ -652,10 +652,10 @@ def _generate_full_html(
     logo_64 = ""
     if _LOGO_B64:
         logo_48 = f'<img src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound" style="width:48px;height:48px;border-radius:8px;object-fit:cover;">'
-        logo_64 = f'<img src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound" style="width:64px;height:64px;border-radius:10px;object-fit:cover;">'
+        logo_80 = f'<img src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound" style="width:80px;height:80px;border-radius:12px;object-fit:cover;border:2px solid #1f2937;">'
     else:
         logo_48 = '<div style="width:48px;height:48px;background:#14b8a6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;color:#0a0f1a;">B</div>'
-        logo_64 = '<div style="width:64px;height:64px;background:#14b8a6;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:28px;color:#0a0f1a;">B</div>'
+        logo_80 = '<div style="width:80px;height:80px;background:#14b8a6;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:36px;color:#0a0f1a;">B</div>'
 
     # --- Stats strip boxes ---
     stat_boxes = [
@@ -1059,6 +1059,14 @@ def _generate_full_html(
             max-width: 1100px;
             margin: 72px auto 40px;
             padding: 0 24px;
+            width: 100%;
+        }}
+        @media (max-width: 768px) {{
+            .main {{ padding: 0 12px; }}
+            .topnav .nav-center {{ display: none; }}
+            .hero {{ padding: 24px; }}
+            .stats-row {{ flex-direction: column; }}
+            .sev-grid {{ grid-template-columns: 1fr !important; }}
         }}
 
         /* ===== HERO BANNER ===== */
@@ -1506,7 +1514,7 @@ def _generate_full_html(
 
         <!-- ===== HERO BANNER ===== -->
         <div class="hero" id="summary">
-            <div class="hero-logo">{logo_64}</div>
+            <div class="hero-logo">{logo_80}</div>
             <h1>Security Assessment Report</h1>
             <div class="hero-target">{_e(target)}</div>
             <div class="hero-meta">
