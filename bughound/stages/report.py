@@ -97,6 +97,7 @@ _REMEDIATION: dict[str, str] = {
     "prototype_pollution": "Freeze Object.prototype. Validate input object keys. Use Map instead of plain objects.",
     "csti": "Sanitize user input before template rendering. Use strict template escaping.",
     "header_injection": "Validate and sanitize all user input used in HTTP headers. Strip newline characters.",
+    "xxe": "Disable external entity processing in XML parsers. Use defusedxml in Python, disable DTDs in Java/C#.",
 }
 
 # ---------------------------------------------------------------------------
@@ -147,6 +148,7 @@ _VULN_DISPLAY: dict[str, str] = {
     "prototype_pollution": "Prototype Pollution",
     "csti": "Client-Side Template Injection",
     "header_injection": "HTTP Header Injection",
+    "xxe": "XML External Entity Injection (XXE)",
 }
 
 # ---------------------------------------------------------------------------
@@ -190,6 +192,7 @@ _IMPACT: dict[str, str] = {
     "prototype_pollution": "Client-side code execution, XSS, privilege escalation.",
     "csti": "Client-side code execution, XSS via template injection.",
     "header_injection": "HTTP response manipulation, session fixation, XSS.",
+    "xxe": "Arbitrary file read, SSRF, denial of service, potential remote code execution.",
 }
 
 

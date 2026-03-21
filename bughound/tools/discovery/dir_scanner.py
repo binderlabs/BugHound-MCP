@@ -96,6 +96,20 @@ COMMON_PATHS: list[str] = [
     # AWS / Cloud
     "/.aws/credentials", "/aws.yml",
     "/firebase.json", "/.firebase",
+    # Editor backup / temp files
+    "/index.php~", "/config.php~", "/settings.php~",
+    "/wp-config.php~", "/configuration.php~",
+    "/.htaccess~", "/web.config~",
+    "/index.php.bak", "/config.php.bak", "/settings.php.bak",
+    "/index.php.old", "/config.php.old",
+    "/index.php.swp", "/.index.php.swp",
+    "/index.php.orig", "/config.php.orig",
+    "/index.php.save", "/config.php.save",
+    # Source code backups
+    "/app.py.bak", "/main.py.bak", "/server.js.bak",
+    "/application.properties.bak",
+    "/.env.bak.1", "/.env.backup",
+    "/test.php~", "/admin.php~",
     # IDE / Editor files
     "/.idea/", "/.vscode/", "/.project",
     "/nbproject/", "/.settings/",

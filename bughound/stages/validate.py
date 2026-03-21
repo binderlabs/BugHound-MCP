@@ -80,6 +80,7 @@ CVSS_SCORES: dict[str, float] = {
     "default_creds": 9.8,
     "prototype_pollution": 6.1,
     "csti": 6.1,
+    "xxe": 9.1,
 }
 
 # ---------------------------------------------------------------------------

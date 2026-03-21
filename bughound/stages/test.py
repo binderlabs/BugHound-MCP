@@ -457,7 +457,7 @@ async def _run_tests(
     all_test_classes.update([
         "cors", "bac", "rate_limiting", "cve_specific",
         "ssti", "csti", "crlf", "header_injection", "jwt", "graphql",
-        "ssrf", "open_redirect", "rce", "idor",
+        "ssrf", "open_redirect", "rce", "idor", "xxe",
         "prototype_pollution", "info_leak",
         "vulnerable_component", "deserialization", "default_creds",
     ])
@@ -829,6 +829,7 @@ async def _run_tests(
         ("ssti", "post_ssti"),
         ("csti", "csti_test"),
         ("deserialization", "cookie_deserialization"),
+        ("xxe", "xxe_test"),
         ("header_injection", "header_injection_test"),
         ("prototype_pollution", "prototype_pollution_test"),
         ("info_leak", "sensitive_leakage_test"),

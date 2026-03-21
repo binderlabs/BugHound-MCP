@@ -399,6 +399,15 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["default_creds"],
         "description": "Test login forms with common default credential pairs",
     },
+    {
+        "id": "xxe_test",
+        "name": "XML External Entity Injection",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["urls"],
+        "vuln_classes": ["xxe"],
+        "description": "Test for XXE via XML/SOAP POST with file:// entity injection",
+    },
 ]
 
 # Test class → technique ID mapping
@@ -437,6 +446,7 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "prototype_pollution": ["prototype_pollution_test"],
     "info_leak": ["sensitive_leakage_test", "version_disclosure_check", "pii_html_leakage"],
     "vulnerable_component": ["vulnerable_components_check"],
+    "xxe": ["xxe_test"],
 }
 
 
@@ -692,6 +702,8 @@ async def execute_technique(
         return await _exec_viewstate_mac(workspace_id, approved_hosts)
     elif technique_id == "default_credentials_test":
         return await _exec_default_credentials(workspace_id, approved_hosts)
+    elif technique_id == "xxe_test":
+        return await _exec_xxe(workspace_id, approved_hosts, concurrency)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -2898,6 +2910,102 @@ async def _exec_default_credentials(
                 break  # Found working creds, stop
         except Exception:
             pass
+
+    return findings
+
+
+async def _exec_xxe(
+    workspace_id: str, approved_hosts: set[str], concurrency: int,
+) -> list[dict[str, Any]]:
+    """Test for XXE via XML/SOAP POST with file:// entity injection."""
+    from urllib.parse import urlparse
+    from bughound.tools.testing.injection_tester import test_xxe
+
+    findings: list[dict[str, Any]] = []
+
+    # Collect candidate URLs from crawled data
+    raw_crawled = await workspace.read_data(workspace_id, "urls/crawled.json")
+    crawled_items = _extract_items(raw_crawled)
+    candidate_urls: set[str] = set()
+
+    # Filter for XML/SOAP/API endpoints
+    _XXE_URL_KEYWORDS = ("xml", "soap", "api", "parse", "upload", "import", "feed", "rss", "wsdl")
+    for item in crawled_items:
+        url = item.get("url", item) if isinstance(item, dict) else str(item)
+        if not isinstance(url, str) or not url.startswith("http"):
+            continue
+        url_lower = url.lower()
+        if any(kw in url_lower for kw in _XXE_URL_KEYWORDS):
+            try:
+                host = (urlparse(url).hostname or "").lower()
+                if host in approved_hosts:
+                    candidate_urls.add(url)
+            except Exception:
+                continue
+
+    # Also test POST endpoints from param classification (they might accept XML)
+    pc = await _load_param_classification(workspace_id)
+    if pc and isinstance(pc[0], dict):
+        for ep in pc[0].get("post_endpoints", []):
+            url = ep.get("url", "") if isinstance(ep, dict) else ""
+            if url and url.startswith("http"):
+                try:
+                    host = (urlparse(url).hostname or "").lower()
+                    if host in approved_hosts:
+                        candidate_urls.add(url)
+                except Exception:
+                    continue
+
+    # Also test root URLs of live hosts
+    raw_hosts = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    live_items = _extract_items(raw_hosts)
+    for h in live_items:
+        if not isinstance(h, dict):
+            continue
+        url = h.get("url", "")
+        if url:
+            try:
+                host = (urlparse(url).hostname or "").lower()
+                if host in approved_hosts:
+                    candidate_urls.add(url)
+            except Exception:
+                continue
+
+    # Limit to 20 URLs max
+    urls_to_test = sorted(candidate_urls)[:20]
+
+    if not urls_to_test:
+        return findings
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _test_one(url: str) -> dict[str, Any] | None:
+        async with sem:
+            try:
+                result = await test_xxe(url)
+                if result.get("vulnerable"):
+                    return {
+                        "vulnerability_class": "xxe",
+                        "tool": "injection_tester",
+                        "technique_id": "xxe_test",
+                        "host": _host_from_url(url),
+                        "endpoint": url,
+                        "severity": "critical",
+                        "description": f"XXE injection via {result.get('technique', 'unknown')} at {url}",
+                        "evidence": result.get("evidence", ""),
+                        "payload_used": result.get("payload", ""),
+                        "confidence": result.get("confidence", "medium"),
+                        "needs_validation": result.get("confidence") != "high",
+                    }
+            except Exception as exc:
+                logger.debug("xxe_test_error", url=url, error=str(exc))
+            return None
+
+    tasks = [_test_one(url) for url in urls_to_test]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    for r in results:
+        if isinstance(r, dict):
+            findings.append(r)
 
     return findings
 
