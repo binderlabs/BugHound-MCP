@@ -705,25 +705,10 @@ async def _run_tests(
         phase_stats["4A4_cve_scan"] = 0
 
     # =================================================================
-    # Phase 4B: Deep Directory Fuzzing (35-40%)
+    # Phase 4B: Deep Directory Fuzzing — now runs in Stage 2 (discover)
     # =================================================================
-    if "content_discovery" in all_test_classes:
-        await _progress(35, "Phase 4B: Deep directory fuzzing", "ffuf")
-        try:
-            dirfuzz_findings = await techniques.execute_technique(
-                "deep_dirfuzz", workspace_id, sorted_targets,
-            )
-            for f in dirfuzz_findings:
-                f["finding_id"] = _make_finding_id(f)
-                f.setdefault("validated", False)
-                f.setdefault("validation_status", None)
-            all_findings.extend(dirfuzz_findings)
-            phase_stats["4B_dirfuzz"] = len(dirfuzz_findings)
-        except Exception as exc:
-            warnings.append(f"Phase 4B dirfuzz error: {exc}")
-            phase_stats["4B_dirfuzz"] = 0
-    else:
-        phase_stats["4B_dirfuzz"] = 0
+    # Phase 4B was deep dir fuzzing — now moved to Stage 2
+    phase_stats["4B_dirfuzz"] = 0
 
     # =================================================================
     # Phase 4C: Deep Parameter Discovery (40-45%)

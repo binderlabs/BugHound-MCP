@@ -317,6 +317,22 @@ async def _run_discover(
             url_tool_counts.setdefault(tool_name, 0)
             warnings.append(f"{tool_name}: {exc}")
 
+    # Passive endpoint sources (AlienVault OTX, URLScan, Common Crawl)
+    try:
+        from bughound.tools.recon.passive_sources import gather_endpoints
+        target_domain = meta.target.replace("http://", "").replace("https://", "").strip("/")
+        ep_results = await gather_endpoints(target_domain)
+        passive_url_count = 0
+        for source_name, urls in ep_results.items():
+            for url_str in urls:
+                if url_str and url_str.startswith("http"):
+                    all_urls.append({"url": url_str, "source": source_name})
+                    passive_url_count += 1
+        if passive_url_count > 0:
+            logger.info("discover.passive_endpoints", count=passive_url_count, sources=list(ep_results.keys()))
+    except Exception as exc:
+        warnings.append(f"Passive endpoint sources: {exc}")
+
     # Active crawler — katana light/deep by target type, fallback to gospider
     crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
     katana_forms: list[dict[str, Any]] = []
@@ -746,7 +762,7 @@ async def _run_discover(
     # Phase 2F: CORS Probing
     # ===================================================================
     if progress_cb:
-        await progress_cb(72, "Testing CORS configuration", "cors")  # 2E
+        await progress_cb(68, "Testing CORS configuration", "cors")  # 2E
 
     cors_results: list[dict[str, Any]] = []
     try:
@@ -782,7 +798,7 @@ async def _run_discover(
     # Phase 2F: Light Directory Discovery
     # ===================================================================
     if progress_cb:
-        await progress_cb(82, "Light directory discovery", "dir_scanner")  # 2F
+        await progress_cb(72, "Light directory discovery", "dir_scanner")  # 2F
 
     dir_results: dict[str, list[dict[str, Any]]] = {}
     try:
@@ -843,10 +859,79 @@ async def _run_discover(
             )
 
     # ===================================================================
+    # Phase 2F-deep: Deep Directory Fuzzing with ffuf
+    # ===================================================================
+    from bughound.tools.scanning import ffuf
+    if ffuf.is_available():
+        if progress_cb:
+            await progress_cb(78, "Deep directory fuzzing with ffuf", "ffuf")
+        try:
+            for host_url in live_host_urls[:5]:  # limit to first 5 hosts
+                ffuf_result = await ffuf.execute(
+                    host_url,
+                    wordlist_size="small",
+                    timeout=120,
+                )
+                if ffuf_result.success and ffuf_result.results:
+                    for entry in ffuf_result.results:
+                        if isinstance(entry, dict):
+                            found_url = entry.get("url", "")
+                            if found_url:
+                                all_urls.append({"url": found_url, "source": "ffuf"})
+                                # Also add to dir_results for the workspace
+                                dir_results.setdefault(host_url.split("//")[-1].split("/")[0], []).append(entry)
+        except Exception as exc:
+            warnings.append(f"ffuf dir fuzzing: {exc}")
+
+    # ===================================================================
+    # Phase 2F-param: Parameter Name Fuzzing with ffuf
+    # ===================================================================
+    if ffuf.is_available():
+        try:
+            # Find API-like endpoints to fuzz for hidden params
+            api_endpoints = [u for u in live_host_urls if any(
+                kw in u.lower() for kw in ("/api", "/v1", "/v2", "/graphql")
+            )]
+            if not api_endpoints:
+                # Use root URLs as fallback
+                api_endpoints = live_host_urls[:3]
+
+            param_wordlist = None
+            from pathlib import Path
+            # Check for SecLists param names
+            param_paths = [
+                Path("/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt"),
+                Path("/usr/share/wordlists/dirb/common.txt"),
+            ]
+            for p in param_paths:
+                if p.exists():
+                    param_wordlist = str(p)
+                    break
+
+            if param_wordlist:
+                if progress_cb:
+                    await progress_cb(80, "Fuzzing parameter names", "ffuf")
+                for api_url in api_endpoints[:3]:
+                    param_fuzz_result = await ffuf.execute(
+                        api_url.rstrip("/") + "/FUZZ",
+                        wordlist=param_wordlist,
+                        wordlist_size="small",
+                        timeout=60,
+                    )
+                    if param_fuzz_result.success and param_fuzz_result.results:
+                        for entry in param_fuzz_result.results:
+                            if isinstance(entry, dict):
+                                found_url = entry.get("url", "")
+                                if found_url:
+                                    all_urls.append({"url": found_url, "source": "ffuf_param"})
+        except Exception as exc:
+            warnings.append(f"Parameter fuzzing: {exc}")
+
+    # ===================================================================
     # Phase 2G: Light Parameter Discovery (arjun)
     # ===================================================================
     if progress_cb:
-        await progress_cb(90, "Light parameter discovery", "arjun")  # 2G
+        await progress_cb(85, "Light parameter discovery", "arjun")  # 2G
 
     hidden_params: list[dict[str, Any]] = []
     if tool_runner.is_available("arjun"):
@@ -893,7 +978,7 @@ async def _run_discover(
     # Phase 2H: Parameter Classification
     # ===================================================================
     if progress_cb:
-        await progress_cb(95, "Classifying parameters by vulnerability type", "param_classifier")  # 2H
+        await progress_cb(92, "Classifying parameters by vulnerability type", "param_classifier")  # 2H
 
     try:
         # Read all parameter sources
@@ -938,7 +1023,7 @@ async def _run_discover(
 
         # Phase 2: Live reflection probes — detect XSS/SQLi/LFI by behavior
         if progress_cb:
-            await progress_cb(96, "Probing params for reflection & SQL errors", "probe")
+            await progress_cb(94, "Probing params for reflection & SQL errors", "probe")
         try:
             # Scale probe limits for broad domain
             live_count = len([h for h in live_hosts if not h.get("failed")])

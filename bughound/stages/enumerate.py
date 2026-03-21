@@ -93,6 +93,27 @@ async def enumerate_light(workspace_id: str) -> dict[str, Any]:
                 all_subs.add(sub)
                 sources.setdefault(sub, []).append(name)
 
+    # Tool timing summary (initialized here so passive sources can append)
+    tool_timing: dict[str, str] = {
+        name: f"{r.execution_time_seconds}s" if r.success else "failed"
+        for name, r in tool_results.items()
+    }
+
+    # Also run passive API sources (no installation needed)
+    try:
+        from bughound.tools.recon.passive_sources import gather_subdomains
+        api_results = await gather_subdomains(target)
+        for source_name, subs in api_results.items():
+            for sub in subs:
+                sub = sub.strip().lower()
+                if sub:
+                    all_subs.add(sub)
+                    sources.setdefault(sub, []).append(source_name)
+            if subs:
+                tool_timing[source_name] = f"{len(subs)} found"
+    except Exception as exc:
+        warnings.append(f"Passive API sources: {exc}")
+
     deduped = sorted(all_subs)
 
     if not deduped:
@@ -158,12 +179,6 @@ async def enumerate_light(workspace_id: str) -> dict[str, Any]:
     files_written = ["subdomains/all.txt", "subdomains/sources.json", "dns/records.json"]
     if wildcards:
         files_written.append("dns/wildcards.json")
-
-    # --- Tool timing summary ---
-    tool_timing = {
-        name: f"{r.execution_time_seconds}s" if r.success else "failed"
-        for name, r in tool_results.items()
-    }
 
     return {
         "status": "success",
