@@ -582,296 +582,69 @@ def _date_str() -> str:
 # ===================================================================
 
 
-_CSS = """\
-*{margin:0;padding:0;box-sizing:border-box;}
-body{
-    background:#ffffff;
-    color:#1a1a2e;
-    font-family:'Georgia','Times New Roman',serif;
-    line-height:1.7;
-    max-width:900px;
-    margin:0 auto;
-    padding:40px;
-}
-h1,h2,h3{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;}
-h1{font-size:28px;border-bottom:3px solid #1a1a2e;padding-bottom:10px;margin-bottom:8px;}
-h2{font-size:20px;border-bottom:1px solid #e0e0e0;padding-bottom:6px;margin-top:40px;margin-bottom:16px;color:#1a1a2e;}
-h3{font-size:16px;margin:12px 0 8px 0;color:#333;}
-
-a{color:#0366d6;text-decoration:none;}
-a:hover{text-decoration:underline;}
-
-.report-header{margin-bottom:32px;}
-.report-header .logo-row{display:flex;align-items:center;gap:12px;margin-bottom:8px;}
-.report-header .logo-img{width:36px;height:36px;border-radius:50%;object-fit:cover;}
-.report-header .title{font-size:28px;font-weight:700;color:#1a1a2e;border:none;margin:0;padding:0;}
-.report-header .subtitle{font-size:14px;color:#555;margin-top:4px;}
-.report-meta{display:grid;grid-template-columns:auto 1fr;gap:4px 16px;font-size:14px;margin-top:12px;color:#333;}
-.report-meta .label{font-weight:600;color:#555;}
-
-.risk-banner{
-    padding:16px 24px;border-radius:4px;
-    font-size:18px;font-weight:700;margin:24px 0;
-}
-.risk-critical{background:#f8d7da;color:#721c24;border:1px solid #f5c6cb;}
-.risk-high{background:#fff3cd;color:#856404;border:1px solid #ffeeba;}
-.risk-medium{background:#fff3cd;color:#856404;border:1px solid #ffeeba;}
-.risk-low{background:#d4edda;color:#155724;border:1px solid #c3e6cb;}
-.risk-info{background:#e2e3e5;color:#383d41;border:1px solid #d6d8db;}
-
-.summary-text{font-size:15px;line-height:1.8;margin:16px 0;color:#333;}
-
-.stats-grid{
-    display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
-    gap:12px;margin:20px 0;
-}
-.stat-box{
-    text-align:center;padding:16px;
-    border:1px solid #e0e0e0;border-radius:4px;background:#fafafa;
-}
-.stat-box .number{font-size:36px;font-weight:700;font-family:'Segoe UI',system-ui,sans-serif;}
-.stat-box .label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;}
-.stat-box.critical .number{color:#dc3545;}
-.stat-box.high .number{color:#fd7e14;}
-.stat-box.medium .number{color:#ffc107;}
-.stat-box.confirmed .number{color:#28a745;}
-
-.severity-bars{margin:20px 0;}
-.sev-bar-row{display:flex;align-items:center;gap:12px;margin:6px 0;font-size:14px;}
-.sev-bar-label{width:80px;text-align:right;font-weight:600;font-family:'Segoe UI',system-ui,sans-serif;}
-.sev-bar-track{flex:1;height:22px;background:#f0f0f0;border-radius:3px;overflow:hidden;}
-.sev-bar-fill{height:100%;border-radius:3px;min-width:2px;}
-.sev-bar-count{width:40px;font-weight:600;font-family:'Segoe UI',system-ui,sans-serif;}
-
-.toc{margin:20px 0;padding:0;}
-.toc li{list-style:none;padding:4px 0;font-size:14px;border-bottom:1px solid #f0f0f0;}
-.toc li a{display:flex;align-items:center;gap:8px;}
-.toc .toc-num{font-weight:700;color:#555;min-width:30px;}
-
-.severity-badge{
-    display:inline-block;padding:2px 10px;border-radius:3px;
-    font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;
-    font-family:'Segoe UI',system-ui,sans-serif;
-}
-.badge-critical{background:#dc3545;color:white;}
-.badge-high{background:#fd7e14;color:white;}
-.badge-medium{background:#ffc107;color:#333;}
-.badge-low{background:#28a745;color:white;}
-.badge-info{background:#6c757d;color:white;}
-
-.status-badge{
-    display:inline-block;padding:2px 8px;border-radius:3px;
-    font-size:11px;font-weight:600;text-transform:uppercase;
-    font-family:'Segoe UI',system-ui,sans-serif;
-}
-.status-confirmed{background:#d4edda;color:#155724;}
-.status-pending{background:#fff3cd;color:#856404;}
-.status-manual{background:#cce5ff;color:#004085;}
-
-.finding-card{
-    border:1px solid #e0e0e0;border-left:4px solid #dc3545;
-    border-radius:4px;padding:20px;margin:20px 0;
-    page-break-inside:avoid;
-}
-.finding-card.high{border-left-color:#fd7e14;}
-.finding-card.medium{border-left-color:#ffc107;}
-.finding-card.low{border-left-color:#28a745;}
-.finding-card.info{border-left-color:#6c757d;}
-
-.finding-card .finding-title{
-    font-size:17px;font-weight:700;margin-bottom:12px;
-    font-family:'Segoe UI',system-ui,sans-serif;
-}
-.finding-card .finding-meta{
-    display:grid;grid-template-columns:auto 1fr;gap:4px 16px;
-    font-size:13px;margin-bottom:16px;color:#444;
-}
-.finding-card .finding-meta .label{font-weight:600;color:#666;}
-
-.evidence-block{
-    background:#f8f9fa;border:1px solid #e9ecef;border-radius:3px;
-    padding:12px;font-family:'Consolas','Monaco',monospace;
-    font-size:13px;white-space:pre-wrap;word-break:break-all;
-    margin:8px 0;max-height:300px;overflow-y:auto;
-}
-
-.curl-command{
-    background:#1a1a2e;color:#00ff41;padding:12px;border-radius:3px;
-    font-family:'Consolas','Monaco',monospace;font-size:13px;
-    overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-all;
-}
-
-.repro-steps{margin:8px 0;padding-left:20px;}
-.repro-steps li{font-size:14px;margin:4px 0;}
-
-.remediation-block{
-    background:#f0f7ff;border:1px solid #cce5ff;border-radius:3px;
-    padding:12px;margin:8px 0;font-size:14px;color:#004085;
-}
-
-.impact-block{
-    background:#fff8e1;border:1px solid #ffeeba;border-radius:3px;
-    padding:12px;margin:8px 0;font-size:14px;color:#856404;
-}
-
-.tech-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;}
-.tech-table th,.tech-table td{border:1px solid #e0e0e0;padding:8px 12px;text-align:left;}
-.tech-table th{background:#f8f9fa;font-weight:600;font-family:'Segoe UI',system-ui,sans-serif;}
-.tech-table tr:nth-child(even){background:#fafafa;}
-
-.footer{
-    margin-top:48px;padding-top:16px;border-top:2px solid #e0e0e0;
-    font-size:12px;color:#888;text-align:center;
-}
-
-@media print{
-    body{padding:20px;font-size:12px;}
-    .finding-card{page-break-inside:avoid;}
-    .curl-command{background:#f0f0f0;color:#333;}
-    .risk-banner{page-break-after:avoid;}
-    h2{page-break-after:avoid;}
-    .stats-grid{page-break-inside:avoid;}
-}
-"""
-
-
 def _generate_full_html(
     target: str,
     workspace_id: str,
     processed: dict[str, Any],
     data: dict[str, Any],
 ) -> str:
-    """Generate the full professional HTML security assessment report."""
+    """Generate the full professional HTML security assessment report.
+
+    Produces a self-contained HTML file with:
+    - Dark sidebar with navigation, scan metadata, severity counts
+    - Main content with executive summary, Chart.js donut, findings,
+      technologies, testing coverage
+    - Tailwind CSS + Chart.js via CDN
+    - Inter + JetBrains Mono fonts
+    - JavaScript for filtering, smooth scroll, copy-to-clipboard
+    - Print-optimized CSS
+    """
     findings = processed["findings"]
     by_severity = processed["by_severity"]
     risk_level = processed["risk_level"]
     now = _now_str()
     date = _date_str()
 
-    parts: list[str] = []
+    total = processed["total"]
+    confirmed_count = processed["confirmed_count"]
+    pending_count = processed["pending_count"]
+    fp_count = processed["false_positive_count"]
 
-    # DOCTYPE and head
-    parts.append("<!DOCTYPE html>")
-    parts.append('<html lang="en">')
-    parts.append("<head>")
-    parts.append('<meta charset="UTF-8">')
-    parts.append('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
-    parts.append(f"<title>Security Assessment - {_e(target)}</title>")
-    parts.append(f"<style>{_CSS}</style>")
-    parts.append("</head>")
-    parts.append("<body>")
+    # Build severity data for Chart.js
+    chart_data = json.dumps([
+        by_severity.get("critical", 0),
+        by_severity.get("high", 0),
+        by_severity.get("medium", 0),
+        by_severity.get("low", 0),
+        by_severity.get("info", 0),
+    ])
 
-    # --- Header ---
-    parts.append('<div class="report-header">')
-    parts.append('<div class="logo-row">')
-    if _LOGO_B64:
-        parts.append(
-            f'<img class="logo-img" src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound">'
-        )
-    parts.append('<span class="title">Security Assessment Report</span>')
-    parts.append("</div>")
-    parts.append(f'<div class="subtitle">Generated by BugHound &mdash; AI-Powered Bug Bounty Reconnaissance</div>')
-    parts.append('<div class="report-meta">')
-    parts.append(f'<span class="label">Target:</span><span>{_e(target)}</span>')
-    parts.append(f'<span class="label">Date:</span><span>{_e(date)}</span>')
-    parts.append(f'<span class="label">Workspace:</span><span>{_e(workspace_id)}</span>')
-    parts.append(f'<span class="label">Report Time:</span><span>{_e(now)}</span>')
-    parts.append("</div>")
-    parts.append("</div>")
+    # Risk banner colors
+    _RISK_BANNER = {
+        "CRITICAL": ("bg-red-900", "text-white"),
+        "HIGH": ("bg-red-600", "text-white"),
+        "MEDIUM": ("bg-amber-500", "text-white"),
+        "LOW": ("bg-blue-600", "text-white"),
+        "INFO": ("bg-slate-500", "text-white"),
+    }
+    risk_bg, risk_text = _RISK_BANNER.get(risk_level, ("bg-slate-500", "text-white"))
 
-    # --- Executive Summary ---
-    parts.append('<h2 id="executive-summary">Executive Summary</h2>')
+    # Severity border/badge mapping
+    _SEV_CSS = {
+        "critical": {"border": "border-red-900", "badge_bg": "bg-red-900", "badge_text": "text-white", "card_bg": "bg-red-50"},
+        "high": {"border": "border-red-600", "badge_bg": "bg-red-600", "badge_text": "text-white", "card_bg": "bg-red-50"},
+        "medium": {"border": "border-amber-600", "badge_bg": "bg-amber-600", "badge_text": "text-white", "card_bg": "bg-amber-50"},
+        "low": {"border": "border-blue-600", "badge_bg": "bg-blue-600", "badge_text": "text-white", "card_bg": "bg-blue-50"},
+        "info": {"border": "border-emerald-600", "badge_bg": "bg-emerald-600", "badge_text": "text-white", "card_bg": "bg-green-50"},
+    }
 
-    risk_css = f"risk-{risk_level.lower()}"
-    parts.append(
-        f'<div class="risk-banner {risk_css}">'
-        f"Overall Risk Level: {_e(risk_level)}"
-        f"</div>"
-    )
-
-    summary_text = _auto_summary(target, processed)
-    parts.append(f'<p class="summary-text">{_e(summary_text)}</p>')
-
-    # Stats grid
-    parts.append('<div class="stats-grid">')
-    parts.append(
-        f'<div class="stat-box">'
-        f'<div class="number">{processed["total"]}</div>'
-        f'<div class="label">Total Findings</div>'
-        f"</div>"
-    )
-    parts.append(
-        f'<div class="stat-box critical">'
-        f'<div class="number">{by_severity.get("critical", 0)}</div>'
-        f'<div class="label">Critical</div>'
-        f"</div>"
-    )
-    parts.append(
-        f'<div class="stat-box high">'
-        f'<div class="number">{by_severity.get("high", 0)}</div>'
-        f'<div class="label">High</div>'
-        f"</div>"
-    )
-    parts.append(
-        f'<div class="stat-box confirmed">'
-        f'<div class="number">{processed["confirmed_count"]}</div>'
-        f'<div class="label">Confirmed</div>'
-        f"</div>"
-    )
-    parts.append(
-        f'<div class="stat-box">'
-        f'<div class="number">{processed["pending_count"]}</div>'
-        f'<div class="label">Needs Review</div>'
-        f"</div>"
-    )
-    parts.append("</div>")
-
-    # --- Severity Breakdown ---
-    parts.append('<h2 id="severity-breakdown">Severity Breakdown</h2>')
+    # Severity bar max
     max_count = max(by_severity.values()) if by_severity else 1
     if max_count == 0:
         max_count = 1
-    parts.append('<div class="severity-bars">')
-    for sev in ("critical", "high", "medium", "low", "info"):
-        count = by_severity.get(sev, 0)
-        pct = int((count / max_count) * 100) if max_count else 0
-        color = _SEV_COLORS.get(sev, "#6c757d")
-        parts.append(
-            f'<div class="sev-bar-row">'
-            f'<span class="sev-bar-label">{sev.title()}</span>'
-            f'<div class="sev-bar-track">'
-            f'<div class="sev-bar-fill" style="width:{pct}%;background:{color};"></div>'
-            f"</div>"
-            f'<span class="sev-bar-count">{count}</span>'
-            f"</div>"
-        )
-    parts.append("</div>")
 
-    # --- Table of Contents ---
-    parts.append('<h2 id="toc">Findings Overview</h2>')
-    parts.append('<ol class="toc">')
-    for i, f in enumerate(findings, 1):
-        sev = f.get("severity", "info").lower()
-        vc = f.get("vulnerability_class", "other")
-        title = _display_name(vc)
-        endpoint = f.get("endpoint", "")
-        # Truncate long endpoints for TOC
-        ep_display = endpoint[:80] + "..." if len(endpoint) > 80 else endpoint
-        anchor = f"finding-{i}"
-        parts.append(
-            f"<li>"
-            f'<a href="#{anchor}">'
-            f'<span class="toc-num">#{i}</span>'
-            f'<span class="severity-badge {_severity_badge_class(sev)}">{_e(sev)}</span>'
-            f" {_e(title)}"
-            f' <span style="color:#888;font-size:12px;margin-left:auto;">{_e(ep_display)}</span>'
-            f"</a>"
-            f"</li>"
-        )
-    parts.append("</ol>")
-
-    # --- Detailed Findings ---
-    parts.append('<h2 id="detailed-findings">Detailed Findings</h2>')
+    # --- Build findings HTML ---
+    findings_html_parts: list[str] = []
     for i, f in enumerate(findings, 1):
         sev = f.get("severity", "info").lower()
         vc = f.get("vulnerability_class", "other")
@@ -890,141 +663,694 @@ def _generate_full_html(
         impact = f.get("impact", "") or _IMPACT.get(vc, "")
         remediation = _REMEDIATION.get(vc, "Review and remediate according to security best practices.")
         host = f.get("host", "")
+        instances = f.get("instances", 0)
 
-        anchor = f"finding-{i}"
-        card_class = _finding_card_class(sev)
-
-        status_css = "status-confirmed" if status == "CONFIRMED" else (
-            "status-manual" if status == "NEEDS_MANUAL_REVIEW" else "status-pending"
+        css = _SEV_CSS.get(sev, _SEV_CSS["info"])
+        status_badge = (
+            '<span class="inline-block px-2 py-0.5 rounded text-xs font-bold uppercase bg-emerald-100 text-emerald-800">CONFIRMED</span>'
+            if status == "CONFIRMED"
+            else '<span class="inline-block px-2 py-0.5 rounded text-xs font-bold uppercase bg-amber-100 text-amber-800">PENDING</span>'
         )
 
-        parts.append(f'<div class="{card_class}" id="{anchor}">')
-        parts.append(
-            f'<div class="finding-title">'
-            f'#{i} <span class="severity-badge {_severity_badge_class(sev)}">{_e(sev)}</span> '
-            f"{_e(title)}"
-            f"</div>"
-        )
-
-        # Meta grid
-        parts.append('<div class="finding-meta">')
+        # Meta rows
+        meta_rows = []
         if endpoint:
-            parts.append(f'<span class="label">Endpoint:</span><span>{_e(endpoint)}</span>')
-        if param:
-            parts.append(f'<span class="label">Parameter:</span><span>{_e(param)}</span>')
+            meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap align-top">Endpoint</td><td class="py-1 font-mono text-sm break-all">{_e(endpoint)}</td></tr>')
         if host:
-            parts.append(f'<span class="label">Host:</span><span>{_e(host)}</span>')
+            meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap">Host</td><td class="py-1">{_e(host)}</td></tr>')
         if tool:
-            parts.append(f'<span class="label">Tool:</span><span>{_e(tool)}</span>')
+            meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap">Tool</td><td class="py-1">{_e(tool)}</td></tr>')
         if technique:
-            parts.append(f'<span class="label">Technique:</span><span>{_e(technique)}</span>')
-        parts.append(
-            f'<span class="label">Status:</span>'
-            f'<span><span class="status-badge {status_css}">{_e(status)}</span></span>'
-        )
+            meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap">Technique</td><td class="py-1">{_e(technique)}</td></tr>')
+        if param:
+            meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap">Parameter</td><td class="py-1 font-mono">{_e(param)}</td></tr>')
+        meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap">Status</td><td class="py-1">{status_badge}</td></tr>')
         if cvss:
-            parts.append(f'<span class="label">CVSS 3.1:</span><span>{_e(str(cvss))}</span>')
-        parts.append("</div>")
+            meta_rows.append(f'<tr><td class="font-semibold text-slate-500 pr-4 py-1 whitespace-nowrap">CVSS 3.1</td><td class="py-1 font-bold">{_e(str(cvss))}</td></tr>')
+        meta_html = "\n".join(meta_rows)
 
-        # Description
-        if description:
-            parts.append(f"<h3>Description</h3>")
-            parts.append(f"<p>{_e(description)}</p>")
-
-        # Evidence
+        # Evidence block
+        evidence_html = ""
         if evidence:
-            parts.append("<h3>Evidence</h3>")
-            parts.append(f'<div class="evidence-block">{_e(evidence)}</div>')
+            evidence_html = f'''
+            <div class="mt-4">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Evidence</h4>
+                <div class="bg-slate-900 rounded-lg p-4 overflow-auto max-h-64">
+                    <code class="text-green-400 text-xs font-mono whitespace-pre-wrap break-all">{_e(evidence)}</code>
+                </div>
+            </div>'''
 
-        # Payload
+        # Payload block
+        payload_html = ""
         if payload:
-            parts.append("<h3>Payload Used</h3>")
-            parts.append(f'<div class="evidence-block">{_e(payload)}</div>')
+            payload_html = f'''
+            <div class="mt-4">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Payload Used</h4>
+                <div class="bg-slate-900 rounded-lg p-4 overflow-auto">
+                    <code class="text-amber-400 text-xs font-mono whitespace-pre-wrap break-all">{_e(payload)}</code>
+                </div>
+            </div>'''
 
-        # Reproduction
+        # Curl reproduction block
+        curl_html = ""
         if curl_cmd:
-            parts.append("<h3>Reproduction</h3>")
-            parts.append(f'<div class="curl-command">{_e(curl_cmd)}</div>')
+            curl_id = f"curl-{i}"
+            curl_html = f'''
+            <div class="mt-4">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Reproduction Command</h4>
+                <div class="bg-slate-900 rounded-lg p-4 relative group">
+                    <code id="{curl_id}" class="text-green-400 text-xs font-mono whitespace-pre-wrap break-all">{_e(curl_cmd)}</code>
+                    <button onclick="copyCmd('{curl_id}')" class="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white px-2 py-1 rounded text-xs font-bold">COPY</button>
+                </div>
+            </div>'''
 
+        # Repro steps
+        repro_html = ""
         if repro_steps:
-            parts.append("<h3>Steps to Reproduce</h3>")
-            parts.append('<ol class="repro-steps">')
-            for step in repro_steps:
-                parts.append(f"<li>{_e(step)}</li>")
-            parts.append("</ol>")
+            steps_li = "\n".join(f"<li class='text-sm text-slate-600 mb-1'>{_e(s)}</li>" for s in repro_steps)
+            repro_html = f'''
+            <div class="mt-4">
+                <h4 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Steps to Reproduce</h4>
+                <ol class="list-decimal list-inside space-y-1 pl-2">{steps_li}</ol>
+            </div>'''
 
-        # Impact
+        # Impact callout
+        impact_html = ""
         if impact:
-            parts.append("<h3>Impact</h3>")
-            parts.append(f'<div class="impact-block">{_e(impact)}</div>')
+            impact_html = f'''
+            <div class="mt-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <h4 class="text-xs font-bold text-amber-700 uppercase tracking-wider mb-1">Impact</h4>
+                <p class="text-sm text-amber-800">{_e(impact)}</p>
+            </div>'''
 
-        # Remediation
-        parts.append("<h3>Remediation</h3>")
-        parts.append(f'<div class="remediation-block">{_e(remediation)}</div>')
+        # Remediation callout
+        remediation_html = f'''
+            <div class="mt-4 bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+                <h4 class="text-xs font-bold text-emerald-700 uppercase tracking-wider mb-1">Remediation</h4>
+                <p class="text-sm text-emerald-800">{_e(remediation)}</p>
+            </div>'''
 
-        parts.append("</div>")  # close finding-card
+        # Instances badge
+        instances_html = ""
+        if instances and instances > 1:
+            instances_html = f'<span class="ml-2 text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">{instances} instances</span>'
 
-    # --- Technologies ---
+        # Description section
+        desc_html = ""
+        if description:
+            desc_html = f'<p class="text-sm text-slate-600 leading-relaxed mt-3">{_e(description)}</p>'
+
+        findings_html_parts.append(f'''
+        <div class="finding-card bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow mb-6" data-severity="{sev}" id="finding-{i}">
+            <div class="border-l-4 {css['border']}">
+                <div class="p-5 border-b border-slate-100 flex flex-wrap items-center gap-3">
+                    <span class="text-sm font-bold text-slate-400">#{i}</span>
+                    <span class="inline-block px-2.5 py-1 rounded text-xs font-bold uppercase tracking-wide {css['badge_bg']} {css['badge_text']}">{_e(sev)}</span>
+                    <h3 class="text-lg font-bold text-slate-800">{_e(title)}</h3>
+                    {instances_html}
+                </div>
+                <div class="p-5">
+                    <table class="text-sm">{meta_html}</table>
+                    {desc_html}
+                    {evidence_html}
+                    {payload_html}
+                    {curl_html}
+                    {repro_html}
+                    {impact_html}
+                    {remediation_html}
+                </div>
+            </div>
+        </div>''')
+
+    findings_html = "\n".join(findings_html_parts)
+
+    # --- Build technologies HTML ---
     technologies = data.get("technologies", [])
-    if technologies:
-        parts.append('<h2 id="technologies">Technologies Detected</h2>')
-        parts.append('<table class="tech-table">')
-        parts.append("<thead><tr><th>Host</th><th>Technologies</th><th>Flags</th></tr></thead>")
-        parts.append("<tbody>")
-        for t in technologies[:50]:
-            if not isinstance(t, dict):
-                continue
-            t_host = t.get("host", t.get("url", ""))
-            techs = t.get("technologies", t.get("tech", []))
-            if isinstance(techs, list):
-                tech_str = ", ".join(str(x) for x in techs)
-            else:
-                tech_str = str(techs)
-            flags = t.get("flags", t.get("security_flags", []))
-            if isinstance(flags, list):
-                flags_str = ", ".join(str(x) for x in flags)
-            else:
-                flags_str = str(flags) if flags else ""
-            parts.append(
-                f"<tr>"
-                f"<td>{_e(t_host)}</td>"
-                f"<td>{_e(tech_str)}</td>"
-                f"<td>{_e(flags_str)}</td>"
-                f"</tr>"
-            )
-        parts.append("</tbody></table>")
+    tech_rows: list[str] = []
+    for t in technologies[:50]:
+        if not isinstance(t, dict):
+            continue
+        t_host = t.get("host", t.get("url", ""))
+        techs = t.get("technologies", t.get("tech", []))
+        if isinstance(techs, list):
+            tech_str = ", ".join(str(x) for x in techs)
+        else:
+            tech_str = str(techs)
+        flags = t.get("flags", t.get("security_flags", []))
+        if isinstance(flags, list):
+            flags_str = ", ".join(str(x) for x in flags)
+        else:
+            flags_str = str(flags) if flags else ""
+        flag_badge = ""
+        if flags_str and "OLD_TECH" in flags_str.upper():
+            flag_badge = '<span class="inline-block px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-700">OLD_TECH</span>'
+        elif flags_str:
+            flag_badge = f'<span class="text-xs text-slate-500">{_e(flags_str)}</span>'
+        tech_rows.append(
+            f'<tr class="border-b border-slate-100 hover:bg-slate-50/50">'
+            f'<td class="px-4 py-3 font-mono text-sm">{_e(t_host)}</td>'
+            f'<td class="px-4 py-3 text-sm">{_e(tech_str)}</td>'
+            f'<td class="px-4 py-3">{flag_badge}</td>'
+            f'</tr>'
+        )
+    tech_rows_html = "\n".join(tech_rows)
+    tech_section_html = ""
+    if tech_rows:
+        tech_section_html = f'''
+        <section id="technologies" class="mb-12">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 pb-3 border-b border-slate-200">Technologies Detected</h2>
+            <div class="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200">
+                            <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Host</th>
+                            <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Technologies</th>
+                            <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>{tech_rows_html}</tbody>
+                </table>
+            </div>
+        </section>'''
 
-    # --- Testing Coverage ---
+    # --- Build testing coverage HTML ---
     attack_surface = data.get("attack_surface", {})
     test_classes = attack_surface.get("suggested_test_classes", [])
-    if test_classes:
-        parts.append('<h2 id="testing-coverage">Testing Coverage</h2>')
-        parts.append('<table class="tech-table">')
-        parts.append("<thead><tr><th>Test Class</th><th>Priority</th><th>Reason</th></tr></thead>")
-        parts.append("<tbody>")
-        for tc in test_classes:
-            if isinstance(tc, dict):
-                parts.append(
-                    f"<tr>"
-                    f"<td>{_e(tc.get('test_class', ''))}</td>"
-                    f"<td>{_e(tc.get('priority', ''))}</td>"
-                    f"<td>{_e(tc.get('reason', ''))}</td>"
-                    f"</tr>"
-                )
-            elif isinstance(tc, str):
-                parts.append(f"<tr><td>{_e(tc)}</td><td></td><td></td></tr>")
-        parts.append("</tbody></table>")
+    coverage_rows: list[str] = []
+    # Also compute per-technique finding counts
+    technique_counts: dict[str, int] = {}
+    tools_used: set[str] = set()
+    for f in findings:
+        tid = f.get("technique_id", "")
+        if tid:
+            technique_counts[tid] = technique_counts.get(tid, 0) + 1
+        t = f.get("tool", "")
+        if t:
+            tools_used.add(t)
 
-    # --- Footer ---
-    parts.append('<div class="footer">')
-    parts.append(f"Generated by BugHound &mdash; AI-Powered Bug Bounty MCP Server<br>")
-    parts.append(f"{_e(now)}")
-    parts.append("</div>")
+    for tc in test_classes:
+        if isinstance(tc, dict):
+            tc_name = tc.get("test_class", "")
+            tc_priority = tc.get("priority", "")
+            tc_reason = tc.get("reason", "")
+            fc = technique_counts.get(tc_name, 0)
+            count_badge = f'<span class="font-bold text-emerald-600">{fc}</span>' if fc else '<span class="text-slate-400">0</span>'
+            coverage_rows.append(
+                f'<tr class="border-b border-slate-100 hover:bg-slate-50/50">'
+                f'<td class="px-4 py-3 font-mono text-sm">{_e(tc_name)}</td>'
+                f'<td class="px-4 py-3 text-sm">{_e(tc_priority)}</td>'
+                f'<td class="px-4 py-3 text-center">{count_badge}</td>'
+                f'<td class="px-4 py-3 text-sm text-slate-500">{_e(tc_reason)}</td>'
+                f'</tr>'
+            )
+        elif isinstance(tc, str):
+            fc = technique_counts.get(tc, 0)
+            count_badge = f'<span class="font-bold text-emerald-600">{fc}</span>' if fc else '<span class="text-slate-400">0</span>'
+            coverage_rows.append(
+                f'<tr class="border-b border-slate-100 hover:bg-slate-50/50">'
+                f'<td class="px-4 py-3 font-mono text-sm">{_e(tc)}</td>'
+                f'<td class="px-4 py-3"></td>'
+                f'<td class="px-4 py-3 text-center">{count_badge}</td>'
+                f'<td class="px-4 py-3"></td>'
+                f'</tr>'
+            )
+    coverage_rows_html = "\n".join(coverage_rows)
+    tools_list_html = ", ".join(f'<span class="inline-block bg-slate-100 text-slate-700 text-xs font-mono px-2 py-0.5 rounded mr-1 mb-1">{_e(t)}</span>' for t in sorted(tools_used))
+    coverage_section_html = ""
+    if coverage_rows:
+        coverage_section_html = f'''
+        <section id="coverage" class="mb-12">
+            <h2 class="text-2xl font-bold text-slate-800 mb-6 pb-3 border-b border-slate-200">Testing Coverage</h2>
+            <div class="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50 border-b border-slate-200">
+                            <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Technique</th>
+                            <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Priority</th>
+                            <th class="text-center px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Findings</th>
+                            <th class="text-left px-4 py-3 text-xs font-bold text-slate-500 uppercase tracking-wider">Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>{coverage_rows_html}</tbody>
+                </table>
+            </div>
+            {('<div class="mt-4"><span class="text-xs font-bold text-slate-500 uppercase tracking-wider mr-2">Tools Used:</span>' + tools_list_html + '</div>') if tools_list_html else ''}
+        </section>'''
 
-    parts.append("</body>")
-    parts.append("</html>")
+    # --- Severity bars HTML ---
+    sev_bars: list[str] = []
+    _SEV_BAR_COLORS = {
+        "critical": "bg-red-900", "high": "bg-red-600",
+        "medium": "bg-amber-500", "low": "bg-blue-600", "info": "bg-emerald-600",
+    }
+    for sev_name in ("critical", "high", "medium", "low", "info"):
+        count = by_severity.get(sev_name, 0)
+        pct = int((count / max_count) * 100) if max_count else 0
+        bar_color = _SEV_BAR_COLORS.get(sev_name, "bg-slate-500")
+        sev_bars.append(f'''
+            <div class="flex items-center gap-3 mb-2">
+                <span class="w-20 text-right text-sm font-semibold text-slate-600">{sev_name.title()}</span>
+                <div class="flex-1 h-5 bg-slate-100 rounded-full overflow-hidden">
+                    <div class="h-full {bar_color} rounded-full transition-all" style="width:{pct}%"></div>
+                </div>
+                <span class="w-8 text-sm font-bold text-slate-700">{count}</span>
+            </div>''')
+    severity_bars_html = "\n".join(sev_bars)
 
-    return "\n".join(parts)
+    # --- Sidebar nav finding counts ---
+    sidebar_counts = {
+        "critical": by_severity.get("critical", 0),
+        "high": by_severity.get("high", 0),
+        "medium": by_severity.get("medium", 0),
+        "low": by_severity.get("low", 0),
+        "info": by_severity.get("info", 0),
+    }
+
+    # Logo in sidebar
+    logo_html = ""
+    if _LOGO_B64:
+        logo_html = f'<img src="data:image/jpeg;base64,{_LOGO_B64}" alt="BugHound" class="w-10 h-10 rounded-lg object-cover">'
+    else:
+        logo_html = '<div class="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl text-white">B</div>'
+
+    summary_text = _auto_summary(target, processed)
+
+    # --- Assemble the full HTML ---
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Assessment &mdash; {_e(target)}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {{
+            theme: {{
+                extend: {{
+                    fontFamily: {{
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace']
+                    }}
+                }}
+            }}
+        }}
+    </script>
+    <style>
+        body {{ font-family: 'Inter', system-ui, sans-serif; }}
+        code, .font-mono {{ font-family: 'JetBrains Mono', monospace; }}
+
+        /* Smooth scroll */
+        html {{ scroll-behavior: smooth; }}
+
+        /* Sidebar nav links */
+        .nav-link {{
+            display: block;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #94a3b8;
+            transition: all 0.15s;
+        }}
+        .nav-link:hover {{
+            background: rgba(255,255,255,0.05);
+            color: #e2e8f0;
+        }}
+
+        /* Finding card transitions */
+        .finding-card {{
+            transition: all 0.2s ease;
+        }}
+
+        /* Copy button toast */
+        .copy-toast {{
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: #0f172a;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            z-index: 1000;
+            animation: fadeInUp 0.3s ease, fadeOut 0.3s ease 1.7s forwards;
+        }}
+        @keyframes fadeInUp {{
+            from {{ opacity: 0; transform: translateY(10px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        @keyframes fadeOut {{
+            from {{ opacity: 1; }}
+            to {{ opacity: 0; }}
+        }}
+
+        /* Print styles */
+        @media print {{
+            @page {{ size: A4; margin: 1cm; }}
+
+            * {{
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }}
+
+            aside.sidebar {{
+                display: none !important;
+            }}
+
+            main {{
+                margin-left: 0 !important;
+                padding: 0 !important;
+                max-width: 100% !important;
+            }}
+
+            body {{
+                background: white !important;
+                color: #1a1a1a !important;
+                font-size: 10pt;
+            }}
+
+            main::before {{
+                content: "BugHound Security Assessment Report";
+                display: block;
+                font-size: 18pt;
+                font-weight: bold;
+                color: #1e40af;
+                margin-bottom: 16pt;
+                padding-bottom: 8pt;
+                border-bottom: 2pt solid #1e40af;
+            }}
+
+            .finding-card {{
+                page-break-inside: avoid;
+                border: 1px solid #ddd !important;
+                box-shadow: none !important;
+                margin-bottom: 12pt;
+            }}
+
+            h2 {{
+                page-break-after: avoid;
+            }}
+
+            .bg-slate-900 {{
+                background: #f5f5f5 !important;
+                border: 1px solid #ccc !important;
+            }}
+            .bg-slate-900 code {{
+                color: #333 !important;
+            }}
+            .text-green-400 {{
+                color: #006600 !important;
+            }}
+            .text-amber-400 {{
+                color: #996600 !important;
+            }}
+
+            button {{
+                display: none !important;
+            }}
+
+            #filter-bar {{
+                display: none !important;
+            }}
+
+            canvas {{
+                max-width: 300pt !important;
+                page-break-inside: avoid;
+            }}
+        }}
+    </style>
+</head>
+<body class="min-h-screen flex bg-slate-50 text-slate-800">
+
+    <!-- ==================== SIDEBAR ==================== -->
+    <aside class="sidebar w-72 bg-slate-900 text-white flex flex-col fixed h-screen overflow-y-auto z-50 shrink-0">
+        <div class="p-6">
+            <!-- Logo + Brand -->
+            <div class="flex items-center gap-3 mb-8">
+                {logo_html}
+                <div>
+                    <h1 class="text-lg font-bold tracking-tight">Bug<span class="text-blue-400">Hound</span></h1>
+                    <div class="text-[10px] text-slate-500 uppercase tracking-widest">Security Assessment</div>
+                </div>
+            </div>
+
+            <!-- Scan Metadata -->
+            <div class="space-y-3 mb-8">
+                <div class="text-[10px] uppercase text-slate-500 font-bold tracking-widest mb-3">Assessment Context</div>
+                <div>
+                    <div class="text-xs text-slate-400 mb-0.5">Target</div>
+                    <div class="font-mono text-sm text-blue-400 break-all">{_e(target)}</div>
+                </div>
+                <div>
+                    <div class="text-xs text-slate-400 mb-0.5">Scan Date</div>
+                    <div class="text-sm">{_e(date)}</div>
+                </div>
+                <div>
+                    <div class="text-xs text-slate-400 mb-0.5">Workspace</div>
+                    <div class="text-sm font-mono text-slate-300">{_e(workspace_id)}</div>
+                </div>
+                <div>
+                    <div class="text-xs text-slate-400 mb-0.5">Overall Risk</div>
+                    <span class="inline-block px-2.5 py-1 rounded text-xs font-bold uppercase {risk_bg} {risk_text}">{_e(risk_level)}</span>
+                </div>
+            </div>
+
+            <!-- Navigation -->
+            <nav class="space-y-1 mb-8">
+                <div class="text-[10px] uppercase text-slate-500 font-bold tracking-widest mb-3">Navigation</div>
+                <a href="#executive-summary" class="nav-link">Executive Summary</a>
+                <a href="#findings" class="nav-link">Findings</a>
+                <a href="#technologies" class="nav-link">Technologies</a>
+                <a href="#coverage" class="nav-link">Coverage</a>
+                <a href="#about" class="nav-link">About</a>
+            </nav>
+
+            <!-- Severity Counts -->
+            <div class="space-y-2">
+                <div class="text-[10px] uppercase text-slate-500 font-bold tracking-widest mb-3">Finding Summary</div>
+                <div class="flex justify-between items-center bg-red-900/20 p-2 rounded text-sm">
+                    <span class="text-xs font-bold text-red-400">CRITICAL</span>
+                    <span class="font-bold">{sidebar_counts['critical']}</span>
+                </div>
+                <div class="flex justify-between items-center bg-red-600/20 p-2 rounded text-sm">
+                    <span class="text-xs font-bold text-red-300">HIGH</span>
+                    <span class="font-bold">{sidebar_counts['high']}</span>
+                </div>
+                <div class="flex justify-between items-center bg-amber-500/20 p-2 rounded text-sm">
+                    <span class="text-xs font-bold text-amber-400">MEDIUM</span>
+                    <span class="font-bold">{sidebar_counts['medium']}</span>
+                </div>
+                <div class="flex justify-between items-center bg-blue-600/20 p-2 rounded text-sm">
+                    <span class="text-xs font-bold text-blue-400">LOW</span>
+                    <span class="font-bold">{sidebar_counts['low']}</span>
+                </div>
+                <div class="flex justify-between items-center bg-emerald-600/20 p-2 rounded text-sm">
+                    <span class="text-xs font-bold text-emerald-400">INFO</span>
+                    <span class="font-bold">{sidebar_counts['info']}</span>
+                </div>
+            </div>
+
+            <!-- Export Button -->
+            <div class="mt-8">
+                <button onclick="window.print()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg transition-colors text-sm">
+                    Export PDF
+                </button>
+            </div>
+        </div>
+
+        <!-- Sidebar Footer -->
+        <div class="mt-auto p-6 border-t border-slate-800">
+            <div class="text-[10px] text-slate-600 leading-relaxed uppercase tracking-wider">
+                Confidential security assessment. Unauthorized distribution prohibited.
+            </div>
+        </div>
+    </aside>
+
+    <!-- ==================== MAIN CONTENT ==================== -->
+    <main class="flex-1 ml-72 p-8 lg:p-12">
+        <div class="max-w-5xl mx-auto">
+
+            <!-- ===== EXECUTIVE SUMMARY ===== -->
+            <section id="executive-summary" class="mb-12">
+                <!-- Risk Banner -->
+                <div class="{risk_bg} {risk_text} rounded-lg px-6 py-4 mb-8 shadow-sm">
+                    <div class="text-sm font-bold uppercase tracking-wider opacity-80">Overall Risk Level</div>
+                    <div class="text-2xl font-bold">{_e(risk_level)}</div>
+                </div>
+
+                <!-- Auto Summary -->
+                <p class="text-base text-slate-600 leading-relaxed mb-8">{_e(summary_text)}</p>
+
+                <!-- Stats Grid + Chart -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                    <!-- Donut Chart -->
+                    <div class="lg:col-span-2 bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+                        <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">Severity Distribution</h3>
+                        <div class="flex items-center justify-center" style="max-height:300px">
+                            <div class="w-full max-w-xs">
+                                <canvas id="severityChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Stats Cards -->
+                    <div class="space-y-4">
+                        <div class="bg-white border border-slate-200 rounded-lg p-5 shadow-sm text-center">
+                            <div class="text-3xl font-bold text-slate-800">{total}</div>
+                            <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Total Findings</div>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-lg p-5 shadow-sm text-center border-l-4 border-l-emerald-500">
+                            <div class="text-3xl font-bold text-emerald-600">{confirmed_count}</div>
+                            <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Confirmed</div>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-lg p-5 shadow-sm text-center border-l-4 border-l-amber-500">
+                            <div class="text-3xl font-bold text-amber-600">{pending_count}</div>
+                            <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">Pending Review</div>
+                        </div>
+                        <div class="bg-white border border-slate-200 rounded-lg p-5 shadow-sm text-center">
+                            <div class="text-3xl font-bold text-slate-400">{fp_count}</div>
+                            <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">False Positives</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Severity Bars -->
+                <div class="bg-white border border-slate-200 rounded-lg p-6 shadow-sm">
+                    <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4">Severity Breakdown</h3>
+                    {severity_bars_html}
+                </div>
+            </section>
+
+            <!-- ===== FINDINGS ===== -->
+            <section id="findings" class="mb-12">
+                <h2 class="text-2xl font-bold text-slate-800 mb-6 pb-3 border-b border-slate-200">Detailed Findings</h2>
+
+                <!-- Filter Buttons -->
+                <div id="filter-bar" class="flex flex-wrap gap-2 mb-6">
+                    <button onclick="filterFindings('all')" class="filter-btn px-4 py-2 rounded-lg text-sm font-bold border border-slate-300 bg-slate-800 text-white" data-filter="all">All ({total})</button>
+                    <button onclick="filterFindings('critical')" class="filter-btn px-4 py-2 rounded-lg text-sm font-bold border border-red-200 bg-white text-red-900 hover:bg-red-50" data-filter="critical">Critical ({sidebar_counts['critical']})</button>
+                    <button onclick="filterFindings('high')" class="filter-btn px-4 py-2 rounded-lg text-sm font-bold border border-red-200 bg-white text-red-600 hover:bg-red-50" data-filter="high">High ({sidebar_counts['high']})</button>
+                    <button onclick="filterFindings('medium')" class="filter-btn px-4 py-2 rounded-lg text-sm font-bold border border-amber-200 bg-white text-amber-700 hover:bg-amber-50" data-filter="medium">Medium ({sidebar_counts['medium']})</button>
+                    <button onclick="filterFindings('low')" class="filter-btn px-4 py-2 rounded-lg text-sm font-bold border border-blue-200 bg-white text-blue-700 hover:bg-blue-50" data-filter="low">Low ({sidebar_counts['low']})</button>
+                    <button onclick="filterFindings('info')" class="filter-btn px-4 py-2 rounded-lg text-sm font-bold border border-emerald-200 bg-white text-emerald-700 hover:bg-emerald-50" data-filter="info">Info ({sidebar_counts['info']})</button>
+                </div>
+
+                <!-- Finding Cards -->
+                <div id="findingsContainer">
+                    {findings_html}
+                </div>
+            </section>
+
+            <!-- ===== TECHNOLOGIES ===== -->
+            {tech_section_html}
+
+            <!-- ===== COVERAGE ===== -->
+            {coverage_section_html}
+
+            <!-- ===== ABOUT / FOOTER ===== -->
+            <footer id="about" class="mt-16 pt-8 border-t border-slate-200 text-center text-slate-400 text-sm space-y-2">
+                <div class="font-bold text-slate-500">Generated by BugHound &mdash; AI-Powered Bug Bounty MCP Server</div>
+                <div>{_e(now)}</div>
+                <div class="text-xs">Workspace: {_e(workspace_id)}</div>
+            </footer>
+        </div>
+    </main>
+
+    <!-- ==================== JAVASCRIPT ==================== -->
+    <script>
+        // --- Severity Donut Chart ---
+        (function() {{
+            const ctx = document.getElementById('severityChart');
+            if (!ctx) return;
+            const counts = {chart_data};
+            // Only render chart if there are findings
+            if (counts.reduce((a,b) => a+b, 0) === 0) return;
+            new Chart(ctx.getContext('2d'), {{
+                type: 'doughnut',
+                data: {{
+                    labels: ['Critical', 'High', 'Medium', 'Low', 'Info'],
+                    datasets: [{{
+                        data: counts,
+                        backgroundColor: ['#991b1b', '#dc2626', '#d97706', '#2563eb', '#059669'],
+                        borderColor: '#ffffff',
+                        borderWidth: 3,
+                        hoverOffset: 8
+                    }}]
+                }},
+                options: {{
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    cutout: '60%',
+                    plugins: {{
+                        legend: {{
+                            position: 'bottom',
+                            labels: {{
+                                usePointStyle: true,
+                                pointStyle: 'circle',
+                                padding: 16,
+                                font: {{ size: 12, weight: '600', family: 'Inter' }},
+                                color: '#475569'
+                            }}
+                        }}
+                    }}
+                }}
+            }});
+        }})();
+
+        // --- Finding Filter ---
+        function filterFindings(severity) {{
+            const cards = document.querySelectorAll('.finding-card');
+            cards.forEach(card => {{
+                if (severity === 'all' || card.dataset.severity === severity) {{
+                    card.style.display = '';
+                }} else {{
+                    card.style.display = 'none';
+                }}
+            }});
+            // Update button states
+            document.querySelectorAll('.filter-btn').forEach(btn => {{
+                if (btn.dataset.filter === severity) {{
+                    btn.classList.add('bg-slate-800', 'text-white', 'border-slate-800');
+                    btn.classList.remove('bg-white');
+                }} else {{
+                    btn.classList.remove('bg-slate-800', 'text-white', 'border-slate-800');
+                    btn.classList.add('bg-white');
+                }}
+            }});
+        }}
+
+        // --- Copy curl command ---
+        function copyCmd(id) {{
+            const el = document.getElementById(id);
+            if (!el) return;
+            navigator.clipboard.writeText(el.innerText).then(() => {{
+                const toast = document.createElement('div');
+                toast.className = 'copy-toast';
+                toast.textContent = 'Copied to clipboard';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            }});
+        }}
+
+        // --- Smooth scroll for sidebar nav ---
+        document.querySelectorAll('.nav-link').forEach(link => {{
+            link.addEventListener('click', function(e) {{
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {{
+                    target.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                }}
+            }});
+        }});
+    </script>
+</body>
+</html>'''
 
 
 # ===================================================================
