@@ -1586,7 +1586,45 @@ async def test_broken_access(
                             })
                             break
 
-            # Strategy 3: Path traversal bypass on 403 admin endpoints
+            # Strategy 3: Header-based 403 bypass (byp4xx-style)
+            _BYPASS_HEADERS = [
+                {"X-Original-URL": "/admin"},
+                {"X-Rewrite-URL": "/admin"},
+                {"X-Custom-IP-Authorization": "127.0.0.1"},
+                {"X-Forwarded-For": "127.0.0.1"},
+                {"X-Real-IP": "127.0.0.1"},
+                {"X-Originating-IP": "127.0.0.1"},
+                {"X-Remote-IP": "127.0.0.1"},
+                {"X-Remote-Addr": "127.0.0.1"},
+                {"X-ProxyUser-Ip": "127.0.0.1"},
+                {"X-Client-IP": "127.0.0.1"},
+                {"X-Host": "127.0.0.1"},
+                {"X-Forwarded-Host": "localhost"},
+                {"Referer": "/admin"},
+            ]
+            for endpoint in endpoints:
+                get_status, _, _ = await _send(session, endpoint)
+                if get_status not in (401, 403):
+                    continue
+
+                for bypass_hdr in _BYPASS_HEADERS:
+                    status, body, _ = await _send(
+                        session, endpoint, headers=bypass_hdr,
+                    )
+                    if status == 200 and len(body) > 100:
+                        hdr_name = list(bypass_hdr.keys())[0]
+                        hdr_val = list(bypass_hdr.values())[0]
+                        findings.append({
+                            "endpoint": endpoint,
+                            "accessible": True,
+                            "status_code": status,
+                            "content_length": len(body),
+                            "technique": "header_bypass",
+                            "evidence": f"GET returned {get_status}, adding {hdr_name}: {hdr_val} returned 200",
+                        })
+                        break
+
+            # Strategy 4: Path traversal bypass on 403 admin endpoints
             for endpoint in endpoints:
                 if "/admin" not in endpoint.lower():
                     continue
