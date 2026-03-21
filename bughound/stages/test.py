@@ -462,6 +462,21 @@ async def _run_tests(
         "vulnerable_component", "deserialization", "default_creds",
     ])
 
+    # Load auth token if available — enables authenticated testing
+    try:
+        from bughound.tools.testing.injection_tester import set_auth_headers, clear_auth_headers
+        raw_auth = await workspace.read_data(workspace_id, "hosts/auth_discovery.json")
+        auth_items = raw_auth.get("data", raw_auth) if isinstance(raw_auth, dict) else (raw_auth or [])
+        for ad in (auth_items if isinstance(auth_items, list) else []):
+            if isinstance(ad, dict):
+                token = ad.get("auth_token", "")
+                if token:
+                    set_auth_headers({"Authorization": f"Bearer {token}"})
+                    logger.info("test.auth_token_loaded", msg="Authenticated testing enabled")
+                    break
+    except Exception:
+        pass  # No auth data available — tests run unauthenticated
+
     async def _progress(pct: int, msg: str, module: str) -> None:
         if job_manager and job_id:
             await job_manager.update_progress(job_id, pct, msg, module)
@@ -1082,6 +1097,12 @@ async def _run_tests(
         class_counts[f.get("vulnerability_class", "other")] += 1
 
     await _progress(100, "Testing complete", "done")
+
+    # Clear auth headers after testing completes
+    try:
+        clear_auth_headers()
+    except Exception:
+        pass
 
     return {
         "status": "success",

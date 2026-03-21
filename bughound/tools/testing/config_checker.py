@@ -45,7 +45,13 @@ async def _fetch(
 
     Never raises -- connection errors return ``(0, "", {})``.
     """
-    hdrs = {**_HEADERS, **(headers or {})}
+    # Include auth headers if set (from injection_tester module-level state)
+    try:
+        from bughound.tools.testing.injection_tester import _AUTH_HEADERS
+        auth = _AUTH_HEADERS
+    except Exception:
+        auth = {}
+    hdrs = {**_HEADERS, **auth, **(headers or {})}
     try:
         async with session.request(
             method,

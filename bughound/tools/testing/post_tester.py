@@ -20,6 +20,15 @@ logger = structlog.get_logger()
 _TIMEOUT = aiohttp.ClientTimeout(total=15)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
+
+def _get_auth_headers() -> dict[str, str]:
+    """Get auth headers from injection_tester (shared state)."""
+    try:
+        from bughound.tools.testing.injection_tester import _AUTH_HEADERS
+        return dict(_AUTH_HEADERS)
+    except Exception:
+        return {}
+
 # ---------------------------------------------------------------------------
 # Indicators
 # ---------------------------------------------------------------------------
@@ -58,7 +67,7 @@ async def _send_post(
     """Send POST request with specified content type. Never raises."""
     try:
         kwargs: dict[str, Any] = {
-            "headers": {**_HEADERS},
+            "headers": {**_HEADERS, **_get_auth_headers()},
             "ssl": False,
             "timeout": _TIMEOUT,
             "allow_redirects": True,

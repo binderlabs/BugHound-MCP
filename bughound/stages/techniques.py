@@ -1209,7 +1209,7 @@ async def _exec_graphql(
     workspace_id: str, approved_hosts: set[str],
 ) -> list[dict[str, Any]]:
     """Run GraphQL tests on flagged hosts."""
-    from bughound.tools.testing.graphql_tester import test_graphql
+    from bughound.tools.testing.graphql_tester import test_graphql, test_graphql_data_leaks
 
     raw = await workspace.read_data(workspace_id, "hosts/flags.json")
     flags = _extract_items(raw)
@@ -1263,6 +1263,37 @@ async def _exec_graphql(
                             "severity": "high",
                             "evidence": str(mutations[:5]),
                         })
+
+                    # Test for unauthenticated data leaks
+                    try:
+                        leak_result = await test_graphql_data_leaks(gql_url)
+                        if leak_result.get("vulnerable"):
+                            leak_count = len(leak_result.get("leaks", []))
+                            total_records = sum(
+                                l.get("record_count", 0)
+                                for l in leak_result.get("leaks", [])
+                            )
+                            all_fields = []
+                            for l in leak_result.get("leaks", []):
+                                all_fields.extend(l.get("fields_exposed", []))
+                            findings.append({
+                                **finding,
+                                "description": (
+                                    f"GraphQL: {leak_count} queries return data "
+                                    f"without authentication ({total_records} total records)"
+                                ),
+                                "severity": "high",
+                                "evidence": leak_result.get("evidence", ""),
+                                "confidence": leak_result.get("confidence", "high"),
+                                "needs_validation": True,
+                                "details": {
+                                    "leaks": leak_result.get("leaks", []),
+                                    "fields_exposed": sorted(set(all_fields)),
+                                },
+                            })
+                    except Exception:
+                        pass  # Data leak check failed; don't block other findings
+
                     break  # Found working endpoint
 
             except Exception:
@@ -1989,7 +2020,8 @@ async def _exec_post_sqli(
             continue
 
         try:
-            result = await test_post_sqli(url, params)
+            ct = ep.get("content_type", "form")
+            result = await test_post_sqli(url, params, content_type=ct)
             if result.get("vulnerable"):
                 findings.append({
                     "vulnerability_class": "sqli",
@@ -2031,7 +2063,8 @@ async def _exec_stored_xss(
             continue
 
         try:
-            result = await test_stored_xss(url, params)
+            ct = ep.get("content_type", "form")
+            result = await test_stored_xss(url, params, content_type=ct)
             if result.get("vulnerable"):
                 findings.append({
                     "vulnerability_class": "xss",
@@ -2073,7 +2106,8 @@ async def _exec_post_ssti(
             continue
 
         try:
-            result = await test_post_ssti(url, params)
+            ct = ep.get("content_type", "form")
+            result = await test_post_ssti(url, params, content_type=ct)
             if result.get("vulnerable"):
                 findings.append({
                     "vulnerability_class": "ssti",
@@ -2115,7 +2149,8 @@ async def _exec_post_rce(
             continue
 
         try:
-            result = await test_post_rce(url, params)
+            ct = ep.get("content_type", "form")
+            result = await test_post_rce(url, params, content_type=ct)
             if result.get("vulnerable"):
                 findings.append({
                     "vulnerability_class": "rce",
@@ -2774,40 +2809,95 @@ async def _exec_default_credentials(
     """Test login forms with common default credential pairs."""
     from bughound.tools.testing.config_checker import test_default_credentials
 
-    auth_data = await _load_auth_discovery(workspace_id)
+    # Build login form targets from TWO sources:
+    # 1. auth_discovery — has auth_endpoints (login/register URLs)
+    # 2. forms.json — has classified login_form entries with field names
+    login_targets: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
 
-    findings: list[dict[str, Any]] = []
+    # Source 1: form_extractor login forms (most reliable — has field names)
+    raw_forms = await workspace.read_data(workspace_id, "urls/forms.json")
+    forms = _extract_items(raw_forms)
+    for form in forms:
+        if not isinstance(form, dict):
+            continue
+        classification = form.get("classification", "")
+        if classification not in ("login_form", "registration_form"):
+            continue
+        testable = form.get("testable", {})
+        action_url = testable.get("url", form.get("page_url", ""))
+        if not action_url or action_url in seen_urls:
+            continue
+        host = _host_from_url(action_url)
+        if host not in approved_hosts:
+            continue
+        seen_urls.add(action_url)
+
+        # Extract username/password field names from inputs
+        username_field = "username"
+        password_field = "password"
+        for inp in form.get("inputs", []):
+            inp_name = inp.get("name", "")
+            inp_type = inp.get("type", "")
+            if inp_type == "password" or inp_name.lower() in ("password", "passwd", "pass", "pwd"):
+                password_field = inp_name
+            elif inp_type in ("text", "email") or inp_name.lower() in (
+                "username", "user", "email", "login", "txtusername", "user_name",
+            ):
+                username_field = inp_name
+
+        login_targets.append({
+            "action_url": action_url,
+            "username_field": username_field,
+            "password_field": password_field,
+            "method": form.get("method", "POST"),
+        })
+
+    # Source 2: auth_discovery endpoints (fallback — uses default field names)
+    auth_data = await _load_auth_discovery(workspace_id)
     for ad in auth_data:
-        login_forms = ad.get("login_forms", [])
-        for form in login_forms:
-            action_url = form.get("action_url", form.get("url", ""))
-            if not action_url:
+        for ep in ad.get("auth_endpoints", []):
+            url = ep.get("url", "")
+            if not url or url in seen_urls:
                 continue
-            host = _host_from_url(action_url)
+            path = ep.get("path", "").lower()
+            if "login" not in path and "signin" not in path and "auth" not in path:
+                continue
+            host = _host_from_url(url)
             if host not in approved_hosts:
                 continue
+            seen_urls.add(url)
+            login_targets.append({
+                "action_url": url,
+                "username_field": "username",
+                "password_field": "password",
+            })
 
-            try:
-                result = await asyncio.wait_for(
-                    test_default_credentials(action_url, form), timeout=120,
-                )
-                if result.get("vulnerable"):
-                    creds = result.get("credentials", [{}])[0]
-                    findings.append({
-                        "vulnerability_class": "default_creds",
-                        "tool": "config_checker",
-                        "technique_id": "default_credentials_test",
-                        "host": host,
-                        "endpoint": action_url,
-                        "severity": "high",
-                        "description": f"Default credentials accepted: {creds.get('username', '?')}:{creds.get('password', '?')}",
-                        "evidence": result.get("evidence", ""),
-                        "confidence": "high",
-                        "needs_validation": False,
-                    })
-                    break  # Found working creds, stop testing this form
-            except Exception:
-                pass
+    findings: list[dict[str, Any]] = []
+    for form in login_targets[:5]:  # Limit to 5 login forms
+        action_url = form["action_url"]
+        host = _host_from_url(action_url)
+        try:
+            result = await asyncio.wait_for(
+                test_default_credentials(action_url, form), timeout=120,
+            )
+            if result.get("vulnerable"):
+                creds = result.get("credentials", [{}])[0]
+                findings.append({
+                    "vulnerability_class": "default_creds",
+                    "tool": "config_checker",
+                    "technique_id": "default_credentials_test",
+                    "host": host,
+                    "endpoint": action_url,
+                    "severity": "high",
+                    "description": f"Default credentials accepted: {creds.get('username', '?')}:{creds.get('password', '?')}",
+                    "evidence": result.get("evidence", ""),
+                    "confidence": "high",
+                    "needs_validation": False,
+                })
+                break  # Found working creds, stop
+        except Exception:
+            pass
 
     return findings
 

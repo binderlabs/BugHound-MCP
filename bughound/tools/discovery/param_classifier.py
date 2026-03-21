@@ -334,10 +334,16 @@ def classify_parameters(
         # Track POST endpoints
         if form_method == "POST" and action_url not in _seen_posts:
             _seen_posts.add(action_url)
+            enctype = form.get("enctype", "application/x-www-form-urlencoded")
+            content_type = "json" if "json" in enctype else "form"
+            # Also detect JSON API endpoints by URL pattern
+            if "/api/" in action_url or action_url.endswith("/api"):
+                content_type = "json"
             post_endpoints.append({
                 "url": action_url,
                 "form_type": classification,
                 "page_url": page_url,
+                "content_type": content_type,
                 "params": [inp.get("name", "") for inp in form.get("inputs", []) if inp.get("name")],
             })
 

@@ -23,6 +23,22 @@ logger = structlog.get_logger()
 _TIMEOUT = aiohttp.ClientTimeout(total=15)
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
 
+# Auth headers — set by the test orchestrator to enable authenticated testing.
+# All _send() calls automatically include these.
+_AUTH_HEADERS: dict[str, str] = {}
+
+
+def set_auth_headers(headers: dict[str, str]) -> None:
+    """Set auth headers for all subsequent test requests."""
+    global _AUTH_HEADERS
+    _AUTH_HEADERS = dict(headers)
+
+
+def clear_auth_headers() -> None:
+    """Clear auth headers after testing completes."""
+    global _AUTH_HEADERS
+    _AUTH_HEADERS = {}
+
 
 # ---------------------------------------------------------------------------
 # URL parameter replacement helper
@@ -52,7 +68,7 @@ async def _send(
     allow_redirects: bool = True,
 ) -> tuple[int, str, dict[str, str]]:
     """Send request, return (status, body, response_headers). Never raises."""
-    hdrs = {**_HEADERS, **(headers or {})}
+    hdrs = {**_HEADERS, **_AUTH_HEADERS, **(headers or {})}
     try:
         async with session.request(
             method, url, headers=hdrs, allow_redirects=allow_redirects,
