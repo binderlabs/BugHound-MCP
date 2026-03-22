@@ -484,7 +484,7 @@ async def _run_tests(
     # Nuclei settings from scan plan
     nuclei_rate = global_settings.get("nuclei_rate_limit", 100)
     nuclei_concurrency = global_settings.get("nuclei_concurrency", 25)
-    nuclei_timeout = global_settings.get("nuclei_timeout", 600)
+    nuclei_timeout = min(global_settings.get("nuclei_timeout", 600), 300)  # Cap 5 min per batch
     stealth_mode = global_settings.get("stealth", False)
     if stealth_mode:
         nuclei_rate = min(nuclei_rate, 10)
