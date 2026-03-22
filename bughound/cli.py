@@ -869,6 +869,20 @@ async def cmd_list(args: argparse.Namespace) -> None:
         print(f"  {state_color}{state:12s}{_C.RESET} {target[:40]:40s} {_C.DIM}{ws_id}{_C.RESET}")
 
 
+async def cmd_agent(args: argparse.Namespace) -> None:
+    """Run AI-powered autonomous scanning."""
+    from bughound.agent import run_agent
+    await run_agent(
+        target=args.target,
+        provider_name=args.provider,
+        api_key=args.api_key,
+        model=args.model,
+        depth=args.depth,
+        max_iterations=args.max_iterations,
+        verbose=getattr(args, "verbose", False),
+    )
+
+
 async def cmd_serve(args: argparse.Namespace) -> None:
     """Start MCP server."""
     from bughound.server import mcp
@@ -937,6 +951,21 @@ def main() -> None:
     # list
     subparsers.add_parser("list", parents=[_common], help="List workspaces")
 
+    # agent
+    agent_parser = subparsers.add_parser("agent", parents=[_common],
+                                         help="AI-powered autonomous scanning")
+    agent_parser.add_argument("target", help="Target URL or domain")
+    agent_parser.add_argument("--provider", required=True,
+                              choices=["anthropic", "openai", "grok", "openrouter"],
+                              help="AI provider")
+    agent_parser.add_argument("--api-key", required=True, help="API key")
+    agent_parser.add_argument("--model", default=None,
+                              help="Model name (default: provider's best)")
+    agent_parser.add_argument("--depth", default="light", choices=["light", "deep"],
+                              help="Scan depth (default: light)")
+    agent_parser.add_argument("--max-iterations", type=int, default=50,
+                              help="Max AI reasoning steps (default: 50)")
+
     # serve
     subparsers.add_parser("serve", parents=[_common], help="Start MCP server")
 
@@ -967,6 +996,7 @@ def main() -> None:
         "validate": cmd_validate,
         "report": cmd_report,
         "list": cmd_list,
+        "agent": cmd_agent,
         "serve": cmd_serve,
     }
 
