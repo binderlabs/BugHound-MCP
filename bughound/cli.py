@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
-"""BugHound CLI — automated bug bounty scanning from the command line.
+"""BugHound CLI -- automated bug bounty scanning from the command line.
 
 Usage:
-    bughound scan <target>
+    bughound scan <target>                   # Full pipeline (Stages 0-6)
     bughound scan <target> --depth deep
     bughound scan <target> --skip-nuclei --skip-validate
     bughound scan targets.txt
-    bughound report <workspace_id>
-    bughound list
-    bughound serve
+    bughound recon <target>                  # Stages 0-2 only
+    bughound analyze <workspace_id>          # Stage 3 only
+    bughound test <workspace_id>             # Stage 4 only
+    bughound validate <workspace_id>         # Stage 5 only
+    bughound report <workspace_id>           # Stage 6 only
+    bughound list                            # List workspaces
+    bughound serve                           # MCP server
 
-Same pipeline as the MCP server — same stages, same techniques, same code.
+Same pipeline as the MCP server -- same stages, same techniques, same code.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 import time
 from collections import Counter
@@ -54,6 +59,13 @@ class _C:
     BG_MAGENTA = "\033[45m"
 
 
+def _strip_colors() -> None:
+    """Replace all color codes with empty strings (--no-color)."""
+    for attr in dir(_C):
+        if not attr.startswith('_'):
+            setattr(_C, attr, '')
+
+
 def _sev_color(sev: str) -> str:
     return {
         "critical": _C.RED,
@@ -81,6 +93,40 @@ def _progress_bar(pct: int, width: int = 30) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Logging setup
+# ---------------------------------------------------------------------------
+
+def _setup_logging(verbose: bool) -> None:
+    """Configure structlog for CLI output."""
+    import structlog
+
+    if verbose:
+        # Show all debug/info logs to stderr in colored format
+        logging.basicConfig(
+            format="%(message)s",
+            stream=sys.stderr,
+            level=logging.DEBUG,
+            force=True,
+        )
+        structlog.configure(
+            processors=[
+                structlog.stdlib.add_log_level,
+                structlog.dev.ConsoleRenderer(colors=True),
+            ],
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+    else:
+        # Suppress all logs
+        logging.basicConfig(level=logging.CRITICAL, force=True)
+        structlog.configure(
+            processors=[structlog.dev.ConsoleRenderer()],
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Banner
 # ---------------------------------------------------------------------------
 
@@ -95,6 +141,35 @@ _BANNER = f"""{_C.CYAN}{_C.BOLD}
 """
 
 
+def _get_banner() -> str:
+    """Return the banner string (respects current color state)."""
+    return f"""{_C.CYAN}{_C.BOLD}
+  ____              _   _                       _
+ | __ ) _   _  __ _| | | | ___  _   _ _ __   __| |
+ |  _ \\| | | |/ _` | |_| |/ _ \\| | | | '_ \\ / _` |
+ | |_) | |_| | (_| |  _  | (_) | |_| | | | | (_| |
+ |____/ \\__,_|\\__, |_| |_|\\___/ \\__,_|_| |_|\\__,_|
+              |___/
+{_C.RESET}{_C.DIM}  AI-Powered Bug Bounty Reconnaissance{_C.RESET}
+"""
+
+
+# ---------------------------------------------------------------------------
+# Workspace validation helper
+# ---------------------------------------------------------------------------
+
+async def _require_workspace(workspace_id: str) -> Any:
+    """Validate that a workspace exists, exit with error if not."""
+    from bughound.core import workspace
+
+    meta = await workspace.get_workspace(workspace_id)
+    if meta is None:
+        print(f"{_C.RED}Error: workspace '{workspace_id}' not found.{_C.RESET}",
+              file=sys.stderr)
+        sys.exit(1)
+    return meta
+
+
 # ---------------------------------------------------------------------------
 # Stage runners
 # ---------------------------------------------------------------------------
@@ -105,12 +180,15 @@ def _print_stage(stage: int, name: str) -> None:
     print(f"{_C.CYAN}{'=' * 60}{_C.RESET}\n")
 
 
-async def _run_init(target: str, depth: str) -> str:
+async def _run_init(target: str, depth: str, verbose: bool = False) -> str:
     """Stage 0: Initialize workspace."""
     from bughound.core.target_classifier import classify
     from bughound.core import workspace
 
     _print_stage(0, "Initialize")
+
+    if verbose:
+        print(f"  {_C.DIM}[*] Classifying target...{_C.RESET}", file=sys.stderr)
 
     classification = classify(target, depth)
     meta = await workspace.create_workspace(target, depth)
@@ -127,14 +205,22 @@ async def _run_init(target: str, depth: str) -> str:
     print(f"  {_C.DIM}Depth:{_C.RESET}       {depth}")
     print(f"  {_C.DIM}Stages:{_C.RESET}      {classification.stages_to_run}")
 
+    if verbose:
+        print(f"  {_C.DIM}[*] Workspace created at {meta.workspace_id}{_C.RESET}",
+              file=sys.stderr)
+
     return meta.workspace_id
 
 
-async def _run_enumerate(workspace_id: str) -> None:
+async def _run_enumerate(workspace_id: str, verbose: bool = False) -> None:
     """Stage 1: Enumerate subdomains."""
     from bughound.stages import enumerate as stage_enumerate
 
     _print_stage(1, "Enumerate")
+
+    if verbose:
+        print(f"  {_C.DIM}[*] Running subdomain enumeration (subfinder, crtsh)...{_C.RESET}",
+              file=sys.stderr)
 
     result = await stage_enumerate.enumerate_light(workspace_id)
     if result.get("data", {}).get("skipped"):
@@ -144,12 +230,26 @@ async def _run_enumerate(workspace_id: str) -> None:
         print(f"  Subdomains: {data.get('subdomains_found', 0)}")
         print(f"  Resolved:   {data.get('resolved_count', 0)}")
 
+        if verbose:
+            sources = data.get("sources", {})
+            if sources:
+                for src, count in sources.items():
+                    print(f"  {_C.DIM}[*] {src}: {count} subdomains{_C.RESET}",
+                          file=sys.stderr)
 
-async def _run_discover(workspace_id: str, job_manager: Any) -> None:
+
+async def _run_discover(workspace_id: str, job_manager: Any,
+                        verbose: bool = False) -> None:
     """Stage 2: Discovery."""
     from bughound.stages import discover as stage_discover
 
     _print_stage(2, "Discover")
+
+    if verbose:
+        print(f"  {_C.DIM}[*] Probing live hosts with httpx...{_C.RESET}",
+              file=sys.stderr)
+        print(f"  {_C.DIM}[*] Crawling with gospider, analyzing JS with jsluice...{_C.RESET}",
+              file=sys.stderr)
 
     result = await stage_discover.discover(workspace_id, job_manager)
 
@@ -166,6 +266,9 @@ async def _run_discover(workspace_id: str, job_manager: Any) -> None:
             sys.stdout.write(f"\r  {_progress_bar(pct)} {_C.DIM}{msg[:45]}{_C.RESET}    ")
             sys.stdout.flush()
 
+            if verbose and msg:
+                print(f"  {_C.DIM}[*] {msg}{_C.RESET}", file=sys.stderr)
+
             if status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
                 print()
                 if status["status"] == "COMPLETED":
@@ -176,11 +279,17 @@ async def _run_discover(workspace_id: str, job_manager: Any) -> None:
                 break
 
 
-async def _run_analyze(workspace_id: str) -> dict:
+async def _run_analyze(workspace_id: str, verbose: bool = False) -> dict:
     """Stage 3: Analyze attack surface."""
     from bughound.stages import analyze as stage_analyze
 
     _print_stage(3, "Analyze")
+
+    if verbose:
+        print(f"  {_C.DIM}[*] Building attack surface model...{_C.RESET}",
+              file=sys.stderr)
+        print(f"  {_C.DIM}[*] Classifying parameters, detecting patterns...{_C.RESET}",
+              file=sys.stderr)
 
     result = await stage_analyze.get_attack_surface(workspace_id)
 
@@ -219,11 +328,17 @@ async def _run_analyze(workspace_id: str) -> dict:
     tc = result.get("suggested_test_classes", [])
     print(f"\n  {_C.DIM}Test classes: {len(tc)}{_C.RESET}")
 
+    if verbose:
+        for cls in tc:
+            print(f"  {_C.DIM}[*] Suggested test class: {cls}{_C.RESET}",
+                  file=sys.stderr)
+
     return result
 
 
 async def _run_test(
     workspace_id: str, job_manager: Any, attack_surface: dict,
+    verbose: bool = False,
 ) -> list[dict]:
     """Stage 4: Execute tests."""
     from bughound.stages import analyze as stage_analyze
@@ -259,6 +374,12 @@ async def _run_test(
     await stage_analyze.submit_scan_plan(workspace_id, scan_plan)
     print(f"  {_C.DIM}Scan plan: {len(suggested)} test classes{_C.RESET}")
 
+    if verbose:
+        print(f"  {_C.DIM}[*] Running {len(suggested)} techniques in parallel...{_C.RESET}",
+              file=sys.stderr)
+        for cls in suggested:
+            print(f"  {_C.DIM}[*] Queued: {cls}{_C.RESET}", file=sys.stderr)
+
     result = await stage_test.execute_tests(workspace_id, job_manager)
 
     if result.get("status") == "job_started":
@@ -274,10 +395,19 @@ async def _run_test(
             sys.stdout.write(f"\r  {_progress_bar(pct)} {_C.DIM}{msg[:45]}{_C.RESET}    ")
             sys.stdout.flush()
 
+            if verbose and msg:
+                print(f"  {_C.DIM}[*] {msg}{_C.RESET}", file=sys.stderr)
+
             if status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
                 print()
                 if status["status"] != "COMPLETED":
                     print(f"  {_C.RED}Job {status['status']}{_C.RESET}")
+                else:
+                    rs = status.get("result_summary", {})
+                    if verbose and rs:
+                        for k, v in rs.items():
+                            print(f"  {_C.DIM}[*] {k}: {v}{_C.RESET}",
+                                  file=sys.stderr)
                 break
 
     # Load findings
@@ -286,11 +416,16 @@ async def _run_test(
     return findings if isinstance(findings, list) else []
 
 
-async def _run_validate(workspace_id: str, job_manager: Any) -> None:
+async def _run_validate(workspace_id: str, job_manager: Any,
+                        verbose: bool = False) -> None:
     """Stage 5: Validate."""
     from bughound.stages import validate as stage_validate
 
     _print_stage(5, "Validate")
+
+    if verbose:
+        print(f"  {_C.DIM}[*] Validating findings with surgical probes...{_C.RESET}",
+              file=sys.stderr)
 
     try:
         job_id = await job_manager.create_job(workspace_id, "validate_all", "validation")
@@ -322,6 +457,9 @@ async def _run_validate(workspace_id: str, job_manager: Any) -> None:
         sys.stdout.write(f"\r  {_progress_bar(pct)} {_C.DIM}{msg[:45]}{_C.RESET}    ")
         sys.stdout.flush()
 
+        if verbose and msg:
+            print(f"  {_C.DIM}[*] {msg}{_C.RESET}", file=sys.stderr)
+
         if status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
             print()
             if status["status"] == "COMPLETED":
@@ -333,11 +471,15 @@ async def _run_validate(workspace_id: str, job_manager: Any) -> None:
             break
 
 
-async def _run_report(workspace_id: str) -> None:
+async def _run_report(workspace_id: str, verbose: bool = False) -> None:
     """Stage 6: Generate reports."""
     from bughound.stages import report as stage_report
 
     _print_stage(6, "Report")
+
+    if verbose:
+        print(f"  {_C.DIM}[*] Generating HTML, JSON, and Markdown reports...{_C.RESET}",
+              file=sys.stderr)
 
     result = await stage_report.generate_report(workspace_id, "all")
 
@@ -353,6 +495,29 @@ async def _run_report(workspace_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Final summary
 # ---------------------------------------------------------------------------
+
+def _quiet_summary(findings: list[dict], target: str, workspace_id: str) -> str:
+    """Build a single-line quiet summary."""
+    # Deduplicate
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for f in findings:
+        key = (f.get("vulnerability_class", ""), f.get("endpoint", ""),
+               f.get("param", f.get("description", "")))
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+
+    sev_counts = Counter(f.get("severity", "?") for f in unique)
+    parts = []
+    for sev in ("critical", "high", "medium", "low", "info"):
+        count = sev_counts.get(sev, 0)
+        if count:
+            parts.append(f"{count} {sev}")
+
+    severity_str = f" ({', '.join(parts)})" if parts else ""
+    return f"BugHound: {len(unique)} findings{severity_str} on {target} -- workspace: {workspace_id}"
+
 
 def _print_findings_summary(findings: list[dict]) -> None:
     """Print colored findings summary."""
@@ -397,7 +562,7 @@ def _print_findings_summary(findings: list[dict]) -> None:
         print(f"    {cls:25s} {count}")
 
     # Finding details
-    print(f"\n  {_C.DIM}{'─' * 56}{_C.RESET}")
+    print(f"\n  {_C.DIM}{'---' * 19}{_C.RESET}")
     sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     sorted_findings = sorted(unique, key=lambda f: sev_order.get(f.get("severity", "info"), 5))
 
@@ -445,69 +610,252 @@ def _print_summary_dict(d: dict) -> None:
 # ---------------------------------------------------------------------------
 
 async def cmd_scan(args: argparse.Namespace) -> None:
-    """Run full scan pipeline."""
+    """Run full scan pipeline (Stages 0-6)."""
     from bughound.core.job_manager import JobManager
 
-    print(_BANNER)
-    print(f"  {_C.BOLD}Target:{_C.RESET} {args.target}")
-    print(f"  {_C.BOLD}Depth:{_C.RESET}  {args.depth}")
-    if args.skip_nuclei:
-        print(f"  {_C.YELLOW}Nuclei: skipped{_C.RESET}")
-    if args.skip_validate:
-        print(f"  {_C.YELLOW}Validation: skipped{_C.RESET}")
-    print()
+    verbose = args.verbose
+    quiet = args.quiet
+
+    if not quiet:
+        print(_get_banner())
+        print(f"  {_C.BOLD}Target:{_C.RESET} {args.target}")
+        print(f"  {_C.BOLD}Depth:{_C.RESET}  {args.depth}")
+        if args.skip_nuclei:
+            print(f"  {_C.YELLOW}Nuclei: skipped{_C.RESET}")
+        if args.skip_validate:
+            print(f"  {_C.YELLOW}Validation: skipped{_C.RESET}")
+        print()
 
     start = time.time()
     job_manager = JobManager()
 
     # Stage 0
-    workspace_id = await _run_init(args.target, args.depth)
+    workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
 
     # Stage 1
-    await _run_enumerate(workspace_id)
+    await _run_enumerate(workspace_id, verbose=verbose)
 
     # Stage 2
-    await _run_discover(workspace_id, job_manager)
+    await _run_discover(workspace_id, job_manager, verbose=verbose)
 
     # Stage 3
-    attack_surface = await _run_analyze(workspace_id)
+    attack_surface = await _run_analyze(workspace_id, verbose=verbose)
 
     # Stage 4
-    findings = await _run_test(workspace_id, job_manager, attack_surface)
+    findings = await _run_test(workspace_id, job_manager, attack_surface,
+                               verbose=verbose)
 
     # Stage 5
     if not args.skip_validate and findings:
-        await _run_validate(workspace_id, job_manager)
+        await _run_validate(workspace_id, job_manager, verbose=verbose)
 
     # Stage 6
-    await _run_report(workspace_id)
+    await _run_report(workspace_id, verbose=verbose)
 
     # Summary
-    _print_findings_summary(findings)
+    if quiet:
+        print(_quiet_summary(findings, args.target, workspace_id))
+    else:
+        _print_findings_summary(findings)
 
-    elapsed = time.time() - start
-    minutes = int(elapsed // 60)
-    seconds = int(elapsed % 60)
-    print(f"\n  {_C.DIM}Time: {minutes}m {seconds}s{_C.RESET}")
-    print(f"  {_C.DIM}Workspace: {workspace_id}{_C.RESET}")
-    print()
+        elapsed = time.time() - start
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        print(f"\n  {_C.DIM}Time: {minutes}m {seconds}s{_C.RESET}")
+        print(f"  {_C.DIM}Workspace: {workspace_id}{_C.RESET}")
+        print()
+
+
+async def cmd_recon(args: argparse.Namespace) -> None:
+    """Run reconnaissance only (Stages 0-2)."""
+    from bughound.core.job_manager import JobManager
+
+    verbose = args.verbose
+    quiet = args.quiet
+
+    if not quiet:
+        print(_get_banner())
+        print(f"  {_C.BOLD}Target:{_C.RESET} {args.target}")
+        print(f"  {_C.BOLD}Depth:{_C.RESET}  {args.depth}")
+        print(f"  {_C.BOLD}Mode:{_C.RESET}   recon only (Stages 0-2)")
+        print()
+
+    start = time.time()
+    job_manager = JobManager()
+
+    # Stage 0
+    workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
+
+    # Stage 1
+    await _run_enumerate(workspace_id, verbose=verbose)
+
+    # Stage 2
+    await _run_discover(workspace_id, job_manager, verbose=verbose)
+
+    if quiet:
+        print(f"BugHound recon complete on {args.target} -- workspace: {workspace_id}")
+    else:
+        # Print recon summary
+        from bughound.core import workspace
+        print(f"\n{_C.CYAN}{_C.BOLD}{'=' * 60}{_C.RESET}")
+        print(f"  {_C.BOLD}Recon Summary{_C.RESET}")
+        print(f"{_C.CYAN}{'=' * 60}{_C.RESET}\n")
+
+        # Try to load discovered data for summary
+        hosts_data = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+        urls_data = await workspace.read_data(workspace_id, "urls/crawled_urls.json")
+        subs_data = await workspace.read_data(workspace_id, "subdomains/all_subdomains.json")
+
+        hosts_list = hosts_data if isinstance(hosts_data, list) else (
+            hosts_data.get("data", []) if isinstance(hosts_data, dict) else [])
+        urls_list = urls_data if isinstance(urls_data, list) else (
+            urls_data.get("data", []) if isinstance(urls_data, dict) else [])
+        subs_list = subs_data if isinstance(subs_data, list) else (
+            subs_data.get("data", []) if isinstance(subs_data, dict) else [])
+
+        print(f"  Subdomains found:  {len(subs_list)}")
+        print(f"  Live hosts:        {len(hosts_list)}")
+        print(f"  URLs discovered:   {len(urls_list)}")
+
+        elapsed = time.time() - start
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        print(f"\n  {_C.DIM}Time: {minutes}m {seconds}s{_C.RESET}")
+        print(f"  {_C.DIM}Workspace: {workspace_id}{_C.RESET}")
+        print(f"\n  {_C.DIM}Next: bughound analyze {workspace_id}{_C.RESET}")
+        print()
+
+
+async def cmd_analyze(args: argparse.Namespace) -> None:
+    """Run Stage 3 (analyze attack surface) on existing workspace."""
+    verbose = args.verbose
+    quiet = args.quiet
+
+    await _require_workspace(args.workspace_id)
+
+    if not quiet:
+        print(_get_banner())
+        print(f"  {_C.BOLD}Workspace:{_C.RESET} {args.workspace_id}")
+        print(f"  {_C.BOLD}Mode:{_C.RESET}      analyze only (Stage 3)")
+        print()
+
+    result = await _run_analyze(args.workspace_id, verbose=verbose)
+
+    if quiet:
+        tc = result.get("suggested_test_classes", [])
+        stats = result.get("stats", {})
+        print(f"BugHound analyze: {stats.get('total_urls', 0)} urls, "
+              f"{stats.get('total_parameters', 0)} params, "
+              f"{len(tc)} test classes -- workspace: {args.workspace_id}")
+    else:
+        print(f"\n  {_C.DIM}Next: bughound test {args.workspace_id}{_C.RESET}")
+        print()
+
+
+async def cmd_test(args: argparse.Namespace) -> None:
+    """Run Stage 4 (execute tests) on existing workspace."""
+    from bughound.core.job_manager import JobManager
+
+    verbose = args.verbose
+    quiet = args.quiet
+
+    await _require_workspace(args.workspace_id)
+
+    if not quiet:
+        print(_get_banner())
+        print(f"  {_C.BOLD}Workspace:{_C.RESET} {args.workspace_id}")
+        print(f"  {_C.BOLD}Mode:{_C.RESET}      test only (Stage 4)")
+        print()
+
+    job_manager = JobManager()
+
+    # Get attack surface (must have been generated by analyze stage)
+    from bughound.stages import analyze as stage_analyze
+    attack_surface = await stage_analyze.get_attack_surface(args.workspace_id)
+
+    if attack_surface.get("status") == "error":
+        print(f"  {_C.RED}Error: No attack surface found. Run 'bughound analyze {args.workspace_id}' first.{_C.RESET}")
+        sys.exit(1)
+
+    findings = await _run_test(args.workspace_id, job_manager, attack_surface,
+                               verbose=verbose)
+
+    if quiet:
+        sev_counts = Counter(f.get("severity", "?") for f in findings)
+        parts = []
+        for sev in ("critical", "high", "medium", "low", "info"):
+            count = sev_counts.get(sev, 0)
+            if count:
+                parts.append(f"{count} {sev}")
+        severity_str = f" ({', '.join(parts)})" if parts else ""
+        print(f"BugHound test: {len(findings)} findings{severity_str} -- workspace: {args.workspace_id}")
+    else:
+        _print_findings_summary(findings)
+        print(f"\n  {_C.DIM}Next: bughound validate {args.workspace_id}{_C.RESET}")
+        print()
+
+
+async def cmd_validate(args: argparse.Namespace) -> None:
+    """Run Stage 5 (validate findings) on existing workspace."""
+    from bughound.core.job_manager import JobManager
+
+    verbose = args.verbose
+    quiet = args.quiet
+
+    await _require_workspace(args.workspace_id)
+
+    if not quiet:
+        print(_get_banner())
+        print(f"  {_C.BOLD}Workspace:{_C.RESET} {args.workspace_id}")
+        print(f"  {_C.BOLD}Mode:{_C.RESET}      validate only (Stage 5)")
+        print()
+
+    job_manager = JobManager()
+    await _run_validate(args.workspace_id, job_manager, verbose=verbose)
+
+    if quiet:
+        print(f"BugHound validate complete -- workspace: {args.workspace_id}")
+    else:
+        print(f"\n  {_C.DIM}Next: bughound report {args.workspace_id}{_C.RESET}")
+        print()
 
 
 async def cmd_report(args: argparse.Namespace) -> None:
     """Generate report for existing workspace."""
-    print(_BANNER)
-    await _run_report(args.workspace_id)
+    verbose = args.verbose
+    quiet = args.quiet
+
+    await _require_workspace(args.workspace_id)
+
+    if not quiet:
+        print(_get_banner())
+    await _run_report(args.workspace_id, verbose=verbose)
 
 
 async def cmd_list(args: argparse.Namespace) -> None:
     """List workspaces."""
     from bughound.core import workspace
 
-    print(_BANNER)
+    quiet = args.quiet
+
+    if not quiet:
+        print(_get_banner())
+
     workspaces = await workspace.list_workspaces()
 
     if not workspaces:
-        print(f"  {_C.DIM}No workspaces found.{_C.RESET}")
+        if quiet:
+            print("BugHound: 0 workspaces")
+        else:
+            print(f"  {_C.DIM}No workspaces found.{_C.RESET}")
+        return
+
+    if quiet:
+        print(f"BugHound: {len(workspaces)} workspace(s)")
+        for ws in workspaces:
+            ws_id = str(getattr(ws, "workspace_id", "?"))
+            target = str(getattr(ws, "target", "?"))
+            print(f"  {ws_id} {target}")
         return
 
     print(f"  {_C.BOLD}{len(workspaces)} workspace(s){_C.RESET}\n")
@@ -536,10 +884,19 @@ def main() -> None:
         prog="bughound",
         description="BugHound - AI-Powered Bug Bounty Reconnaissance",
     )
+
+    # Global options
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Show detailed activity logs")
+    parser.add_argument("-q", "--quiet", action="store_true",
+                        help="Minimal output (just findings count)")
+    parser.add_argument("--no-color", action="store_true",
+                        help="Disable ANSI colors")
+
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # scan
-    scan_parser = subparsers.add_parser("scan", help="Run full scan pipeline")
+    scan_parser = subparsers.add_parser("scan", help="Run full scan pipeline (Stages 0-6)")
     scan_parser.add_argument("target", help="Target URL, domain, or file with targets")
     scan_parser.add_argument("--depth", default="light", choices=["light", "deep"],
                              help="Scan depth (default: light)")
@@ -548,8 +905,26 @@ def main() -> None:
     scan_parser.add_argument("--skip-validate", action="store_true",
                              help="Skip Stage 5 validation")
 
+    # recon
+    recon_parser = subparsers.add_parser("recon", help="Stages 0-2 only (init + enumerate + discover)")
+    recon_parser.add_argument("target", help="Target URL, domain, or file with targets")
+    recon_parser.add_argument("--depth", default="light", choices=["light", "deep"],
+                              help="Scan depth (default: light)")
+
+    # analyze
+    analyze_parser = subparsers.add_parser("analyze", help="Stage 3 only (attack surface analysis)")
+    analyze_parser.add_argument("workspace_id", help="Workspace ID")
+
+    # test
+    test_parser = subparsers.add_parser("test", help="Stage 4 only (execute tests)")
+    test_parser.add_argument("workspace_id", help="Workspace ID")
+
+    # validate
+    validate_parser = subparsers.add_parser("validate", help="Stage 5 only (validate findings)")
+    validate_parser.add_argument("workspace_id", help="Workspace ID")
+
     # report
-    report_parser = subparsers.add_parser("report", help="Generate report for workspace")
+    report_parser = subparsers.add_parser("report", help="Stage 6 only (generate reports)")
     report_parser.add_argument("workspace_id", help="Workspace ID")
 
     # list
@@ -564,8 +939,25 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
+    # Handle --no-color
+    if args.no_color:
+        _strip_colors()
+
+    # Handle conflicting flags
+    if getattr(args, 'verbose', False) and getattr(args, 'quiet', False):
+        print("Error: --verbose and --quiet cannot be used together.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    # Setup logging based on verbose flag
+    _setup_logging(getattr(args, 'verbose', False))
+
     cmd_map = {
         "scan": cmd_scan,
+        "recon": cmd_recon,
+        "analyze": cmd_analyze,
+        "test": cmd_test,
+        "validate": cmd_validate,
         "report": cmd_report,
         "list": cmd_list,
         "serve": cmd_serve,
