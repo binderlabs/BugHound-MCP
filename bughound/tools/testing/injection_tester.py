@@ -2080,22 +2080,10 @@ async def test_xxe(
                                         "confidence": "high",
                                     }
 
-                            # Error-based detection — XML parser errors suggest
-                            # entity processing was attempted.
-                            # Anti-echo: if our raw payload appears in the response,
-                            # the server is just echoing it back in an error message,
-                            # not actually processing the entity.
-                            if xml_payload not in body and "<!DOCTYPE" not in body:
-                                error_match = _XXE_ERROR_INDICATORS.search(body)
-                                if error_match:
-                                    return {
-                                        "vulnerable": True,
-                                        "url": target_url,
-                                        "payload": xml_payload,
-                                        "evidence": f"XXE error-based: XML parser error '{error_match.group(0)}' suggests entity processing",
-                                        "technique": technique,
-                                        "confidence": "low",
-                                    }
+                            # Error-based XXE detection removed — too noisy.
+                            # Servers commonly echo "DOCTYPE"/"entity" in error
+                            # messages without actually processing entities.
+                            # Only file-read confirmation (above) is reliable.
 
                     except Exception:
                         continue
