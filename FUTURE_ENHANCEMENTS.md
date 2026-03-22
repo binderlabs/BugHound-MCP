@@ -224,12 +224,115 @@ Admin panels found but never tested with default credentials.
 
 ---
 
+## 15. Performance Optimization
+
+### Problem
+Stage 4 testing is slower than necessary due to architectural overhead.
+
+### Bottlenecks (ranked by impact)
+1. **17 separate aiohttp sessions** — each test function in injection_tester.py creates its own ClientSession. No TCP/SSL connection reuse across test functions.
+2. **No TCPConnector pooling** — every HTTP request opens a fresh TCP + SSL handshake. Should use `TCPConnector(limit=100, limit_per_host=10, ttl_dns_cache=300)`.
+3. **Sequential crawling in Stage 2** — hosts crawled one-by-one. 10 hosts × 3 min = 30 min. Should `asyncio.gather()` across hosts.
+4. **Heavy semaphore = 2** — only 2 subprocess tools (sqlmap/nuclei) run simultaneously. Could safely raise to 4.
+5. **Uniform 5 min technique timeout** — config checks need 30s, injection tests need 120s, only nuclei/sqlmap need 300s.
+
+### Approach
+- Create a shared session pool (one session per target host, reused across all techniques)
+- Add `TCPConnector` with connection pooling and DNS caching
+- Parallelize crawling with `asyncio.gather()` + per-host semaphore
+- Per-technique timeout tiers: fast (30s), normal (120s), heavy (300s)
+- Bump light_sem 10→15, heavy_sem 2→4
+
+### Risk
+High — session pooling changes the HTTP lifecycle for all 42 techniques. Connection leaks, premature session closure, or race conditions would affect the entire testing pipeline. Current per-function session isolation is slower but safe.
+
+### When
+After Black Hat demo. Requires thorough integration testing.
+
+---
+
+## 16. CLI Mode (`bughound scan`)
+
+### Problem
+Currently BugHound requires an MCP client (gemini-cli, Claude) to run. Users who just want a quick scan shouldn't need to set up MCP.
+
+### Design: 3 execution modes
+```
+bughound scan <target>              # Automated pipeline, no AI
+bughound scan <target> --depth deep # Deep mode
+bughound serve                      # MCP server (current mode)
+bughound agent <target>             # AI-powered CLI (v2)
+```
+
+### CLI Mode (no AI)
+- Polished version of `tests/e2e_test.py`
+- Same stages, same techniques, same code path as MCP
+- Rich terminal output (progress bars, colored findings, summary table)
+- Arguments: `--depth`, `--stages`, `--skip-nuclei`, `--output json/html/md`
+- Good for CI/CD, quick scans, Black Hat demo
+
+### Agent Mode (built-in AI)
+- CLI calls AI API (Anthropic/Google/OpenAI) between stages for reasoning
+- AI decides scan plan, prioritizes findings, suggests attack chains
+- Two architecture options:
+  1. **Direct API calls** — `--provider anthropic --api-key sk-...`
+  2. **Claude Agent SDK** — proper agent framework with tool use
+- MCP server stays pure (no internal AI) — agent mode is a separate entry point
+- Most powerful mode: AI reasons AND acts without human in the loop
+
+### Implementation
+- `bughound/cli.py` — argparse entry point
+- `bughound/agent.py` — AI agent orchestrator (v2)
+- `pyproject.toml` — add `[project.scripts] bughound = "bughound.cli:main"`
+
+---
+
+## 17. V2 Enhancement Areas
+
+### Deeper Testing
+- Business logic detection (price tampering, workflow bypass)
+- Race condition testing (TOCTOU)
+- WebSocket security testing
+- OAuth flow analysis
+- API schema fuzzing (OpenAPI/Swagger-driven)
+
+### Better Discovery
+- Network traffic proxy for SPA API discovery (mitmproxy integration)
+- Headless browser-based crawling for JS-heavy apps
+- API endpoint inference from mobile app APK analysis
+- Subdomain permutation with AI-suggested patterns
+
+### Smarter Analysis
+- Finding correlation (group related vulns into attack narratives)
+- Auto-triage with AI confidence scoring
+- Comparison mode (diff findings between scans)
+- Custom nuclei template generation from discovered patterns
+
+### Platform Integration
+- HackerOne / Bugcrowd report formatter
+- Slack/Discord webhook notifications
+- GitHub Issues integration for findings
+- Scheduled scanning with cron
+
+---
+
 ## Priority Order
 
-1. Stage 6 (Report) — required for Black Hat demo
-2. Auth-gated testing — +4 findings on bugstore alone
-3. Time-based blind SQLi — most common real-world SQLi
-4. POST body injection — login/form testing
-5. XXE technique — missing vulnerability class
-6. Network traffic proxy — SPA API discovery
+### V1 (Black Hat Demo) — DONE
+1. ~~Stage 6 (Report)~~ DONE
+2. ~~Auth-aware testing~~ DONE (JWT auto-propagation)
+3. ~~Time-based blind SQLi~~ DONE
+4. ~~POST body injection~~ DONE (form→injection pipeline)
+5. ~~XXE technique~~ DONE
+6. ~~Config checks~~ DONE (security headers, version disclosure, default creds, etc.)
+7. ~~XXE false positive fix~~ DONE
+8. ~~Nuclei timeout fix~~ DONE
+
+### V2 (Post-Demo)
+1. CLI mode (`bughound scan`) — no AI, automated pipeline
+2. Agent mode (`bughound agent`) — built-in AI reasoning
+3. Performance optimization — session pooling, parallel crawling
+4. Network traffic proxy — SPA API discovery
+5. Business logic testing patterns
+6. Platform integrations (HackerOne, Slack)
 7. Everything else
