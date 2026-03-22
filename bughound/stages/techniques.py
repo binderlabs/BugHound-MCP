@@ -1945,6 +1945,13 @@ async def _exec_rate_limit(
 
             try:
                 result = await test_rate_limit(full_url, method="POST")
+
+                # Skip if endpoint doesn't actually accept requests
+                # (405/404 means it doesn't exist for POST — no rate limit issue)
+                status_dist = result.get("evidence", "")
+                if "405:" in status_dist or "404:" in status_dist:
+                    continue
+
                 if not result.get("rate_limited"):
                     findings.append({
                         "vulnerability_class": "rate_limiting",
