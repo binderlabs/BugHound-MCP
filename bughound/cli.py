@@ -885,18 +885,20 @@ def main() -> None:
         description="BugHound - AI-Powered Bug Bounty Reconnaissance",
     )
 
-    # Global options
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="Show detailed activity logs")
-    parser.add_argument("-q", "--quiet", action="store_true",
-                        help="Minimal output (just findings count)")
-    parser.add_argument("--no-color", action="store_true",
-                        help="Disable ANSI colors")
+    # Shared flags (available on every subcommand in any position)
+    _common = argparse.ArgumentParser(add_help=False)
+    _common.add_argument("-v", "--verbose", action="store_true",
+                         help="Show detailed activity logs")
+    _common.add_argument("-q", "--quiet", action="store_true",
+                         help="Minimal output (just findings count)")
+    _common.add_argument("--no-color", action="store_true",
+                         help="Disable ANSI colors")
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # scan
-    scan_parser = subparsers.add_parser("scan", help="Run full scan pipeline (Stages 0-6)")
+    scan_parser = subparsers.add_parser("scan", parents=[_common],
+                                        help="Run full scan pipeline (Stages 0-6)")
     scan_parser.add_argument("target", help="Target URL, domain, or file with targets")
     scan_parser.add_argument("--depth", default="light", choices=["light", "deep"],
                              help="Scan depth (default: light)")
@@ -906,32 +908,37 @@ def main() -> None:
                              help="Skip Stage 5 validation")
 
     # recon
-    recon_parser = subparsers.add_parser("recon", help="Stages 0-2 only (init + enumerate + discover)")
+    recon_parser = subparsers.add_parser("recon", parents=[_common],
+                                         help="Stages 0-2 only (init + enumerate + discover)")
     recon_parser.add_argument("target", help="Target URL, domain, or file with targets")
     recon_parser.add_argument("--depth", default="light", choices=["light", "deep"],
                               help="Scan depth (default: light)")
 
     # analyze
-    analyze_parser = subparsers.add_parser("analyze", help="Stage 3 only (attack surface analysis)")
+    analyze_parser = subparsers.add_parser("analyze", parents=[_common],
+                                           help="Stage 3 only (attack surface analysis)")
     analyze_parser.add_argument("workspace_id", help="Workspace ID")
 
     # test
-    test_parser = subparsers.add_parser("test", help="Stage 4 only (execute tests)")
+    test_parser = subparsers.add_parser("test", parents=[_common],
+                                        help="Stage 4 only (execute tests)")
     test_parser.add_argument("workspace_id", help="Workspace ID")
 
     # validate
-    validate_parser = subparsers.add_parser("validate", help="Stage 5 only (validate findings)")
+    validate_parser = subparsers.add_parser("validate", parents=[_common],
+                                            help="Stage 5 only (validate findings)")
     validate_parser.add_argument("workspace_id", help="Workspace ID")
 
     # report
-    report_parser = subparsers.add_parser("report", help="Stage 6 only (generate reports)")
+    report_parser = subparsers.add_parser("report", parents=[_common],
+                                          help="Stage 6 only (generate reports)")
     report_parser.add_argument("workspace_id", help="Workspace ID")
 
     # list
-    subparsers.add_parser("list", help="List workspaces")
+    subparsers.add_parser("list", parents=[_common], help="List workspaces")
 
     # serve
-    subparsers.add_parser("serve", help="Start MCP server")
+    subparsers.add_parser("serve", parents=[_common], help="Start MCP server")
 
     args = parser.parse_args()
 
