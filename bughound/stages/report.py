@@ -1592,7 +1592,8 @@ def _generate_full_html(
 
         <!-- Sidebar Footer -->
         <div class="sidebar-footer">
-            <button onclick="window.print()">Export PDF</button>
+            <button onclick="exportAll()">Export All (PDF)</button>
+            <button onclick="exportFiltered()" style="margin-top:6px;">Export Filtered</button>
             <div class="sidebar-confidential">
                 Confidential security assessment. Unauthorized distribution prohibited.
             </div>
@@ -1716,6 +1717,30 @@ def _generate_full_html(
                 const section = document.getElementById('findings-section');
                 if (section) section.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
             }}
+        }}
+
+        // --- Export functions ---
+        function exportAll() {{
+            // Show all findings, print, then restore filter
+            const cards = document.querySelectorAll('.finding');
+            const hidden = [];
+            cards.forEach(card => {{
+                if (card.style.display === 'none') {{
+                    hidden.push(card);
+                    card.style.display = '';
+                }}
+            }});
+            setTimeout(() => {{
+                window.print();
+                // Restore hidden state after print dialog
+                setTimeout(() => {{
+                    hidden.forEach(card => {{ card.style.display = 'none'; }});
+                }}, 500);
+            }}, 100);
+        }}
+
+        function exportFiltered() {{
+            window.print();
         }}
 
         // --- Copy curl command ---
