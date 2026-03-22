@@ -1756,9 +1756,9 @@ async def test_broken_access(
                 if baseline_size and abs(len(body) - baseline_size) < 50:
                     continue
                 # Skip SPA-like responses that are HTML shells (no real data)
-                if '<div id="root">' in body or '<div id="app">' in body:
-                    # SPA shell — check if body has actual data beyond the shell
-                    if body.count('<script') <= 3 and len(body) < 5000:
+                if ('<div id="root">' in body or '<div id="app">' in body
+                        or '<div id="__next">' in body or '<div id="__nuxt">' in body):
+                    if len(body) < 5000:
                         continue
                 # Must be 200 with meaningful content, and look like data (JSON/HTML with data)
                 if status == 200 and len(body) > 100:
