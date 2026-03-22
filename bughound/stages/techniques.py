@@ -2984,18 +2984,22 @@ async def _exec_xxe(
             try:
                 result = await test_xxe(url)
                 if result.get("vulnerable"):
+                    conf = result.get("confidence", "medium")
+                    # Error-based XXE (low confidence) = medium severity
+                    # File-read confirmed (high confidence) = critical
+                    sev = "critical" if conf == "high" else "medium"
                     return {
                         "vulnerability_class": "xxe",
                         "tool": "injection_tester",
                         "technique_id": "xxe_test",
                         "host": _host_from_url(url),
                         "endpoint": url,
-                        "severity": "critical",
+                        "severity": sev,
                         "description": f"XXE injection via {result.get('technique', 'unknown')} at {url}",
                         "evidence": result.get("evidence", ""),
                         "payload_used": result.get("payload", ""),
-                        "confidence": result.get("confidence", "medium"),
-                        "needs_validation": result.get("confidence") != "high",
+                        "confidence": conf,
+                        "needs_validation": conf != "high",
                     }
             except Exception as exc:
                 logger.debug("xxe_test_error", url=url, error=str(exc))
