@@ -37,8 +37,8 @@ _CSS = """\
 *{margin:0;padding:0;box-sizing:border-box;}
 html{scroll-behavior:smooth;}
 body{
-    background:#0d1117;color:#c9d1d9;
-    font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+    background:#0a0f1a;color:#e5e7eb;
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
     line-height:1.6;padding:0;
 }
 .container{max-width:1200px;margin:0 auto;padding:24px;}
@@ -46,45 +46,45 @@ body{
 /* Sticky top bar — header + nav combined */
 .top-bar{
     position:sticky;top:0;z-index:200;
-    background:#0d1117;
+    background:#0a0f1a;
 }
 header{
-    background:linear-gradient(135deg,#161b22 0%,#0d1117 100%);
-    border-bottom:1px solid #30363d;
+    background:linear-gradient(135deg,#0f172a 0%,#0a0f1a 100%);
+    border-bottom:1px solid #1e293b;
     padding:10px 0;
 }
 header .container{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding-top:8px;padding-bottom:8px;}
 .logo-group{display:flex;align-items:center;gap:12px;}
-.logo-img{width:42px;height:42px;border-radius:50%;border:2px solid #30363d;object-fit:cover;}
-.logo{font-size:24px;font-weight:700;color:#58a6ff;letter-spacing:-0.5px;}
-.logo span{color:#3fb950;}
-.header-meta{text-align:right;color:#8b949e;font-size:12px;}
-.header-meta .target{color:#e6edf3;font-size:14px;font-weight:600;margin-bottom:2px;word-break:break-all;}
-.header-meta .stage-label{color:#58a6ff;font-weight:600;font-size:12px;}
+.logo-img{width:42px;height:42px;border-radius:50%;border:2px solid #1e293b;object-fit:cover;}
+.logo{font-size:24px;font-weight:700;color:#e5e7eb;letter-spacing:-0.5px;}
+.logo span{color:#14b8a6;}
+.header-meta{text-align:right;color:#94a3b8;font-size:12px;}
+.header-meta .target{color:#e5e7eb;font-size:14px;font-weight:600;margin-bottom:2px;word-break:break-all;}
+.header-meta .stage-label{color:#14b8a6;font-weight:600;font-size:12px;}
 
 /* Nav inside top-bar */
 .nav{
-    background:#161b22;border-bottom:2px solid #30363d;
+    background:#0f172a;border-bottom:2px solid #1e293b;
     padding:4px 0;overflow-x:auto;white-space:nowrap;
 }
 .nav .container{padding-top:0;padding-bottom:0;display:flex;gap:2px;flex-wrap:nowrap;}
 .nav a{
-    color:#8b949e;text-decoration:none;padding:6px 14px;font-size:13px;
+    color:#94a3b8;text-decoration:none;padding:6px 14px;font-size:13px;
     border-radius:4px;transition:all .15s;
 }
-.nav a:hover{color:#58a6ff;background:rgba(88,166,255,.08);}
+.nav a:hover{color:#14b8a6;background:rgba(20,184,166,.08);}
 
 /* Section anchors — offset for sticky header+nav */
 h2{
-    color:#e6edf3;font-size:20px;margin:36px 0 16px 0;
-    padding-bottom:8px;border-bottom:1px solid #21262d;
+    color:#e5e7eb;font-size:20px;margin:36px 0 16px 0;
+    padding-bottom:8px;border-bottom:1px solid #1e293b;
     scroll-margin-top:110px;
 }
-h3{color:#c9d1d9;font-size:16px;margin:16px 0 8px 0;}
+h3{color:#e5e7eb;font-size:16px;margin:16px 0 8px 0;}
 
 /* Cards */
 .card{
-    background:#161b22;border:1px solid #30363d;
+    background:#0f172a;border:1px solid #1e293b;
     border-radius:6px;padding:16px;margin:8px 0;
 }
 .card-grid{
@@ -95,123 +95,123 @@ h3{color:#c9d1d9;font-size:16px;margin:16px 0 8px 0;}
 
 /* Stat cards with top color bar */
 .stat-card{
-    background:#161b22;border:1px solid #30363d;
+    background:#0f172a;border:1px solid #1e293b;
     border-radius:6px;padding:16px;text-align:center;
-    border-top:3px solid #58a6ff;
+    border-top:3px solid #14b8a6;
     transition:transform .15s,box-shadow .15s;
 }
 .stat-card:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.3);}
-.stat-card.critical{border-top-color:#da3633;}
-.stat-card.high{border-top-color:#d29922;}
-.stat-card.warning{border-top-color:#e3b341;}
-.stat-card.success{border-top-color:#3fb950;}
-.stat-card.info{border-top-color:#58a6ff;}
+.stat-card.critical{border-top-color:#ef4444;}
+.stat-card.high{border-top-color:#f97316;}
+.stat-card.warning{border-top-color:#eab308;}
+.stat-card.success{border-top-color:#14b8a6;}
+.stat-card.info{border-top-color:#14b8a6;}
 .stat-card .icon{font-size:20px;margin-bottom:4px;}
-.stat-card .value{font-size:32px;font-weight:700;color:#58a6ff;}
-.stat-card .label{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}
+.stat-card .value{font-size:32px;font-weight:700;color:#14b8a6;}
+.stat-card .label{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}
 
 /* Severity badges */
 .badge{
-    display:inline-block;padding:2px 10px;border-radius:12px;
-    font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;
+    display:inline-block;padding:2px 10px;border-radius:4px;
+    font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;
 }
-.badge-critical{background:#da3633;color:#fff;}
-.badge-high{background:#d29922;color:#000;}
-.badge-medium{background:#e3b341;color:#000;}
-.badge-low{background:#3fb950;color:#000;}
-.badge-info{background:#58a6ff;color:#000;}
+.badge-critical{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);}
+.badge-high{background:rgba(249,115,22,0.15);color:#f97316;border:1px solid rgba(249,115,22,0.3);}
+.badge-medium{background:rgba(234,179,8,0.15);color:#eab308;border:1px solid rgba(234,179,8,0.3);}
+.badge-low{background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);}
+.badge-info{background:rgba(100,116,139,0.15);color:#64748b;border:1px solid rgba(100,116,139,0.3);}
 
 /* Tables */
 table{width:100%;border-collapse:collapse;margin:8px 0;}
 thead th{
-    background:#21262d;text-align:left;padding:10px 12px;
-    font-size:12px;text-transform:uppercase;letter-spacing:.5px;
-    color:#8b949e;border-bottom:2px solid #30363d;
-    position:sticky;top:0;
+    background:#0f172a;text-align:left;padding:10px 12px;
+    font-size:11px;text-transform:uppercase;letter-spacing:1px;
+    color:#94a3b8;border-bottom:1px solid #1e293b;
+    position:sticky;top:0;font-weight:700;
 }
-tbody td{padding:10px 12px;border-bottom:1px solid #21262d;font-size:14px;vertical-align:top;}
-tbody tr:nth-child(even){background:rgba(22,27,34,.6);}
-tbody tr:hover{background:#1c2128;}
+tbody td{padding:10px 12px;border-bottom:1px solid #1e293b;font-size:14px;vertical-align:top;color:#e5e7eb;}
+tbody tr:nth-child(even){background:rgba(15,23,42,.6);}
+tbody tr:hover{background:rgba(20,184,166,.03);}
 
 /* Probe-confirmed block */
 .probe-confirmed{
-    border-left:4px solid #da3633;
-    margin:12px 0;background:rgba(218,54,51,.08);
+    border-left:4px solid #ef4444;
+    margin:12px 0;background:rgba(239,68,68,.08);
     border-radius:0 8px 8px 0;padding:16px 20px;
 }
-.probe-confirmed h3{color:#f85149;margin-top:0;}
+.probe-confirmed h3{color:#ef4444;margin-top:0;}
 
 /* Immediate win block */
 .immediate-win{
-    border-left:4px solid #3fb950;
-    margin:12px 0;background:rgba(63,185,80,.08);
+    border-left:4px solid #14b8a6;
+    margin:12px 0;background:rgba(20,184,166,.08);
     border-radius:0 8px 8px 0;padding:16px 20px;
 }
 
 /* Chain card */
 .chain-card{
-    border-left:4px solid #d29922;background:rgba(210,153,34,.06);
+    border-left:4px solid #f97316;background:rgba(249,115,22,.06);
     border-radius:0 8px 8px 0;padding:16px 20px;margin:12px 0;
 }
-.chain-card.chain-critical{border-left-color:#da3633;background:rgba(218,54,51,.06);}
-.chain-card.chain-high{border-left-color:#d29922;background:rgba(210,153,34,.06);}
-.chain-card.chain-medium{border-left-color:#e3b341;background:rgba(227,179,65,.06);}
+.chain-card.chain-critical{border-left-color:#ef4444;background:rgba(239,68,68,.06);}
+.chain-card.chain-high{border-left-color:#f97316;background:rgba(249,115,22,.06);}
+.chain-card.chain-medium{border-left-color:#eab308;background:rgba(234,179,8,.06);}
 
 /* Collapsible details */
 details{margin:8px 0;}
 summary{
-    cursor:pointer;padding:10px 14px;background:#161b22;
-    border:1px solid #30363d;border-radius:6px;color:#c9d1d9;
+    cursor:pointer;padding:10px 14px;background:#0f172a;
+    border:1px solid #1e293b;border-radius:6px;color:#e5e7eb;
     font-weight:600;font-size:14px;user-select:none;
     transition:background .15s;list-style:none;
 }
 summary::-webkit-details-marker{display:none;}
-summary::before{content:"\\25B6";display:inline-block;margin-right:8px;font-size:10px;transition:transform .2s;color:#58a6ff;}
+summary::before{content:"\\25B6";display:inline-block;margin-right:8px;font-size:10px;transition:transform .2s;color:#14b8a6;}
 details[open] summary::before{transform:rotate(90deg);}
-summary:hover{background:#1c2128;}
+summary:hover{background:rgba(20,184,166,.05);}
 details[open] summary{border-radius:6px 6px 0 0;border-bottom:none;}
 details .detail-content{
-    background:#161b22;border:1px solid #30363d;border-top:none;
+    background:#0f172a;border:1px solid #1e293b;border-top:none;
     border-radius:0 0 6px 6px;padding:12px 16px;
 }
 
 /* Score badges */
 .score-badge{display:inline-block;padding:4px 14px;border-radius:16px;font-size:14px;font-weight:700;}
-.score-critical{background:#da3633;color:#fff;}
-.score-high{background:#d29922;color:#000;}
-.score-medium{background:#e3b341;color:#000;}
-.score-low{background:#3fb950;color:#000;}
+.score-critical{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);}
+.score-high{background:rgba(249,115,22,0.15);color:#f97316;border:1px solid rgba(249,115,22,0.3);}
+.score-medium{background:rgba(234,179,8,0.15);color:#eab308;border:1px solid rgba(234,179,8,0.3);}
+.score-low{background:rgba(59,130,246,0.15);color:#3b82f6;border:1px solid rgba(59,130,246,0.3);}
 
 /* Flag / test tags */
 .flag-tag{
-    display:inline-block;background:#21262d;border:1px solid #30363d;
-    border-radius:4px;padding:2px 8px;margin:2px 4px 2px 0;font-size:12px;color:#e3b341;
+    display:inline-block;background:#0f172a;border:1px solid #1e293b;
+    border-radius:4px;padding:2px 8px;margin:2px 4px 2px 0;font-size:12px;color:#eab308;
 }
 .test-tag{
-    display:inline-block;background:#21262d;border:1px solid #30363d;
-    border-radius:4px;padding:3px 10px;margin:3px 4px 3px 0;font-size:12px;color:#c9d1d9;
+    display:inline-block;background:#0f172a;border:1px solid #1e293b;
+    border-radius:4px;padding:3px 10px;margin:3px 4px 3px 0;font-size:12px;color:#e5e7eb;
 }
 .test-group{margin:8px 0;}
-.test-group-title{font-size:14px;font-weight:600;color:#e3b341;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;}
+.test-group-title{font-size:14px;font-weight:600;color:#eab308;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;}
 
 /* Progress bars */
-.bar{height:8px;background:#21262d;border-radius:4px;overflow:hidden;margin:2px 0;}
+.bar{height:8px;background:#1e293b;border-radius:4px;overflow:hidden;margin:2px 0;}
 .bar-fill{height:100%;border-radius:4px;transition:width .3s;}
 .param-bar{display:flex;align-items:center;gap:8px;margin:4px 0;}
-.param-bar-label{min-width:110px;font-size:13px;color:#8b949e;}
+.param-bar-label{min-width:110px;font-size:13px;color:#94a3b8;}
 .param-bar-count{min-width:40px;font-size:13px;font-weight:600;text-align:right;}
 
 /* Utility classes */
-.url-text{color:#58a6ff;word-break:break-all;font-size:13px;}
-.mono{font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;}
-.empty-state{color:#484f58;font-style:italic;padding:12px;}
+.url-text{color:#14b8a6;word-break:break-all;font-size:13px;}
+.mono{font-family:'JetBrains Mono','SF Mono','Fira Code','Consolas',monospace;font-size:13px;}
+.empty-state{color:#64748b;font-style:italic;padding:12px;}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
 .reason-list{list-style:none;padding:0;margin:4px 0;}
-.reason-list li{padding:4px 0;font-size:13px;color:#c9d1d9;}
-.reason-list li::before{content:"\\25B6 ";color:#58a6ff;font-size:10px;margin-right:4px;}
+.reason-list li{padding:4px 0;font-size:13px;color:#e5e7eb;}
+.reason-list li::before{content:"\\25B6 ";color:#14b8a6;font-size:10px;margin-right:4px;}
 .steps{margin:8px 0;padding-left:20px;}
-.steps li{margin:4px 0;color:#8b949e;font-size:13px;}
-.steps li code{background:#21262d;padding:2px 6px;border-radius:3px;font-size:12px;color:#e6edf3;}
+.steps li{margin:4px 0;color:#94a3b8;font-size:13px;}
+.steps li code{background:#0f172a;padding:2px 6px;border-radius:3px;font-size:12px;color:#e5e7eb;}
 
 /* Risk-score big display */
 .risk-display{
@@ -222,16 +222,16 @@ details .detail-content{
 /* Intelligence briefing items */
 .briefing-item{
     padding:12px 16px;margin:6px 0;
-    background:#161b22;border:1px solid #30363d;border-radius:6px;
-    border-left:3px solid #58a6ff;font-size:13px;color:#c9d1d9;
+    background:#0f172a;border:1px solid #1e293b;border-radius:6px;
+    border-left:3px solid #14b8a6;font-size:13px;color:#e5e7eb;
 }
-.briefing-item .idx{color:#58a6ff;font-weight:700;margin-right:8px;}
+.briefing-item .idx{color:#14b8a6;font-weight:700;margin-right:8px;}
 
 /* Executive summary box */
 .exec-summary{
-    background:linear-gradient(135deg,rgba(88,166,255,.05),rgba(63,185,80,.05));
-    border:1px solid #30363d;border-radius:8px;padding:20px 24px;
-    margin:16px 0;font-size:14px;line-height:1.7;color:#e6edf3;
+    background:linear-gradient(135deg,rgba(20,184,166,.05),rgba(20,184,166,.02));
+    border:1px solid #1e293b;border-radius:8px;padding:20px 24px;
+    margin:16px 0;font-size:14px;line-height:1.7;color:#e5e7eb;
 }
 
 /* Pulse animation for critical items */
@@ -240,10 +240,10 @@ details .detail-content{
 
 /* Footer */
 footer{
-    text-align:center;padding:32px 0;color:#484f58;font-size:12px;
-    border-top:1px solid #21262d;margin-top:48px;
+    text-align:center;padding:32px 0;color:#64748b;font-size:12px;
+    border-top:2px solid #14b8a6;margin-top:48px;
 }
-footer .brand{color:#58a6ff;font-weight:600;}
+footer .brand{color:#14b8a6;font-weight:600;}
 
 /* Responsive */
 @media(max-width:768px){
@@ -260,32 +260,32 @@ footer .brand{color:#58a6ff;font-weight:600;}
     .container{max-width:100%;}
     header{position:static;background:#fff;border-bottom:2px solid #ddd;padding:12px 0;}
     .nav{display:none;}
-    .logo{color:#0a5cad;} .logo span{color:#1a7f37;}
+    .logo{color:#1a1a1a;} .logo span{color:#0d9488;}
     .header-meta,.header-meta .target{color:#1a1a1a;}
-    .header-meta .stage-label{color:#0a5cad;}
+    .header-meta .stage-label{color:#0d9488;}
     h2{color:#1a1a1a;border-bottom-color:#ddd;page-break-after:avoid;}
     .card,.stat-card{background:#fafafa;border-color:#ddd;box-shadow:none;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     .stat-card:hover{transform:none;box-shadow:none;}
-    .stat-card .value{color:#0a5cad;}
+    .stat-card .value{color:#0d9488;}
     .stat-card .label{color:#555;}
     table{page-break-inside:avoid;}
-    thead th{background:#eee;color:#333;border-bottom-color:#ddd;}
+    thead th{background:#f5f5f5;color:#666;border-bottom-color:#ddd;}
     tbody td{border-bottom-color:#eee;color:#333;}
     tbody tr:nth-child(even){background:#f5f5f5;}
     tbody tr:hover{background:transparent;}
-    .probe-confirmed{background:rgba(218,54,51,.1);border-left-color:#d00;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .immediate-win{background:rgba(63,185,80,.1);border-left-color:#1a7f37;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .chain-card{background:rgba(210,153,34,.1);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .probe-confirmed{background:rgba(239,68,68,.1);border-left-color:#dc2626;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .immediate-win{background:rgba(20,184,166,.1);border-left-color:#0d9488;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .chain-card{background:rgba(249,115,22,.1);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
     .badge,.score-badge{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-    .url-text{color:#0a5cad;}
+    .url-text{color:#0d9488;}
     summary{background:#fafafa;border-color:#ddd;color:#1a1a1a;}
     details .detail-content{background:#fafafa;border-color:#ddd;}
-    footer{color:#999;border-top-color:#ddd;}
-    footer .brand{color:#0a5cad;}
+    footer{color:#999;border-top-color:#0d9488;}
+    footer .brand{color:#0d9488;}
     .flag-tag{background:#eee;border-color:#ddd;color:#8a6b00;}
     .test-tag{background:#eee;border-color:#ddd;color:#333;}
-    .briefing-item{background:#fafafa;border-color:#ddd;border-left-color:#0a5cad;color:#333;}
-    .exec-summary{background:#f0f8ff;border-color:#ddd;color:#1a1a1a;}
+    .briefing-item{background:#fafafa;border-color:#ddd;border-left-color:#0d9488;color:#333;}
+    .exec-summary{background:#f0fdf4;border-color:#ddd;color:#1a1a1a;}
     .reason-list li{color:#333;}
     .empty-state{color:#999;}
 }
@@ -394,7 +394,7 @@ def _stat_card(value: int | str, label: str, css_class: str = "info", icon: str 
 </div>"""
 
 
-def _progress_bar(count: int, total: int, color: str = "#58a6ff") -> str:
+def _progress_bar(count: int, total: int, color: str = "#14b8a6") -> str:
     """Inline progress bar HTML."""
     pct = min(100, int(count / total * 100)) if total > 0 else 0
     return (
@@ -545,7 +545,7 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
         parts.append("<h3>Live vulnerability probes detected injectable parameters:</h3>")
         total_confirmed = probe_xss + probe_sqli + probe_lfi
         parts.append(
-            f'<p style="font-size:15px;color:#f85149;margin-bottom:12px;">'
+            f'<p style="font-size:15px;color:#ef4444;margin-bottom:12px;">'
             f'<strong>{total_confirmed}</strong> confirmed injectable endpoint(s) '
             f'found during parameter probing.</p>'
         )
@@ -568,7 +568,7 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
                 f'&mdash; file content indicators in response</p>'
             )
         parts.append(
-            '<p style="font-size:12px;color:#8b949e;margin-top:10px;">'
+            '<p style="font-size:12px;color:#94a3b8;margin-top:10px;">'
             'These findings are from live probes during parameter classification. '
             'Proceed to Stage 4 (Testing) for full exploitation verification.</p>'
         )
@@ -618,7 +618,7 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
                     status_html = f'{_severity_badge("HIGH")} {label}'
                     break
             if not status_html:
-                status_html = '<span style="color:#3fb950;font-size:12px;">OK</span>'
+                status_html = '<span style="color:#14b8a6;font-size:12px;">OK</span>'
             parts.append(
                 f"<tr><td class=\"mono\">{_esc(tech)}</td>"
                 f"<td>{count}</td>"
@@ -648,12 +648,12 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
                     f_upper = f.split(":")[0].upper()
                     if f_upper in ("NO_WAF", "NON_CDN_IP", "DEBUG_MODE"):
                         flag_html_parts.append(
-                            f'<span class="flag-tag" style="color:#f85149;border-color:#da3633;">'
+                            f'<span class="flag-tag" style="color:#ef4444;border-color:rgba(239,68,68,0.3);">'
                             f'{_esc(f)}</span>'
                         )
                     elif f_upper in ("OLD_TECH", "CORS_MISCONFIGURED", "SOURCE_MAP_EXPOSED"):
                         flag_html_parts.append(
-                            f'<span class="flag-tag" style="color:#d29922;border-color:#d29922;">'
+                            f'<span class="flag-tag" style="color:#f97316;border-color:rgba(249,115,22,0.3);">'
                             f'{_esc(f)}</span>'
                         )
                     else:
@@ -708,9 +708,9 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
 
         # Expandable URL lists
         _url_sections = [
-            ("API Endpoints", api_urls, "#da3633"),
-            ("Dynamic URLs (with parameters)", dynamic_urls, "#d29922"),
-            ("Admin / Debug URLs", admin_urls, "#f85149"),
+            ("API Endpoints", api_urls, "#ef4444"),
+            ("Dynamic URLs (with parameters)", dynamic_urls, "#f97316"),
+            ("Admin / Debug URLs", admin_urls, "#ef4444"),
         ]
         for section_name, url_list, _color in _url_sections:
             if url_list:
@@ -721,7 +721,7 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
                 parts.append("<thead><tr><th>#</th><th>URL</th></tr></thead><tbody>")
                 for idx, u in enumerate(url_list[:100], 1):
                     parts.append(
-                        f'<tr><td style="color:#484f58;width:40px;">{idx}</td>'
+                        f'<tr><td style="color:#64748b;width:40px;">{idx}</td>'
                         f'<td class="url-text">{_esc(_truncate(u, 120))}</td></tr>'
                     )
                 if len(url_list) > 100:
@@ -773,7 +773,7 @@ def generate_discovery_html(workspace_id: str, data: dict[str, Any]) -> str:
         parts.append("<tbody>")
         for cr in cors_results[:30]:
             creds = "Yes" if cr.get("credentials_allowed") else "No"
-            creds_style = ' style="color:#da3633;font-weight:600;"' if cr.get("credentials_allowed") else ""
+            creds_style = ' style="color:#ef4444;font-weight:600;"' if cr.get("credentials_allowed") else ""
             parts.append(
                 f'<tr><td class="url-text">{_esc(_truncate(cr.get("url", ""), 60))}</td>'
                 f"<td>{_severity_badge(cr.get('severity', 'INFO'))}</td>"
@@ -900,7 +900,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     parts.append(
         f'<span style="font-size:28px;font-weight:700;color:#e6edf3;">Score: {top_score}</span>'
     )
-    parts.append(f'<span style="color:#8b949e;">{total_hosts} live hosts analyzed</span>')
+    parts.append(f'<span style="color:#94a3b8;">{total_hosts} live hosts analyzed</span>')
     parts.append("</div>")
 
     # Executive summary auto-generated
@@ -911,7 +911,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     ]
     if wins:
         exec_parts.append(
-            f" with <strong style=\"color:#3fb950;\">{len(wins)} immediate win(s)</strong>"
+            f" with <strong style=\"color:#14b8a6;\">{len(wins)} immediate win(s)</strong>"
             " that can be reported without further testing"
         )
     if chains:
@@ -920,7 +920,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
         crit_count = sum(1 for h in high_interest if h.get("risk_level", "").upper() in ("CRITICAL", "HIGH"))
         if crit_count:
             exec_parts.append(
-                f", and <strong style=\"color:#da3633;\">{crit_count} critical/high-risk target(s)</strong>"
+                f", and <strong style=\"color:#ef4444;\">{crit_count} critical/high-risk target(s)</strong>"
             )
     exec_parts.append(
         f". The highest-scoring host received a risk score of <strong>{top_score}</strong> "
@@ -941,7 +941,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     if wins:
         parts.append(f'<h2 id="wins">Immediate Wins ({len(wins)} report-ready findings)</h2>')
         parts.append(
-            '<p style="color:#3fb950;font-size:13px;margin-bottom:12px;">'
+            '<p style="color:#14b8a6;font-size:13px;margin-bottom:12px;">'
             'These findings can be reported to bug bounty programs immediately '
             'without additional testing.</p>'
         )
@@ -954,7 +954,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             )
             if win.get("evidence"):
                 parts.append(
-                    f'<p style="color:#8b949e;font-size:13px;margin-top:4px;">'
+                    f'<p style="color:#94a3b8;font-size:13px;margin-top:4px;">'
                     f'{_esc(win.get("evidence", ""))}</p>'
                 )
             if win.get("reproduction"):
@@ -964,12 +964,12 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
                 )
             if win.get("impact"):
                 parts.append(
-                    f'<p style="font-size:13px;color:#c9d1d9;margin-top:4px;">'
+                    f'<p style="font-size:13px;color:#e5e7eb;margin-top:4px;">'
                     f'{_esc(win.get("impact", ""))}</p>'
                 )
             if win.get("bounty_estimate"):
                 parts.append(
-                    f'<p style="font-size:13px;color:#3fb950;margin-top:4px;">'
+                    f'<p style="font-size:13px;color:#14b8a6;margin-top:4px;">'
                     f'Bounty estimate: {_esc(win.get("bounty_estimate", ""))}</p>'
                 )
             parts.append("</div>")
@@ -978,7 +978,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     if probe_hosts:
         parts.append(f'<h2 id="probe-confirmed">Probe-Confirmed Vulnerabilities ({len(probe_hosts)})</h2>')
         parts.append(
-            '<p style="color:#f85149;font-size:13px;margin-bottom:12px;">'
+            '<p style="color:#ef4444;font-size:13px;margin-bottom:12px;">'
             'These hosts have vulnerabilities confirmed by live parameter probing '
             'during discovery.</p>'
         )
@@ -992,7 +992,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             for reason in ph.get("reasons", []):
                 if "CONFIRMED" in reason:
                     parts.append(
-                        f'<p style="color:#f85149;font-size:13px;margin:4px 0;">'
+                        f'<p style="color:#ef4444;font-size:13px;margin:4px 0;">'
                         f'{_esc(reason)}</p>'
                     )
             parts.append("</div>")
@@ -1021,8 +1021,8 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             # Score bar visualization
             max_score = max(h.get("score", 1) for h in high_interest) or 1
             bar_pct = min(100, int(score / max_score * 100))
-            bar_color = {"CRITICAL": "#da3633", "HIGH": "#d29922", "MEDIUM": "#e3b341", "LOW": "#3fb950"}.get(
-                risk.upper(), "#58a6ff"
+            bar_color = {"CRITICAL": "#ef4444", "HIGH": "#f97316", "MEDIUM": "#eab308", "LOW": "#3b82f6"}.get(
+                risk.upper(), "#14b8a6"
             )
             parts.append(
                 f'<div style="margin:8px 0 12px 0;">'
@@ -1039,12 +1039,12 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
 
             if techs:
                 parts.append(
-                    f'<p style="font-size:12px;color:#8b949e;margin-top:8px;">'
+                    f'<p style="font-size:12px;color:#94a3b8;margin-top:8px;">'
                     f'Technologies: {_esc(", ".join(techs[:8]))}</p>'
                 )
             if sp:
                 parts.append(
-                    f'<p style="font-size:12px;color:#d29922;margin-top:4px;">'
+                    f'<p style="font-size:12px;color:#f97316;margin-top:4px;">'
                     f'Sensitive paths: {_esc(", ".join(str(s) for s in sp[:5]))}</p>'
                 )
 
@@ -1063,25 +1063,25 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             parts.append(
                 f"<p>{_severity_badge(sev)} "
                 f"<strong>{_esc(chain.get('name', ''))}</strong> "
-                f'<span style="color:#8b949e;font-size:12px;margin-left:8px;">'
+                f'<span style="color:#94a3b8;font-size:12px;margin-left:8px;">'
                 f"{_esc(chain.get('chain_id', ''))}</span></p>"
             )
             evidence = chain.get("evidence", {})
             if evidence.get("trigger"):
                 parts.append(
-                    f'<p style="font-size:13px;color:#c9d1d9;margin-top:4px;">'
+                    f'<p style="font-size:13px;color:#e5e7eb;margin-top:4px;">'
                     f'Trigger: {_esc(evidence["trigger"])}</p>'
                 )
             if evidence.get("supporting"):
                 parts.append(
-                    f'<p style="font-size:13px;color:#8b949e;">'
+                    f'<p style="font-size:13px;color:#94a3b8;">'
                     f'Supporting: {_esc(evidence["supporting"])}</p>'
                 )
 
             affected = chain.get("affected_hosts", [])
             if affected:
                 parts.append(
-                    f'<p style="font-size:12px;color:#58a6ff;margin-top:4px;">'
+                    f'<p style="font-size:12px;color:#14b8a6;margin-top:4px;">'
                     f'Hosts: {_esc(", ".join(affected[:5]))}'
                     f'{"..." if len(affected) > 5 else ""}</p>'
                 )
@@ -1098,7 +1098,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             meta_parts = []
             if bounty:
                 meta_parts.append(
-                    f'<span style="color:#3fb950;">Bounty: {_esc(bounty)}</span>'
+                    f'<span style="color:#14b8a6;">Bounty: {_esc(bounty)}</span>'
                 )
             if ready:
                 meta_parts.append(f'{_severity_badge("LOW")} Report Ready')
@@ -1114,7 +1114,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
     if reasoning:
         parts.append(f'<h2 id="reasoning">AI Reasoning Prompts ({len(reasoning[:15])})</h2>')
         parts.append(
-            '<p style="color:#8b949e;font-size:13px;margin-bottom:12px;">'
+            '<p style="color:#94a3b8;font-size:13px;margin-bottom:12px;">'
             'Intelligence briefing items for AI-guided analysis and decision-making.</p>'
         )
         for idx, prompt in enumerate(reasoning[:15], 1):
@@ -1143,13 +1143,13 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
 
         # Color map for test categories
         cat_colors = {
-            "injection": "#da3633", "auth": "#d29922", "infra": "#58a6ff",
-            "api": "#bc8cff", "client": "#e3b341", "general": "#8b949e",
+            "injection": "#ef4444", "auth": "#f97316", "infra": "#14b8a6",
+            "api": "#a78bfa", "client": "#eab308", "general": "#94a3b8",
         }
 
         parts.append('<div class="card">')
         for group_name, items in sorted(groups.items()):
-            color = cat_colors.get(group_name.lower(), "#8b949e")
+            color = cat_colors.get(group_name.lower(), "#94a3b8")
             parts.append(
                 f'<div class="test-group">'
                 f'<div class="test-group-title" style="color:{color};">'
@@ -1181,14 +1181,14 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
 
             # Vuln type counts with visual bars
             vuln_types = [
-                ("SQLi", pc_stats.get("sqli_count", pc_stats.get("sqli_candidates", 0)), "#da3633"),
-                ("XSS", pc_stats.get("xss_count", pc_stats.get("xss_candidates", 0)), "#d29922"),
-                ("SSRF", pc_stats.get("ssrf_count", pc_stats.get("ssrf_candidates", 0)), "#bc8cff"),
-                ("LFI", pc_stats.get("lfi_count", pc_stats.get("lfi_candidates", 0)), "#f85149"),
-                ("IDOR", pc_stats.get("idor_count", pc_stats.get("idor_candidates", 0)), "#e3b341"),
-                ("Redirect", pc_stats.get("redirect_count", pc_stats.get("redirect_candidates", 0)), "#58a6ff"),
-                ("RCE", pc_stats.get("rce_count", pc_stats.get("rce_candidates", 0)), "#da3633"),
-                ("SSTI", pc_stats.get("ssti_count", pc_stats.get("ssti_candidates", 0)), "#f85149"),
+                ("SQLi", pc_stats.get("sqli_count", pc_stats.get("sqli_candidates", 0)), "#ef4444"),
+                ("XSS", pc_stats.get("xss_count", pc_stats.get("xss_candidates", 0)), "#f97316"),
+                ("SSRF", pc_stats.get("ssrf_count", pc_stats.get("ssrf_candidates", 0)), "#a78bfa"),
+                ("LFI", pc_stats.get("lfi_count", pc_stats.get("lfi_candidates", 0)), "#ef4444"),
+                ("IDOR", pc_stats.get("idor_count", pc_stats.get("idor_candidates", 0)), "#eab308"),
+                ("Redirect", pc_stats.get("redirect_count", pc_stats.get("redirect_candidates", 0)), "#14b8a6"),
+                ("RCE", pc_stats.get("rce_count", pc_stats.get("rce_candidates", 0)), "#ef4444"),
+                ("SSTI", pc_stats.get("ssti_count", pc_stats.get("ssti_candidates", 0)), "#ef4444"),
             ]
             # Filter to non-zero
             vuln_types_nonzero = [(l, c, col) for l, c, col in vuln_types if c > 0]
@@ -1219,8 +1219,8 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             probe_lfi = pc_stats.get("probe_lfi_found", 0)
             if probe_xss or probe_sqli or probe_lfi:
                 parts.append(
-                    '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #21262d;">'
-                    '<p style="font-size:13px;color:#f85149;font-weight:600;">Probe-Confirmed:</p>'
+                    '<div style="margin-top:12px;padding-top:12px;border-top:1px solid #1e293b;">'
+                    '<p style="font-size:13px;color:#ef4444;font-weight:600;">Probe-Confirmed:</p>'
                 )
                 if probe_sqli:
                     parts.append(f'<p style="font-size:13px;">{_severity_badge("CRITICAL")} SQLi: {probe_sqli}</p>')
@@ -1246,7 +1246,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
                     f"<tr><td>{_severity_badge(pc_item.get('vuln_type', 'info').upper())}</td>"
                     f'<td class="mono">{_esc(pc_item.get("param", ""))}</td>'
                     f'<td class="url-text">{_esc(_truncate(pc_item.get("url", ""), 70))}</td>'
-                    f'<td style="color:#f85149;font-size:12px;">{_esc(pc_item.get("priority", ""))}</td></tr>'
+                    f'<td style="color:#ef4444;font-size:12px;">{_esc(pc_item.get("priority", ""))}</td></tr>'
                 )
             parts.append("</tbody></table></div></details>")
 
@@ -1284,8 +1284,8 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             for flag_type, count in sorted(non_zero.items(), key=lambda x: -x[1]):
                 pct = min(100, int(count / max_flag * 100))
                 # Color based on flag type
-                flag_color = "#da3633" if flag_type in ("NO_WAF", "DEBUG_MODE") else (
-                    "#d29922" if flag_type in ("OLD_TECH", "CORS_MISCONFIGURED") else "#58a6ff"
+                flag_color = "#ef4444" if flag_type in ("NO_WAF", "DEBUG_MODE") else (
+                    "#f97316" if flag_type in ("OLD_TECH", "CORS_MISCONFIGURED") else "#14b8a6"
                 )
                 parts.append(
                     f"<tr><td>{_esc(flag_type)}</td><td>{count}</td>"
@@ -1314,7 +1314,7 @@ def generate_attack_surface_html(workspace_id: str, result: dict[str, Any]) -> s
             parts.append(
                 f"<tr><td class=\"mono\">{_esc(tech)}</td><td>{count}</td>"
                 f'<td><div class="bar" style="width:200px;">'
-                f'<div class="bar-fill" style="width:{pct}%;background:#58a6ff;"></div>'
+                f'<div class="bar-fill" style="width:{pct}%;background:#14b8a6;"></div>'
                 f"</div></td></tr>"
             )
         parts.append("</tbody></table></div>")
