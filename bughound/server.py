@@ -1436,7 +1436,10 @@ async def bughound_validate_all(workspace_id: str) -> str:
         return f"Error: {exc}"
 
     async def _run_job(jid: str) -> None:
-        result = await stage_validate.validate_all(workspace_id)
+        async def _progress(pct: int, msg: str) -> None:
+            await _job_manager.update_progress(jid, pct, msg, "validate")
+
+        result = await stage_validate.validate_all(workspace_id, progress_cb=_progress)
         summary = {
             "total_validated": result.get("total_validated", 0),
             "confirmed": result.get("confirmed", 0),

@@ -239,6 +239,7 @@ async def validate_finding(
 
 async def validate_all(
     workspace_id: str,
+    progress_cb: Any | None = None,
 ) -> dict[str, Any]:
     """Batch-validate all unvalidated findings.
 
@@ -278,10 +279,19 @@ async def validate_all(
     errors = 0
     start = time.monotonic()
 
-    for finding in to_validate:
+    total = len(to_validate)
+    for idx, finding in enumerate(to_validate):
         finding_id = finding.get("finding_id", "unknown")
         vuln_class = finding.get("vulnerability_class", "other")
         validator = _VALIDATOR_MAP.get(vuln_class, "curl")
+
+        # Report progress
+        if progress_cb:
+            pct = int((idx / total) * 100)
+            try:
+                await progress_cb(pct, f"Validating {idx+1}/{total}: {vuln_class} ({validator})")
+            except Exception:
+                pass
 
         try:
             result = await _run_validator(validator, finding, workspace_id)
