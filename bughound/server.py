@@ -27,7 +27,7 @@ structlog.configure(
 )
 
 from bughound.core import target_classifier, tool_runner, workspace
-from bughound.core.job_manager import JobManager
+from bughound.core.job_manager import JobManager, JobStatus
 from bughound.schemas.models import WorkspaceState
 from bughound.stages import analyze as stage_analyze
 from bughound.stages import discover as stage_discover
@@ -1485,6 +1485,27 @@ async def bughound_validate_immediate_wins(workspace_id: str) -> str:
 )
 async def bughound_generate_report(workspace_id: str, report_type: str = "all") -> str:
     """Generate security assessment report(s)."""
+    import asyncio as _asyncio
+
+    # Auto-wait for validation if it's still running
+    try:
+        running_jobs = await _job_manager.list_jobs(
+            workspace_id=workspace_id,
+            status_filter=JobStatus.RUNNING,
+        )
+        validate_jobs = [j for j in running_jobs if j.get("job_type") == "validate_all"]
+        if validate_jobs:
+            job_id = validate_jobs[0]["job_id"]
+            logger.info("report.waiting_for_validation", job_id=job_id)
+            # Poll until validation completes (max 10 minutes)
+            for _ in range(120):
+                await _asyncio.sleep(5)
+                status = await _job_manager.get_status(job_id)
+                if status and status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
+                    break
+    except Exception:
+        pass  # Proceed with report generation even if check fails
+
     result = await stage_report.generate_report(workspace_id, report_type)
     return _format_report_result(result)
 
