@@ -137,7 +137,7 @@ _BANNER = f"""{_C.CYAN}{_C.BOLD}
  | |_) | |_| | (_| |  _  | (_) | |_| | | | | (_| |
  |____/ \\__,_|\\__, |_| |_|\\___/ \\__,_|_| |_|\\__,_|
               |___/
-{_C.RESET}{_C.DIM}  AI-Powered Bug Bounty Reconnaissance{_C.RESET}
+{_C.RESET}{_C.DIM}  MCP-Based Security Automation Framework{_C.RESET}
 """
 
 
@@ -150,7 +150,7 @@ def _get_banner() -> str:
  | |_) | |_| | (_| |  _  | (_) | |_| | | | | (_| |
  |____/ \\__,_|\\__, |_| |_|\\___/ \\__,_|_| |_|\\__,_|
               |___/
-{_C.RESET}{_C.DIM}  AI-Powered Bug Bounty Reconnaissance{_C.RESET}
+{_C.RESET}{_C.DIM}  MCP-Based Security Automation Framework{_C.RESET}
 """
 
 
@@ -882,7 +882,7 @@ async def cmd_serve(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="bughound",
-        description="BugHound - AI-Powered Bug Bounty Reconnaissance",
+        description="BugHound - MCP-Based Security Automation Framework",
     )
 
     # Shared flags (available on every subcommand in any position)
