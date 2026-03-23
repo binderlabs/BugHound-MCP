@@ -238,6 +238,98 @@ async def _run_enumerate(workspace_id: str, verbose: bool = False) -> None:
                           file=sys.stderr)
 
 
+async def _select_hosts(workspace_id: str, max_hosts: int) -> None:
+    """For broad domains: let user select which subdomains to scan.
+
+    If max_hosts > 0, auto-select top N. If 0, prompt interactively.
+    Rewrites dns/records.json to only include selected hosts.
+    """
+    from bughound.core import workspace
+
+    raw = await workspace.read_data(workspace_id, "dns/records.json")
+    records = raw.get("data", raw) if isinstance(raw, dict) else (raw or [])
+
+    if not isinstance(records, list) or len(records) <= 10:
+        return  # Small enough, no selection needed
+
+    resolved = [r for r in records if isinstance(r, dict) and r.get("resolved")]
+    if len(resolved) <= 10:
+        return
+
+    # Sort by priority: domains with more DNS records first
+    resolved.sort(key=lambda r: len(r.get("A", [])) + len(r.get("CNAME", [])), reverse=True)
+
+    if max_hosts > 0:
+        # Auto-select top N
+        selected = resolved[:max_hosts]
+        print(f"  {_C.GREEN}Auto-selected top {len(selected)} of {len(resolved)} hosts (--max-hosts {max_hosts}){_C.RESET}")
+    else:
+        # Interactive selection
+        print(f"\n  {_C.BOLD}Found {len(resolved)} resolved subdomains.{_C.RESET}")
+        print(f"  Scanning all may take a long time. Select which to scan:\n")
+
+        for i, r in enumerate(resolved[:30], 1):
+            domain = r.get("domain", "?")
+            ips = r.get("A", [])
+            ip_str = f" ({ips[0]})" if ips else ""
+            print(f"  {_C.CYAN}{i:3d}{_C.RESET}. {domain}{_C.DIM}{ip_str}{_C.RESET}")
+
+        if len(resolved) > 30:
+            print(f"  {_C.DIM}... and {len(resolved) - 30} more{_C.RESET}")
+
+        print(f"\n  Options:")
+        print(f"    {_C.BOLD}all{_C.RESET}    — scan all {len(resolved)} hosts")
+        print(f"    {_C.BOLD}1-10{_C.RESET}   — scan hosts 1 through 10")
+        print(f"    {_C.BOLD}1,3,5{_C.RESET}  — scan specific hosts")
+        print(f"    {_C.BOLD}20{_C.RESET}     — scan top 20")
+
+        try:
+            choice = input(f"\n  {_C.BOLD}Select [{_C.GREEN}top 10{_C.RESET}{_C.BOLD}]: {_C.RESET}").strip()
+        except (EOFError, KeyboardInterrupt):
+            choice = "10"
+
+        if not choice:
+            choice = "10"
+
+        if choice.lower() == "all":
+            selected = resolved
+        elif "-" in choice:
+            # Range: "1-10"
+            parts = choice.split("-")
+            try:
+                start = int(parts[0]) - 1
+                end = int(parts[1])
+                selected = resolved[start:end]
+            except (ValueError, IndexError):
+                selected = resolved[:10]
+        elif "," in choice:
+            # Specific: "1,3,5"
+            try:
+                indices = [int(x.strip()) - 1 for x in choice.split(",")]
+                selected = [resolved[i] for i in indices if 0 <= i < len(resolved)]
+            except (ValueError, IndexError):
+                selected = resolved[:10]
+        else:
+            # Number: "20" = top 20
+            try:
+                n = int(choice)
+                selected = resolved[:n]
+            except ValueError:
+                selected = resolved[:10]
+
+        print(f"  {_C.GREEN}Selected {len(selected)} hosts{_C.RESET}")
+
+    # Rewrite dns/records.json with only selected hosts
+    # Keep unresolved records too (they don't affect scanning)
+    unresolved = [r for r in records if isinstance(r, dict) and not r.get("resolved")]
+    filtered = selected + unresolved
+    await workspace.write_data(
+        workspace_id, "dns/records.json", filtered,
+        generated_by="cli_host_selection",
+        target="filtered",
+    )
+
+
 async def _run_discover(workspace_id: str, job_manager: Any,
                         verbose: bool = False) -> None:
     """Stage 2: Discovery."""
@@ -679,6 +771,11 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     if resume_stage <= 1:
         await _run_enumerate(workspace_id, verbose=verbose)
 
+        # Host selection for broad domains
+        if not quiet:
+            max_hosts = getattr(args, "max_hosts", 0)
+            await _select_hosts(workspace_id, max_hosts)
+
     # Stage 2
     if resume_stage <= 2:
         await _run_discover(workspace_id, job_manager, verbose=verbose)
@@ -755,6 +852,11 @@ async def cmd_recon(args: argparse.Namespace) -> None:
 
     # Stage 1
     await _run_enumerate(workspace_id, verbose=verbose)
+
+    # Host selection for broad domains
+    if not quiet:
+        max_hosts = getattr(args, "max_hosts", 0)
+        await _select_hosts(workspace_id, max_hosts)
 
     # Stage 2
     await _run_discover(workspace_id, job_manager, verbose=verbose)
@@ -1053,6 +1155,8 @@ def main() -> None:
                              help="Resume scan from existing workspace")
     scan_parser.add_argument("--output", choices=["text", "json"], default="text",
                              help="Output format (default: text)")
+    scan_parser.add_argument("--max-hosts", type=int, default=0, metavar="N",
+                             help="Max hosts to scan for broad domains (0=ask interactively)")
 
     # recon
     recon_parser = subparsers.add_parser("recon", parents=[_common],
@@ -1060,6 +1164,8 @@ def main() -> None:
     recon_parser.add_argument("target", help="Target URL, domain, or file with targets")
     recon_parser.add_argument("--depth", default="light", choices=["light", "deep"],
                               help="Scan depth (default: light)")
+    recon_parser.add_argument("--max-hosts", type=int, default=0, metavar="N",
+                             help="Max hosts to scan for broad domains (0=ask interactively)")
 
     # analyze
     analyze_parser = subparsers.add_parser("analyze", parents=[_common],
