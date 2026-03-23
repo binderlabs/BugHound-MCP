@@ -11,18 +11,15 @@ node_modules/
 dist/
 build/
 
-# Claude Code dev artifacts (not part of BugHound)
+# Dev artifacts
 .claude/
 CLAUDE.md
 DEVLOG.md
 PLAN.md
 SESSION_SUMMARY.md
-bughound/config/claude_desktop_config.json
-bughound/docs/bughound-development-plan.md
-bughound/docs/claude_desktop_setup.md
-
-# Dev-only directories
+FUTURE_ENHANCEMENTS.md
 _archive/
 ideas/
 docs/
-FUTURE_ENHANCEMENTS.md
+bughound/config/claude_desktop_config.json
+bughound/docs/
