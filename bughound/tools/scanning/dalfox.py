@@ -24,12 +24,15 @@ def is_available() -> bool:
 async def execute(
     target_url: str,
     *,
+    param: str | None = None,
     skip_bav: bool = True,
     timeout: int = TIMEOUT,
 ) -> ToolResult:
     """Run dalfox against a single URL.
 
     target_url: URL with parameter to test (e.g. https://example.com/page?q=test).
+    param: specific parameter to test. If set, dalfox only tests this param
+           instead of discovering and testing all params (much faster).
     skip_bav: skip basic auth verification.
     timeout: overall execution timeout.
 
@@ -47,7 +50,11 @@ async def execute(
         "-o", str(output_file),
         "--format", "json",
         "--silence",
+        "--timeout", "10",  # per-request timeout
     ]
+
+    if param:
+        args.extend(["--param", param])
 
     if skip_bav:
         args.append("--skip-bav")
