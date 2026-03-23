@@ -26,18 +26,22 @@ def is_available() -> bool:
 async def execute(
     target_url: str,
     *,
+    param: str | None = None,
     level: int = 1,
     risk: int = 1,
     technique: str = "BEU",
+    tamper: str | None = None,
     forms: bool = False,
     timeout: int = TIMEOUT,
 ) -> ToolResult:
     """Run sqlmap against a single URL.
 
     target_url: URL with parameter (e.g. https://example.com/page?id=1).
+    param: specific parameter to test (faster than testing all).
     level: sqlmap level (1-5). Default 1 for speed.
     risk: sqlmap risk (1-3). Default 1 for safety.
     technique: injection techniques to test (B=boolean, E=error, U=union, T=time, S=stacked).
+    tamper: tamper script(s) for WAF bypass (e.g. "space2comment,between").
     forms: test forms on the page.
     timeout: overall execution timeout.
 
@@ -52,7 +56,15 @@ async def execute(
         "--technique", technique,
         "--threads", "1",
         "--disable-coloring",
+        "--retries", "1",
+        "--timeout", "10",
     ]
+
+    if param:
+        args.extend(["-p", param])
+
+    if tamper:
+        args.extend(["--tamper", tamper])
 
     if forms:
         args.append("--forms")
@@ -81,12 +93,26 @@ def _parse_output(output: str, target_url: str) -> dict[str, Any]:
     payloads: list[str] = []
     db_type = ""
     injectable_params: list[str] = []
+    injection_types: list[str] = []
 
     for line in output.splitlines():
         line_stripped = line.strip()
 
-        # Detect vulnerability confirmation
+        # Detect vulnerability confirmation — multiple indicators
         if "is vulnerable" in line_stripped or "appears to be" in line_stripped:
+            vulnerable = True
+
+        # sqlmap shows "Type:" when it confirms an injection technique
+        if line_stripped.startswith("Type:"):
+            injection_types.append(line_stripped.split(":", 1)[1].strip())
+            vulnerable = True
+
+        # "back-end DBMS" means sqlmap identified the database — injection worked
+        if "back-end DBMS:" in line_stripped:
+            vulnerable = True
+
+        # "fetching" means sqlmap is extracting data — confirmed injectable
+        if "fetching database" in line_stripped or "fetching current" in line_stripped:
             vulnerable = True
 
         # Extract payloads
@@ -94,6 +120,7 @@ def _parse_output(output: str, target_url: str) -> dict[str, Any]:
             payload = line_stripped.split("Payload:", 1)[1].strip()
             if payload:
                 payloads.append(payload)
+                vulnerable = True
 
         # Extract DB type
         db_match = re.search(r"back-end DBMS:\s*(.+)", line_stripped)
@@ -105,10 +132,15 @@ def _parse_output(output: str, target_url: str) -> dict[str, Any]:
         if param_match:
             injectable_params.append(param_match.group(1))
 
+        # Explicit negative — "do not appear to be injectable"
+        if "do not appear to be injectable" in line_stripped:
+            vulnerable = False
+
     return {
         "vulnerable": vulnerable,
         "target_url": target_url,
         "injectable_params": list(set(injectable_params)),
+        "injection_types": injection_types,
         "db_type": db_type,
         "payloads": payloads[:5],
         "technique": "sqlmap",
