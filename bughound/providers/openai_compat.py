@@ -22,7 +22,7 @@ PROVIDER_URLS = {
 DEFAULT_MODELS = {
     "openai": "gpt-4o",
     "grok": "grok-3",
-    "openrouter": "anthropic/claude-sonnet-4",
+    "openrouter": "anthropic/claude-sonnet-4.5",
 }
 
 
