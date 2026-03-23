@@ -334,7 +334,8 @@ def _make_host_filter(max_hosts: int):
 
 
 async def _run_discover(workspace_id: str, job_manager: Any,
-                        verbose: bool = False, max_hosts: int = 0) -> None:
+                        verbose: bool = False, max_hosts: int = 0,
+                        timeout_mins: int = 60) -> None:
     """Stage 2: Discovery."""
     from bughound.stages import discover as stage_discover
 
@@ -362,9 +363,15 @@ async def _run_discover(workspace_id: str, job_manager: Any,
 
     spinner = asyncio.create_task(_spin())
     try:
-        result = await stage_discover.discover(
-            workspace_id, job_manager=None, host_filter_cb=host_filter,
+        result = await asyncio.wait_for(
+            stage_discover.discover(
+                workspace_id, job_manager=None, host_filter_cb=host_filter,
+            ),
+            timeout=timeout_mins * 60,
         )
+    except asyncio.TimeoutError:
+        print(f"\n  {_C.RED}Discovery timed out after {timeout_mins} minutes{_C.RESET}")
+        result = {"status": "error", "message": "Discovery timed out"}
     finally:
         spinner.cancel()
         sys.stdout.write("\r" + " " * 50 + "\r")  # Clear spinner line
@@ -820,7 +827,8 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     # Stage 2 (host selection happens inside discover after httpx)
     if resume_stage <= 2:
         await _run_discover(workspace_id, job_manager, verbose=verbose,
-                            max_hosts=getattr(args, "max_hosts", 0))
+                            max_hosts=getattr(args, "max_hosts", 0),
+                            timeout_mins=getattr(args, "timeout", 60))
 
     # Stage 3
     if resume_stage <= 3:
@@ -902,7 +910,8 @@ async def cmd_recon(args: argparse.Namespace) -> None:
     # Host selection for broad domains
     # Stage 2 (host selection happens inside discover after httpx)
     await _run_discover(workspace_id, job_manager, verbose=verbose,
-                        max_hosts=getattr(args, "max_hosts", 0))
+                        max_hosts=getattr(args, "max_hosts", 0),
+                        timeout_mins=60)
 
     if quiet:
         print(f"BugHound recon complete on {args.target} -- workspace: {workspace_id}")
@@ -1220,6 +1229,8 @@ def main() -> None:
                              help="Max hosts to scan for broad domains (0=ask interactively)")
     scan_parser.add_argument("--proxy", default=None, metavar="URL",
                              help="HTTP proxy for all requests (e.g., http://127.0.0.1:8080)")
+    scan_parser.add_argument("--timeout", type=int, default=60, metavar="MINS",
+                             help="Max time per stage in minutes (default: 60)")
 
     # recon
     recon_parser = subparsers.add_parser("recon", parents=[_common],
