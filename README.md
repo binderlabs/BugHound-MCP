@@ -79,6 +79,7 @@ BugHound works with zero external tools using 29 pure-Python techniques. For ful
 | ffuf | Directory fuzzing | `go install github.com/ffuf/ffuf/v2@latest` |
 | arjun | Parameter discovery | `pip install arjun` |
 | wafw00f | WAF detection | `pip install wafw00f` |
+| playwright | DOM XSS detection (headless browser) | `pip install playwright && playwright install chromium` |
 | assetfinder | Subdomain discovery | `go install github.com/tomnomnom/assetfinder@latest` |
 | findomain | Subdomain discovery | Download from [GitHub releases](https://github.com/Edu4rdSHL/findomain/releases) |
 | gotator | Subdomain permutation | `go install github.com/Josue87/gotator@latest` |

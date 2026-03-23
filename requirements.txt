@@ -7,6 +7,9 @@ structlog>=23.0.0
 dnspython>=2.4.0
 pyyaml>=6.0.0
 
+# DOM XSS detection (Playwright headless browser)
+playwright>=1.40.0
+
 # Optional: AI Agent Mode (uncomment for --provider support)
 # anthropic>=0.40.0    # ./bhound agent --provider anthropic
 # openai>=1.0.0        # ./bhound agent --provider openai/grok/openrouter

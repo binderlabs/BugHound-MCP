@@ -54,4 +54,10 @@ pip install sqlmap arjun wafw00f 2>/dev/null || pip3 install sqlmap arjun wafw00
 echo "  [+] sqlmap, arjun, wafw00f installed"
 
 echo ""
+echo "[*] Installing Playwright (DOM XSS detection)..."
+pip install playwright 2>/dev/null || pip3 install playwright
+python3 -m playwright install chromium 2>/dev/null
+echo "  [+] playwright + chromium installed"
+
+echo ""
 echo "[+] All tools installed. Run: ./bhound scan --help"
