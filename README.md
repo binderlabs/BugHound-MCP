@@ -218,12 +218,17 @@ Test https://target.com/api/search?q=test for SQL injection using BugHound
 
 ```
 ./bhound scan <target>                    # Full pipeline (Stages 0-6)
-./bhound scan <target> -v                 # Verbose mode
+./bhound scan <target> -v                 # Verbose mode (show all activity)
 ./bhound scan <target> --depth deep       # Deep scan
-./bhound scan <target> --skip-validate    # Skip validation
+./bhound scan <target> --skip-validate    # Skip validation stage
+./bhound scan <target> --skip-nuclei      # Skip nuclei scanning
 ./bhound scan <target> --resume <ws_id>   # Resume crashed scan
 ./bhound scan <target> --output json      # JSON output for CI/CD
+./bhound scan <target> --max-hosts 5      # Auto-select top 5 hosts (broad domains)
+./bhound scan <target> --no-color         # No terminal colors
+./bhound scan <target> -q                 # Quiet mode (summary only)
 ./bhound recon <target>                   # Discovery only (Stages 0-2)
+./bhound recon <target> --max-hosts 3     # Recon top 3 hosts only
 ./bhound analyze <workspace_id>           # Attack surface analysis
 ./bhound test <workspace_id>              # Run tests on existing recon
 ./bhound validate <workspace_id>          # Validate findings
@@ -232,6 +237,28 @@ Test https://target.com/api/search?q=test for SQL injection using BugHound
 ./bhound agent <target> --provider ...    # AI agent mode
 ./bhound serve                            # Start MCP server
 ```
+
+For broad domain targets (e.g., `*.example.com`), BugHound enumerates subdomains and probes them with httpx. In CLI mode, you are prompted to select which live hosts to scan:
+
+```
+Found 9 live hosts:
+  1. [200] https://blog.example.com [WordPress]
+  2. [200] https://mail.example.com Login form
+  3. [200] https://api.example.com [Express, Node.js]
+  4. [403] https://cdn.example.com [CloudFront]
+  ...
+
+Options:
+  3      -- scan only host #3
+  1,3,5  -- scan specific hosts
+  1-10   -- scan hosts 1 through 10
+  all    -- scan all 9 hosts
+
+Select [all]: 1,2,3
+Selected 3 host(s) -- continuing scan
+```
+
+Use `--max-hosts N` to skip the prompt and auto-select the top N hosts.
 
 ## AI Agent Mode
 
