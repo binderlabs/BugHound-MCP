@@ -114,6 +114,27 @@ _AUTH_PATHS = [
     "/forgot-password",
     "/reset-password",
     "/api/auth/forgot-password",
+    # ASP.NET
+    "/LogIn.aspx",
+    "/Login.aspx",
+    "/login.aspx",
+    "/Account/Login",
+    "/Account/Register",
+    "/Account/LogOn",
+    # PHP frameworks
+    "/wp-login.php",
+    "/administrator/index.php",  # Joomla
+    "/admin/login",
+    "/admin/auth",
+    # Django / Rails
+    "/accounts/login/",
+    "/users/sign_in",
+    "/admin/login/",
+    # Other common
+    "/connect/token",
+    "/identity/connect/token",
+    "/session/new",
+    "/portal/login",
 ]
 
 # ---------------------------------------------------------------------------
