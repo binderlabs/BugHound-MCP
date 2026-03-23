@@ -88,21 +88,32 @@ Run `./scripts/install-tools.sh` to install all Go tools automatically.
 
 ## MCP Configuration
 
-### Claude Code (claude_desktop_config.json or .claude.json)
+### Claude Code
+
+Create `.mcp.json` in your project root:
 
 ```json
 {
   "mcpServers": {
     "bughound": {
+      "type": "stdio",
       "command": "python3",
       "args": ["-m", "bughound.server"],
-      "cwd": "/path/to/BugHound"
+      "cwd": "/path/to/BugHound",
+      "env": {
+        "PYTHONPATH": "/path/to/BugHound",
+        "BUGHOUND_WORKSPACE_DIR": "/path/to/workspaces"
+      }
     }
   }
 }
 ```
 
+Or add via CLI: `claude mcp add --transport stdio --scope project bughound -- python3 -m bughound.server`
+
 ### Gemini CLI
+
+Add to `~/.gemini/settings.json` or `.gemini/settings.json` in your project:
 
 ```json
 {
@@ -110,7 +121,12 @@ Run `./scripts/install-tools.sh` to install all Go tools automatically.
     "bughound": {
       "command": "python3",
       "args": ["-m", "bughound.server"],
-      "cwd": "/path/to/BugHound"
+      "cwd": "/path/to/BugHound",
+      "env": {
+        "PYTHONPATH": "/path/to/BugHound",
+        "BUGHOUND_WORKSPACE_DIR": "/path/to/workspaces"
+      },
+      "timeout": 600000
     }
   }
 }
@@ -118,16 +134,19 @@ Run `./scripts/install-tools.sh` to install all Go tools automatically.
 
 ### OpenAI Codex
 
-```json
-{
-  "mcpServers": {
-    "bughound": {
-      "command": "python3",
-      "args": ["-m", "bughound.server"],
-      "cwd": "/path/to/BugHound"
-    }
-  }
-}
+Add to `~/.codex/config.toml` or `.codex/config.toml` in your project:
+
+```toml
+[mcp_servers.bughound]
+command = "python3"
+args = ["-m", "bughound.server"]
+cwd = "/path/to/BugHound"
+startup_timeout_sec = 30
+tool_timeout_sec = 300
+
+[mcp_servers.bughound.env]
+PYTHONPATH = "/path/to/BugHound"
+BUGHOUND_WORKSPACE_DIR = "/path/to/workspaces"
 ```
 
 ## MCP Tools Reference
