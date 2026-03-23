@@ -82,11 +82,14 @@ async def discover(
     workspace_id: str,
     job_manager: JobManager | None = None,
     target_override: list[str] | None = None,
+    host_filter_cb: Any = None,
 ) -> dict[str, Any]:
     """Run Stage 2 discovery on a workspace.
 
     target_override: if provided, discover only these specific hosts
                      instead of all subdomains from Stage 1.
+    host_filter_cb: optional async callable(live_hosts) -> filtered_hosts.
+        Called after httpx probing. CLI uses this for interactive host selection.
     """
     meta = await workspace.get_workspace(workspace_id)
     if meta is None:
@@ -104,9 +107,11 @@ async def discover(
 
     # Always run as background job to avoid MCP client timeouts
     if job_manager is not None:
-        return await _start_discover_job(workspace_id, targets, meta, job_manager)
+        return await _start_discover_job(
+            workspace_id, targets, meta, job_manager, host_filter_cb,
+        )
 
-    return await _run_discover(workspace_id, targets, meta)
+    return await _run_discover(workspace_id, targets, meta, host_filter_cb=host_filter_cb)
 
 
 # ---------------------------------------------------------------------------
@@ -119,10 +124,15 @@ async def _run_discover(
     targets: list[str],
     meta: Any,
     progress_cb: Any = None,
+    host_filter_cb: Any = None,
 ) -> dict[str, Any]:
     """Run Phases 2A-2D and return structured results.
 
     progress_cb: optional async callable(pct, msg, module) for job progress.
+    host_filter_cb: optional async callable(live_hosts) -> filtered_hosts.
+        Called after httpx probing with the full live hosts list.
+        CLI uses this for interactive host selection.
+        If None or returns None, all hosts are used.
     """
     await workspace.update_metadata(
         workspace_id, state=WorkspaceState.DISCOVERING, current_stage=2,
@@ -213,6 +223,21 @@ async def _run_discover(
         generated_by="httpx", target=target_label,
     )
     files_written.append("hosts/technologies.json")
+
+    # Host filter callback — CLI uses this for interactive selection
+    if host_filter_cb and len(live_hosts) > 1:
+        try:
+            filtered = await host_filter_cb(flagged_hosts)
+            if filtered is not None and isinstance(filtered, list):
+                flagged_hosts = filtered
+                live_hosts = filtered
+                # Rewrite live_hosts.json with filtered set
+                await workspace.write_data(
+                    workspace_id, "hosts/live_hosts.json", flagged_hosts,
+                    generated_by="httpx_filtered", target=target_label,
+                )
+        except Exception:
+            pass  # On error, continue with all hosts
 
     if waf_results:
         await workspace.write_data(
@@ -1227,6 +1252,7 @@ async def _start_discover_job(
     targets: list[str],
     meta: Any,
     job_manager: JobManager,
+    host_filter_cb: Any = None,
 ) -> dict[str, Any]:
     """Start discovery as a background job for broad targets."""
     try:
@@ -1238,7 +1264,10 @@ async def _start_discover_job(
         async def _progress(pct: int, msg: str, module: str) -> None:
             await job_manager.update_progress(jid, pct, msg, module)
 
-        result = await _run_discover(workspace_id, targets, meta, progress_cb=_progress)
+        result = await _run_discover(
+            workspace_id, targets, meta,
+            progress_cb=_progress, host_filter_cb=host_filter_cb,
+        )
         if result.get("status") == "success":
             await job_manager.complete_job(jid, result.get("data"))
         else:

@@ -238,114 +238,91 @@ async def _run_enumerate(workspace_id: str, verbose: bool = False) -> None:
                           file=sys.stderr)
 
 
-async def _select_hosts(workspace_id: str, max_hosts: int) -> None:
-    """For broad domains: let user select which subdomains to scan.
+def _make_host_filter(max_hosts: int):
+    """Create a host filter callback for discover stage.
 
-    If max_hosts > 0, auto-select top N. If 0, prompt interactively.
-    Rewrites dns/records.json to only include selected hosts.
+    Returns an async function that shows live hosts after httpx probing
+    and lets the user select which to continue scanning.
     """
-    from bughound.core import workspace
 
-    # Check target type — only prompt for broad domains
-    meta = await workspace.get_workspace(workspace_id)
-    if meta is None:
-        return
-    target_type = getattr(meta, "target_type", None)
-    if target_type and hasattr(target_type, "value"):
-        if target_type.value != "broad_domain":
-            return
+    async def _filter(live_hosts: list[dict]) -> list[dict] | None:
+        if len(live_hosts) <= 5:
+            return None  # Small enough, scan all
 
-    raw = await workspace.read_data(workspace_id, "dns/records.json")
-    records = raw.get("data", raw) if isinstance(raw, dict) else (raw or [])
+        if max_hosts > 0:
+            selected = live_hosts[:max_hosts]
+            print(f"\n  {_C.GREEN}Auto-selected {len(selected)} of {len(live_hosts)} live hosts (--max-hosts {max_hosts}){_C.RESET}")
+            return selected
 
-    if not isinstance(records, list) or len(records) <= 15:
-        return  # Small enough, no selection needed
-
-    resolved = [r for r in records if isinstance(r, dict) and r.get("resolved")]
-    # Use all records if few resolved (httpx will probe all subdomains anyway)
-    candidates = resolved if len(resolved) > 5 else [r for r in records if isinstance(r, dict)]
-    if len(candidates) <= 15:
-        return
-
-    # Sort by priority: domains with more DNS records first
-    candidates.sort(key=lambda r: len(r.get("A", [])) + len(r.get("CNAME", [])), reverse=True)
-
-    if max_hosts > 0:
-        # Auto-select top N
-        selected = candidates[:max_hosts]
-        print(f"  {_C.GREEN}Auto-selected top {len(selected)} of {len(candidates)} subdomains (--max-hosts {max_hosts}){_C.RESET}")
-    else:
         # Interactive selection
-        print(f"\n  {_C.BOLD}Found {len(candidates)} subdomains to scan.{_C.RESET}")
-        print(f"  Scanning all may take a long time. Select which to scan:\n")
+        print(f"\n  {_C.BOLD}Found {len(live_hosts)} live hosts:{_C.RESET}\n")
 
-        for i, r in enumerate(candidates[:30], 1):
-            domain = r.get("domain", "?")
-            ips = r.get("A", [])
-            ip_str = f" ({ips[0]})" if ips else ""
-            print(f"  {_C.CYAN}{i:3d}{_C.RESET}. {domain}{_C.DIM}{ip_str}{_C.RESET}")
+        for i, h in enumerate(live_hosts[:30], 1):
+            url = h.get("url", "?")
+            status = h.get("status_code", "?")
+            title = h.get("title", "")
+            techs = h.get("technologies", [])
+            tech_str = f" [{', '.join(techs[:3])}]" if techs else ""
 
-        if len(candidates) > 30:
-            print(f"  {_C.DIM}... and {len(candidates) - 30} more{_C.RESET}")
+            status_color = _C.GREEN if status == 200 else _C.YELLOW if status in (301, 302) else _C.RED
+            title_str = f" {title[:30]}" if title else ""
+
+            print(
+                f"  {_C.CYAN}{i:3d}{_C.RESET}. "
+                f"{status_color}[{status}]{_C.RESET} "
+                f"{url[:50]}"
+                f"{_C.DIM}{title_str}{tech_str}{_C.RESET}"
+            )
+
+        if len(live_hosts) > 30:
+            print(f"  {_C.DIM}... and {len(live_hosts) - 30} more{_C.RESET}")
 
         print(f"\n  Options:")
-        print(f"    {_C.BOLD}3{_C.RESET}      — scan only subdomain #3")
-        print(f"    {_C.BOLD}1,3,5{_C.RESET}  — scan specific subdomains")
-        print(f"    {_C.BOLD}1-10{_C.RESET}   — scan subdomains 1 through 10")
-        print(f"    {_C.BOLD}all{_C.RESET}    — scan all {len(candidates)} subdomains")
+        print(f"    {_C.BOLD}3{_C.RESET}      — scan only host #3")
+        print(f"    {_C.BOLD}1,3,5{_C.RESET}  — scan specific hosts")
+        print(f"    {_C.BOLD}1-10{_C.RESET}   — scan hosts 1 through 10")
+        print(f"    {_C.BOLD}all{_C.RESET}    — scan all {len(live_hosts)} hosts")
 
         try:
-            choice = input(f"\n  {_C.BOLD}Select [{_C.GREEN}top 10{_C.RESET}{_C.BOLD}]: {_C.RESET}").strip()
+            choice = input(f"\n  {_C.BOLD}Select [{_C.GREEN}all{_C.RESET}{_C.BOLD}]: {_C.RESET}").strip()
         except (EOFError, KeyboardInterrupt):
-            choice = "10"
+            return None  # Scan all on interrupt
 
-        if not choice:
-            choice = "10"
+        if not choice or choice.lower() == "all":
+            return None  # Scan all
 
-        if choice.lower() == "all":
-            selected = candidates
-        elif "-" in choice and not choice.startswith("-"):
-            # Range: "1-10"
+        if "-" in choice and not choice.startswith("-"):
             parts = choice.split("-")
             try:
                 start = int(parts[0]) - 1
                 end = int(parts[1])
-                selected = candidates[start:end]
+                selected = live_hosts[start:end]
             except (ValueError, IndexError):
-                selected = candidates[:10]
+                return None
         elif "," in choice:
-            # Multiple specific: "1,3,5"
             try:
                 indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                selected = [candidates[i] for i in indices if 0 <= i < len(candidates)]
+                selected = [live_hosts[i] for i in indices if 0 <= i < len(live_hosts)]
             except (ValueError, IndexError):
-                selected = candidates[:10]
+                return None
         else:
-            # Single number: "3" = subdomain #3 only
             try:
                 n = int(choice)
-                if 1 <= n <= len(candidates):
-                    selected = [candidates[n - 1]]
+                if 1 <= n <= len(live_hosts):
+                    selected = [live_hosts[n - 1]]
                 else:
-                    selected = candidates[:10]
+                    return None
             except ValueError:
-                selected = candidates[:10]
+                return None
 
-        print(f"  {_C.GREEN}Selected {len(selected)} subdomains{_C.RESET}")
+        print(f"  {_C.GREEN}Selected {len(selected)} host(s) — continuing scan{_C.RESET}\n")
+        return selected
 
-    # Rewrite dns/records.json with only selected hosts
-    # Keep unresolved records too (they don't affect scanning)
-    unresolved = [r for r in records if isinstance(r, dict) and not r.get("resolved")]
-    filtered = selected + unresolved
-    await workspace.write_data(
-        workspace_id, "dns/records.json", filtered,
-        generated_by="cli_host_selection",
-        target="filtered",
-    )
+    return _filter
 
 
 async def _run_discover(workspace_id: str, job_manager: Any,
-                        verbose: bool = False) -> None:
+                        verbose: bool = False, max_hosts: int = 0) -> None:
     """Stage 2: Discovery."""
     from bughound.stages import discover as stage_discover
 
@@ -354,10 +331,13 @@ async def _run_discover(workspace_id: str, job_manager: Any,
     if verbose:
         print(f"  {_C.DIM}[*] Probing live hosts with httpx...{_C.RESET}",
               file=sys.stderr)
-        print(f"  {_C.DIM}[*] Crawling with gospider, analyzing JS with jsluice...{_C.RESET}",
-              file=sys.stderr)
 
-    result = await stage_discover.discover(workspace_id, job_manager)
+    # Create host filter callback for interactive selection
+    host_filter = _make_host_filter(max_hosts)
+
+    result = await stage_discover.discover(
+        workspace_id, job_manager, host_filter_cb=host_filter,
+    )
 
     if result.get("status") == "job_started":
         job_id = result["job_id"]
@@ -785,14 +765,10 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     if resume_stage <= 1:
         await _run_enumerate(workspace_id, verbose=verbose)
 
-        # Host selection for broad domains
-        if not quiet:
-            max_hosts = getattr(args, "max_hosts", 0)
-            await _select_hosts(workspace_id, max_hosts)
-
-    # Stage 2
+    # Stage 2 (host selection happens inside discover after httpx)
     if resume_stage <= 2:
-        await _run_discover(workspace_id, job_manager, verbose=verbose)
+        await _run_discover(workspace_id, job_manager, verbose=verbose,
+                            max_hosts=getattr(args, "max_hosts", 0))
 
     # Stage 3
     if resume_stage <= 3:
@@ -868,12 +844,9 @@ async def cmd_recon(args: argparse.Namespace) -> None:
     await _run_enumerate(workspace_id, verbose=verbose)
 
     # Host selection for broad domains
-    if not quiet:
-        max_hosts = getattr(args, "max_hosts", 0)
-        await _select_hosts(workspace_id, max_hosts)
-
-    # Stage 2
-    await _run_discover(workspace_id, job_manager, verbose=verbose)
+    # Stage 2 (host selection happens inside discover after httpx)
+    await _run_discover(workspace_id, job_manager, verbose=verbose,
+                        max_hosts=getattr(args, "max_hosts", 0))
 
     if quiet:
         print(f"BugHound recon complete on {args.target} -- workspace: {workspace_id}")
