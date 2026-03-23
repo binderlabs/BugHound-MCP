@@ -289,7 +289,7 @@ async def test_single(
         if not sqlmap.is_available():
             return _error("tool_not_found", "sqlmap is not installed.")
 
-        result = await sqlmap.execute(target_url, timeout=120)
+        result = await sqlmap.execute(target_url, timeout=300)
         if result.success and result.results:
             for r in result.results:
                 if isinstance(r, dict) and r.get("vulnerable"):

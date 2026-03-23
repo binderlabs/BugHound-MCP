@@ -786,7 +786,7 @@ async def _exec_sqli_fuzz(
 
         try:
             async with sem:
-                result = await sqlmap.execute(test_url, timeout=120)
+                result = await sqlmap.execute(test_url, timeout=300)
                 if result.success and result.results:
                     hits = []
                     for r in result.results:
