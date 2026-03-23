@@ -191,6 +191,18 @@ async def _run_init(target: str, depth: str, verbose: bool = False) -> str:
         print(f"  {_C.DIM}[*] Classifying target...{_C.RESET}", file=sys.stderr)
 
     classification = classify(target, depth)
+
+    if classification.target_type.value == "broad_domain":
+        print(f"\n  {_C.YELLOW}Warning: '{target}' is a broad domain.{_C.RESET}")
+        print(f"  {_C.YELLOW}This will enumerate and probe all subdomains.{_C.RESET}")
+        try:
+            confirm = input(f"  {_C.BOLD}Continue? [Y/n]: {_C.RESET}").strip().lower()
+            if confirm == "n":
+                print(f"  {_C.DIM}Aborted.{_C.RESET}")
+                sys.exit(0)
+        except (EOFError, KeyboardInterrupt):
+            sys.exit(0)
+
     meta = await workspace.create_workspace(target, depth)
     await workspace.update_metadata(
         meta.workspace_id,
@@ -338,9 +350,25 @@ async def _run_discover(workspace_id: str, job_manager: Any,
     # Run discover synchronously (not as background job) because input()
     # for interactive host selection requires stdin access.
     # Pass job_manager=None to force synchronous execution.
-    result = await stage_discover.discover(
-        workspace_id, job_manager=None, host_filter_cb=host_filter,
-    )
+    async def _spin():
+        """Print dots while waiting."""
+        chars = ["|", "/", "-", "\\"]
+        i = 0
+        while True:
+            sys.stdout.write(f"\r  {_C.DIM}[{chars[i % 4]}] Discovery running...{_C.RESET}  ")
+            sys.stdout.flush()
+            i += 1
+            await asyncio.sleep(1)
+
+    spinner = asyncio.create_task(_spin())
+    try:
+        result = await stage_discover.discover(
+            workspace_id, job_manager=None, host_filter_cb=host_filter,
+        )
+    finally:
+        spinner.cancel()
+        sys.stdout.write("\r" + " " * 50 + "\r")  # Clear spinner line
+        sys.stdout.flush()
 
     if result.get("status") == "job_started":
         job_id = result["job_id"]
@@ -710,6 +738,10 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     verbose = args.verbose
     quiet = args.quiet
 
+    if not args.resume and not args.target:
+        print(f"  {_C.RED}Error: target is required (or use --resume){_C.RESET}")
+        sys.exit(1)
+
     # JSON output mode suppresses terminal output
     if args.output == "json":
         quiet = True
@@ -767,7 +799,11 @@ async def cmd_scan(args: argparse.Namespace) -> None:
 
     # Stage 0
     if resume_stage <= 0 and workspace_id is None:
-        workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
+        try:
+            workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
+        except ValueError as exc:
+            print(f"  {_C.RED}Error: {exc}{_C.RESET}")
+            sys.exit(1)
 
     # Stage 1
     if resume_stage <= 1:
@@ -846,7 +882,11 @@ async def cmd_recon(args: argparse.Namespace) -> None:
     job_manager = JobManager()
 
     # Stage 0
-    workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
+    try:
+        workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
+    except ValueError as exc:
+        print(f"  {_C.RED}Error: {exc}{_C.RESET}")
+        sys.exit(1)
 
     # Stage 1
     await _run_enumerate(workspace_id, verbose=verbose)
@@ -1049,6 +1089,22 @@ async def cmd_agent(args: argparse.Namespace) -> None:
                         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
             break
 
+    # Auto-detect provider from API keys if not explicitly set
+    if not args.provider:
+        env_to_provider = {
+            "ANTHROPIC_API_KEY": "anthropic",
+            "OPENAI_API_KEY": "openai",
+            "XAI_API_KEY": "grok",
+            "OPENROUTER_API_KEY": "openrouter",
+        }
+        for env_var, provider_name in env_to_provider.items():
+            if os.environ.get(env_var):
+                args.provider = provider_name
+                break
+        if not args.provider:
+            print(f"  {_C.RED}Error: --provider required, or set API key in .env{_C.RESET}")
+            sys.exit(1)
+
     # Resolve API key: --api-key flag > env var > .env
     api_key = args.api_key
     if not api_key:
@@ -1124,6 +1180,7 @@ def main() -> None:
         prog="bughound",
         description="BugHound - MCP-Based Security Automation Framework",
     )
+    parser.add_argument("--version", action="version", version="BugHound 1.0.0")
 
     # Shared flags (available on every subcommand in any position)
     _common = argparse.ArgumentParser(add_help=False)
@@ -1139,7 +1196,8 @@ def main() -> None:
     # scan
     scan_parser = subparsers.add_parser("scan", parents=[_common],
                                         help="Run full scan pipeline (Stages 0-6)")
-    scan_parser.add_argument("target", help="Target URL, domain, or file with targets")
+    scan_parser.add_argument("target", nargs="?", default=None,
+                             help="Target URL, domain, or file with targets")
     scan_parser.add_argument("--depth", default="light", choices=["light", "deep"],
                              help="Scan depth (default: light)")
     scan_parser.add_argument("--skip-nuclei", action="store_true",
@@ -1189,9 +1247,9 @@ def main() -> None:
     agent_parser = subparsers.add_parser("agent", parents=[_common],
                                          help="AI-powered autonomous scanning")
     agent_parser.add_argument("target", help="Target URL or domain")
-    agent_parser.add_argument("--provider", required=True,
+    agent_parser.add_argument("--provider", default=None,
                               choices=["anthropic", "openai", "grok", "openrouter"],
-                              help="AI provider")
+                              help="AI provider (auto-detected from .env if not set)")
     agent_parser.add_argument("--api-key", default=None,
                               help="API key (or set in .env / environment)")
     agent_parser.add_argument("--model", default=None,
