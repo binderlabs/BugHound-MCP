@@ -739,16 +739,34 @@ async def _run_stage1(workspace_id: str, verbose: bool = False) -> None:
         )
 
 
-async def _run_stage2(workspace_id: str, verbose: bool = False) -> None:
+async def _run_stage2(
+    workspace_id: str, verbose: bool = False, max_hosts: int = 10,
+) -> None:
     """Stage 2: Discovery (probe, crawl, JS analysis)."""
     from bughound.stages import discover as stage_discover
-    from bughound.core.job_manager import JobManager
 
-    job_manager = JobManager()
+    # Agent auto-selects top N hosts (no interactive prompt)
+    async def _auto_filter(live_hosts: list) -> list | None:
+        if len(live_hosts) <= max_hosts:
+            return None  # Scan all
+        selected = live_hosts[:max_hosts]
+        print(
+            f"  {_C.GREEN}[discover]{_C.RESET} "
+            f"Auto-selected {len(selected)} of {len(live_hosts)} live hosts"
+        )
+        for h in selected:
+            url = h.get("url", "?") if isinstance(h, dict) else str(h)
+            print(f"    {_C.DIM}{url}{_C.RESET}")
+        return selected
 
-    result = await stage_discover.discover(workspace_id, job_manager)
+    # Run synchronously with host filter
+    result = await stage_discover.discover(
+        workspace_id, job_manager=None, host_filter_cb=_auto_filter,
+    )
 
     if result.get("status") == "job_started":
+        from bughound.core.job_manager import JobManager
+        job_manager = JobManager()
         job_id = result["job_id"]
         while True:
             await asyncio.sleep(3)
