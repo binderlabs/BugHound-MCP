@@ -746,6 +746,14 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     if args.output == "json":
         quiet = True
 
+    # Set proxy if specified
+    proxy = getattr(args, "proxy", None)
+    if proxy:
+        from bughound.tools.testing.injection_tester import set_proxy
+        set_proxy(proxy)
+        if not quiet:
+            print(f"  {_C.YELLOW}Proxy: {proxy}{_C.RESET}")
+
     resume_stage = 0
     workspace_id = None
 
@@ -1210,6 +1218,8 @@ def main() -> None:
                              help="Output format (default: text)")
     scan_parser.add_argument("--max-hosts", type=int, default=0, metavar="N",
                              help="Max hosts to scan for broad domains (0=ask interactively)")
+    scan_parser.add_argument("--proxy", default=None, metavar="URL",
+                             help="HTTP proxy for all requests (e.g., http://127.0.0.1:8080)")
 
     # recon
     recon_parser = subparsers.add_parser("recon", parents=[_common],
@@ -1219,6 +1229,8 @@ def main() -> None:
                               help="Scan depth (default: light)")
     recon_parser.add_argument("--max-hosts", type=int, default=0, metavar="N",
                              help="Max hosts to scan for broad domains (0=ask interactively)")
+    recon_parser.add_argument("--proxy", default=None, metavar="URL",
+                             help="HTTP proxy for all requests (e.g., http://127.0.0.1:8080)")
 
     # analyze
     analyze_parser = subparsers.add_parser("analyze", parents=[_common],

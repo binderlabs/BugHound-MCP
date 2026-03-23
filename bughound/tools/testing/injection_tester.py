@@ -40,6 +40,16 @@ def clear_auth_headers() -> None:
     _AUTH_HEADERS = {}
 
 
+# Proxy URL — set by CLI to route all requests through Burp/ZAP.
+_PROXY_URL: str | None = None
+
+
+def set_proxy(proxy_url: str | None) -> None:
+    """Set HTTP proxy for all subsequent requests."""
+    global _PROXY_URL
+    _PROXY_URL = proxy_url
+
+
 # ---------------------------------------------------------------------------
 # URL parameter replacement helper
 # ---------------------------------------------------------------------------
@@ -72,7 +82,7 @@ async def _send(
     try:
         async with session.request(
             method, url, headers=hdrs, allow_redirects=allow_redirects,
-            ssl=False, timeout=_TIMEOUT,
+            ssl=False, timeout=_TIMEOUT, proxy=_PROXY_URL,
         ) as resp:
             body = await resp.text(errors="replace")
             resp_headers = {k.lower(): v for k, v in resp.headers.items()}
