@@ -557,7 +557,12 @@ async def run_agent(
         iterations_used += 1
 
         try:
-            response = await ai.chat(messages, tools=AGENT_TOOLS)
+            response = await asyncio.wait_for(
+                ai.chat(messages, tools=AGENT_TOOLS), timeout=120,
+            )
+        except asyncio.TimeoutError:
+            print(f"  {_C.RED}[AI] API call timed out (120s){_C.RESET}")
+            break
         except Exception as exc:
             print(f"  {_C.RED}[AI] API error: {exc}{_C.RESET}")
             break
@@ -585,9 +590,16 @@ async def run_agent(
                     f"{tc.name}({_summarize_args(tc.arguments)})"
                 )
 
-                result = await execute_tool(
-                    tc.name, tc.arguments, workspace_id, target_scope,
-                )
+                try:
+                    result = await asyncio.wait_for(
+                        execute_tool(tc.name, tc.arguments, workspace_id, target_scope),
+                        timeout=600,  # 10 min max per tool
+                    )
+                except asyncio.TimeoutError:
+                    result = json.dumps({"status": "error", "message": "Tool timed out (10 min)"})
+                    print(f"  {_C.RED}[->]{_C.RESET} Tool timed out")
+                    messages.append(ai.format_tool_result(tc.id, result))
+                    continue
 
                 summary = _summarize_result(result)
                 print(f"  {_C.GREEN}[->]{_C.RESET} {summary}")
@@ -759,10 +771,17 @@ async def _run_stage2(
             print(f"    {_C.DIM}{url}{_C.RESET}")
         return selected
 
-    # Run synchronously with host filter
-    result = await stage_discover.discover(
-        workspace_id, job_manager=None, host_filter_cb=_auto_filter,
-    )
+    # Run synchronously with host filter + timeout
+    try:
+        result = await asyncio.wait_for(
+            stage_discover.discover(
+                workspace_id, job_manager=None, host_filter_cb=_auto_filter,
+            ),
+            timeout=1800,  # 30 min max
+        )
+    except asyncio.TimeoutError:
+        print(f"  {_C.RED}[discover]{_C.RESET} Timed out after 30 minutes")
+        result = {"status": "error"}
 
     if result.get("status") == "job_started":
         from bughound.core.job_manager import JobManager
