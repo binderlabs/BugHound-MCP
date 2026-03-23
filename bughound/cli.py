@@ -616,7 +616,49 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     verbose = args.verbose
     quiet = args.quiet
 
-    if not quiet:
+    # JSON output mode suppresses terminal output
+    if args.output == "json":
+        quiet = True
+
+    resume_stage = 0
+    workspace_id = None
+
+    if args.resume:
+        workspace_id = args.resume
+        # Check workspace exists
+        from bughound.core import workspace
+        meta = await workspace.get_workspace(workspace_id)
+        if meta is None:
+            print(f"  {_C.RED}Error: Workspace '{workspace_id}' not found{_C.RESET}")
+            sys.exit(1)
+
+        import os
+        from bughound.config.settings import WORKSPACE_BASE_DIR
+        ws_path = WORKSPACE_BASE_DIR / workspace_id
+
+        # Determine resume point
+        has_scan_results = (ws_path / "vulnerabilities" / "scan_results.json").exists()
+        has_attack_surface = (ws_path / "analysis" / "attack_surface.json").exists()
+        has_crawled = (ws_path / "urls" / "crawled.json").exists()
+        has_hosts = (ws_path / "hosts" / "live_hosts.json").exists()
+
+        if has_scan_results:
+            resume_stage = 5
+        elif has_attack_surface:
+            resume_stage = 4
+        elif has_crawled:
+            resume_stage = 3
+        elif has_hosts:
+            resume_stage = 2
+        else:
+            resume_stage = 1
+
+        if not quiet:
+            print(_get_banner())
+            print(f"  {_C.GREEN}Resuming from Stage {resume_stage}{_C.RESET}")
+            print(f"  {_C.DIM}Workspace:{_C.RESET} {workspace_id}")
+            print()
+    elif not quiet:
         print(_get_banner())
         print(f"  {_C.BOLD}Target:{_C.RESET} {args.target}")
         print(f"  {_C.BOLD}Depth:{_C.RESET}  {args.depth}")
@@ -630,27 +672,52 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     job_manager = JobManager()
 
     # Stage 0
-    workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
+    if resume_stage <= 0 and workspace_id is None:
+        workspace_id = await _run_init(args.target, args.depth, verbose=verbose)
 
     # Stage 1
-    await _run_enumerate(workspace_id, verbose=verbose)
+    if resume_stage <= 1:
+        await _run_enumerate(workspace_id, verbose=verbose)
 
     # Stage 2
-    await _run_discover(workspace_id, job_manager, verbose=verbose)
+    if resume_stage <= 2:
+        await _run_discover(workspace_id, job_manager, verbose=verbose)
 
     # Stage 3
-    attack_surface = await _run_analyze(workspace_id, verbose=verbose)
+    if resume_stage <= 3:
+        attack_surface = await _run_analyze(workspace_id, verbose=verbose)
+    else:
+        # Load existing attack surface for later stages
+        from bughound.stages import analyze as stage_analyze
+        attack_surface = await stage_analyze.get_attack_surface(workspace_id)
 
     # Stage 4
-    findings = await _run_test(workspace_id, job_manager, attack_surface,
-                               verbose=verbose)
+    if resume_stage <= 4:
+        findings = await _run_test(workspace_id, job_manager, attack_surface,
+                                   verbose=verbose)
+    else:
+        # Load existing findings
+        from bughound.core import workspace as ws_mod
+        raw = await ws_mod.read_data(workspace_id, "vulnerabilities/scan_results.json")
+        findings = raw.get("data", raw) if isinstance(raw, dict) else (raw or [])
+        findings = findings if isinstance(findings, list) else []
 
     # Stage 5
-    if not args.skip_validate and findings:
-        await _run_validate(workspace_id, job_manager, verbose=verbose)
+    if resume_stage <= 5:
+        if not args.skip_validate and findings:
+            await _run_validate(workspace_id, job_manager, verbose=verbose)
 
     # Stage 6
     await _run_report(workspace_id, verbose=verbose)
+
+    # JSON output mode: dump findings as JSON and return
+    if args.output == "json":
+        import json
+        from bughound.core import workspace as ws_mod2
+        raw = await ws_mod2.read_data(workspace_id, "vulnerabilities/scan_results.json")
+        json_findings = raw.get("data", raw) if isinstance(raw, dict) else (raw or [])
+        print(json.dumps(json_findings, indent=2))
+        return
 
     # Summary
     if quiet:
@@ -900,6 +967,39 @@ async def cmd_agent(args: argparse.Namespace) -> None:
             print(f"  {_C.RED}Error: No API key. Use --api-key or set {env_var} in .env{_C.RESET}")
             sys.exit(1)
 
+    resume_workspace_id = None
+    if getattr(args, "resume", None):
+        resume_workspace_id = args.resume
+        from bughound.core import workspace
+        meta = await workspace.get_workspace(resume_workspace_id)
+        if meta is None:
+            print(f"  {_C.RED}Error: Workspace '{resume_workspace_id}' not found{_C.RESET}")
+            sys.exit(1)
+
+        import os as _os
+        from bughound.config.settings import WORKSPACE_BASE_DIR
+        ws_path = WORKSPACE_BASE_DIR / resume_workspace_id
+
+        has_scan_results = (ws_path / "vulnerabilities" / "scan_results.json").exists()
+        has_attack_surface = (ws_path / "analysis" / "attack_surface.json").exists()
+        has_crawled = (ws_path / "urls" / "crawled.json").exists()
+        has_hosts = (ws_path / "hosts" / "live_hosts.json").exists()
+
+        if has_scan_results:
+            resume_stage = 5
+        elif has_attack_surface:
+            resume_stage = 4
+        elif has_crawled:
+            resume_stage = 3
+        elif has_hosts:
+            resume_stage = 2
+        else:
+            resume_stage = 1
+
+        print(f"  {_C.GREEN}Resuming from Stage {resume_stage}{_C.RESET}")
+        print(f"  {_C.DIM}Workspace:{_C.RESET} {resume_workspace_id}")
+        print()
+
     from bughound.agent import run_agent
     await run_agent(
         target=args.target,
@@ -949,6 +1049,10 @@ def main() -> None:
                              help="Skip nuclei template scanning")
     scan_parser.add_argument("--skip-validate", action="store_true",
                              help="Skip Stage 5 validation")
+    scan_parser.add_argument("--resume", metavar="WORKSPACE_ID",
+                             help="Resume scan from existing workspace")
+    scan_parser.add_argument("--output", choices=["text", "json"], default="text",
+                             help="Output format (default: text)")
 
     # recon
     recon_parser = subparsers.add_parser("recon", parents=[_common],
@@ -995,6 +1099,8 @@ def main() -> None:
                               help="Scan depth (default: light)")
     agent_parser.add_argument("--max-iterations", type=int, default=50,
                               help="Max AI reasoning steps (default: 50)")
+    agent_parser.add_argument("--resume", metavar="WORKSPACE_ID",
+                              help="Resume scan from existing workspace")
 
     # serve
     subparsers.add_parser("serve", parents=[_common], help="Start MCP server")

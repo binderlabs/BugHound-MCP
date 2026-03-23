@@ -961,6 +961,11 @@ async def test_prototype_pollution(
 
             # Check if pollution marker appears in response
             if marker in body and marker not in baseline_body:
+                # Anti-echo: if our raw payload appears in response,
+                # it's just being reflected, not processed
+                if payload in body:
+                    continue
+
                 return {
                     "vulnerable": True,
                     "url": test_url,
