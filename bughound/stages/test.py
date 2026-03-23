@@ -316,7 +316,7 @@ async def test_single(
         if not dalfox.is_available():
             return _error("tool_not_found", "dalfox is not installed.")
 
-        result = await dalfox.execute(target_url, timeout=120)
+        result = await dalfox.execute(target_url, timeout=180)
         if result.success and result.results:
             for r in result.results:
                 if not isinstance(r, dict):

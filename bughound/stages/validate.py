@@ -681,7 +681,7 @@ async def _validate_xss(
     if param:
         args.extend(["--param", param])
 
-    result = await tool_runner.run("dalfox", args, target=endpoint, timeout=60)
+    result = await tool_runner.run("dalfox", args, target=endpoint, timeout=180)
 
     if result.success and result.results:
         output = "\n".join(str(r) for r in result.results)

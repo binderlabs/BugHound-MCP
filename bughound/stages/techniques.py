@@ -876,7 +876,7 @@ async def _exec_xss_fuzz(
             tested_urls.add(t_url)
 
             try:
-                result = await dalfox.execute(t_url, timeout=120)
+                result = await dalfox.execute(t_url, timeout=180)
                 if result.success and result.results:
                     for r in result.results:
                         if not isinstance(r, dict):
