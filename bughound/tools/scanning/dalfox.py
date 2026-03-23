@@ -55,6 +55,8 @@ async def execute(
 
     if param:
         args.extend(["--param", param])
+        # Only test the specified param — skip discovering other params
+        args.extend(["--skip-mining-all", "--skip-discovery"])
 
     if skip_bav:
         args.append("--skip-bav")
