@@ -289,10 +289,10 @@ async def _select_hosts(workspace_id: str, max_hosts: int) -> None:
             print(f"  {_C.DIM}... and {len(candidates) - 30} more{_C.RESET}")
 
         print(f"\n  Options:")
-        print(f"    {_C.BOLD}all{_C.RESET}    — scan all {len(candidates)} subdomains")
-        print(f"    {_C.BOLD}1-10{_C.RESET}   — scan subdomains 1 through 10")
+        print(f"    {_C.BOLD}3{_C.RESET}      — scan only subdomain #3")
         print(f"    {_C.BOLD}1,3,5{_C.RESET}  — scan specific subdomains")
-        print(f"    {_C.BOLD}20{_C.RESET}     — scan top 20")
+        print(f"    {_C.BOLD}1-10{_C.RESET}   — scan subdomains 1 through 10")
+        print(f"    {_C.BOLD}all{_C.RESET}    — scan all {len(candidates)} subdomains")
 
         try:
             choice = input(f"\n  {_C.BOLD}Select [{_C.GREEN}top 10{_C.RESET}{_C.BOLD}]: {_C.RESET}").strip()
@@ -304,7 +304,8 @@ async def _select_hosts(workspace_id: str, max_hosts: int) -> None:
 
         if choice.lower() == "all":
             selected = candidates
-        elif "-" in choice:
+        elif "-" in choice and not choice.startswith("-"):
+            # Range: "1-10"
             parts = choice.split("-")
             try:
                 start = int(parts[0]) - 1
@@ -313,15 +314,20 @@ async def _select_hosts(workspace_id: str, max_hosts: int) -> None:
             except (ValueError, IndexError):
                 selected = candidates[:10]
         elif "," in choice:
+            # Multiple specific: "1,3,5"
             try:
                 indices = [int(x.strip()) - 1 for x in choice.split(",")]
                 selected = [candidates[i] for i in indices if 0 <= i < len(candidates)]
             except (ValueError, IndexError):
                 selected = candidates[:10]
         else:
+            # Single number: "3" = subdomain #3 only
             try:
                 n = int(choice)
-                selected = candidates[:n]
+                if 1 <= n <= len(candidates):
+                    selected = [candidates[n - 1]]
+                else:
+                    selected = candidates[:10]
             except ValueError:
                 selected = candidates[:10]
 
