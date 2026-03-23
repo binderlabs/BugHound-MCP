@@ -10,3 +10,17 @@ node_modules/
 *.egg-info/
 dist/
 build/
+
+# Claude Code dev artifacts (not part of BugHound)
+.claude/
+CLAUDE.md
+DEVLOG.md
+PLAN.md
+SESSION_SUMMARY.md
+bughound/config/claude_desktop_config.json
+bughound/docs/bughound-development-plan.md
+bughound/docs/claude_desktop_setup.md
+
+# Dev-only directories
+_archive/
+ideas/
