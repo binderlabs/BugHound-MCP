@@ -335,8 +335,11 @@ async def _run_discover(workspace_id: str, job_manager: Any,
     # Create host filter callback for interactive selection
     host_filter = _make_host_filter(max_hosts)
 
+    # Run discover synchronously (not as background job) because input()
+    # for interactive host selection requires stdin access.
+    # Pass job_manager=None to force synchronous execution.
     result = await stage_discover.discover(
-        workspace_id, job_manager, host_filter_cb=host_filter,
+        workspace_id, job_manager=None, host_filter_cb=host_filter,
     )
 
     if result.get("status") == "job_started":
@@ -363,6 +366,11 @@ async def _run_discover(workspace_id: str, job_manager: Any,
                 else:
                     print(f"  {_C.RED}Job {status['status']}{_C.RESET}")
                 break
+    elif result.get("status") == "success":
+        # Synchronous result
+        data = result.get("data", {})
+        if isinstance(data, dict):
+            _print_summary_dict(data)
 
 
 async def _run_analyze(workspace_id: str, verbose: bool = False) -> dict:
