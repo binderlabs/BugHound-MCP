@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/bughound-logo.jpg" alt="BugHound" width="400">
+  <img src="assets/bughound-logo.png" alt="BugHound" width="400">
 </p>
 
 <h1 align="center">BugHound MCP</h1>
