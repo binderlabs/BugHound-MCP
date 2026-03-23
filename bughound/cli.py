@@ -871,11 +871,40 @@ async def cmd_list(args: argparse.Namespace) -> None:
 
 async def cmd_agent(args: argparse.Namespace) -> None:
     """Run AI-powered autonomous scanning."""
+    import os
+    from pathlib import Path
+
+    # Load .env file if it exists (project root or current dir)
+    for env_path in [Path(".env"), Path(__file__).resolve().parent.parent / ".env"]:
+        if env_path.is_file():
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, value = line.partition("=")
+                        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+            break
+
+    # Resolve API key: --api-key flag > env var > .env
+    api_key = args.api_key
+    if not api_key:
+        env_map = {
+            "anthropic": "ANTHROPIC_API_KEY",
+            "openai": "OPENAI_API_KEY",
+            "grok": "XAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY",
+        }
+        env_var = env_map.get(args.provider, "")
+        api_key = os.environ.get(env_var, "")
+        if not api_key:
+            print(f"  {_C.RED}Error: No API key. Use --api-key or set {env_var} in .env{_C.RESET}")
+            sys.exit(1)
+
     from bughound.agent import run_agent
     await run_agent(
         target=args.target,
         provider_name=args.provider,
-        api_key=args.api_key,
+        api_key=api_key,
         model=args.model,
         depth=args.depth,
         max_iterations=args.max_iterations,
@@ -958,7 +987,8 @@ def main() -> None:
     agent_parser.add_argument("--provider", required=True,
                               choices=["anthropic", "openai", "grok", "openrouter"],
                               help="AI provider")
-    agent_parser.add_argument("--api-key", required=True, help="API key")
+    agent_parser.add_argument("--api-key", default=None,
+                              help="API key (or set in .env / environment)")
     agent_parser.add_argument("--model", default=None,
                               help="Model name (default: provider's best)")
     agent_parser.add_argument("--depth", default="light", choices=["light", "deep"],
