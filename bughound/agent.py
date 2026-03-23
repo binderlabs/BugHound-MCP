@@ -390,6 +390,31 @@ async def run_agent(
         print(f"  {_C.RED}Failed to initialize AI provider: {exc}{_C.RESET}")
         sys.exit(1)
 
+    # --- Connection test ---------------------------------------------------
+    print(f"  {_C.DIM}Testing API connection...{_C.RESET}", end="", flush=True)
+    try:
+        test_resp = await asyncio.wait_for(
+            ai.chat([{"role": "user", "content": "Respond with only: OK"}]),
+            timeout=30,
+        )
+        if test_resp.content:
+            print(f" {_C.GREEN}connected{_C.RESET}")
+        else:
+            print(f" {_C.RED}no response{_C.RESET}")
+            sys.exit(1)
+    except asyncio.TimeoutError:
+        print(f" {_C.RED}timeout — check API key and network{_C.RESET}")
+        sys.exit(1)
+    except Exception as exc:
+        err_msg = str(exc)
+        if "401" in err_msg or "auth" in err_msg.lower() or "invalid" in err_msg.lower():
+            print(f" {_C.RED}invalid API key{_C.RESET}")
+        elif "403" in err_msg or "forbidden" in err_msg.lower():
+            print(f" {_C.RED}access denied — check API key permissions{_C.RESET}")
+        else:
+            print(f" {_C.RED}failed: {err_msg[:80]}{_C.RESET}")
+        sys.exit(1)
+
     # --- Phase 1: Automated Recon (Stages 0-3) -----------------------------
     print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 1: Reconnaissance{_C.RESET}")
 
