@@ -924,11 +924,8 @@ async def execute_tool(
     str
         JSON string result, truncated to _MAX_RESULT_LEN.
     """
-    # Inject workspace_id if the tool expects it but AI didn't provide it
-    if "workspace_id" in arguments:
-        ws_id = arguments["workspace_id"]
-    else:
-        ws_id = workspace_id
+    # Always use the real workspace_id (AI may hallucinate placeholders)
+    ws_id = workspace_id
 
     try:
         if name == "get_attack_surface":

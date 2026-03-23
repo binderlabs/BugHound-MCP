@@ -462,9 +462,76 @@ async def run_agent(
             f"{len(chains)} attack chains detected"
         )
 
-    # --- Phase 2: AI-Driven Testing ----------------------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 2: AI-Driven Testing{_C.RESET}")
-    print(f"  {_C.DIM}[AI]{_C.RESET} Analyzing attack surface...")
+    # --- Phase 2: Automated Testing (all 43 techniques) --------------------
+    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 2: Automated Testing{_C.RESET}")
+    print(f"  {_C.DIM}[test]{_C.RESET} Running all techniques (same as CLI pipeline)...")
+
+    # Run full Stage 4 automatically — no AI needed here
+    from bughound.core.job_manager import JobManager as _JM
+    from bughound.stages import test as stage_test
+    from bughound.stages import analyze as stage_analyze
+
+    # Build scan plan from attack surface
+    _target_host = target
+    if "://" in _target_host:
+        _target_host = urlparse(_target_host).hostname or _target_host
+
+    _suggested = attack_surface.get("suggested_test_classes", [])
+    if not _suggested:
+        _suggested = [
+            "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
+            "crlf", "idor", "rce", "xxe", "header_injection",
+            "graphql", "jwt", "misconfig", "default_creds",
+            "cors", "bac", "csti", "cve_specific",
+        ]
+
+    _scan_plan = {
+        "targets": [{"host": _target_host, "priority": 1, "test_classes": _suggested}],
+        "global_settings": {
+            "nuclei_severity": "critical,high,medium,low,info",
+            "nuclei_rate_limit": 100,
+            "nuclei_concurrency": 25,
+        },
+    }
+    await stage_analyze.submit_scan_plan(workspace_id, _scan_plan)
+
+    _jm = _JM()
+    _test_result = await stage_test.execute_tests(workspace_id, _jm)
+
+    if _test_result.get("status") == "job_started":
+        _job_id = _test_result["job_id"]
+        while True:
+            await asyncio.sleep(5)
+            _status = await _jm.get_status(_job_id)
+            if _status is None:
+                break
+            _pct = _status.get("progress_pct", 0)
+            _msg = _status.get("message", "")
+            sys.stdout.write(
+                f"\r  {_progress_bar(_pct)} {_C.DIM}{_msg[:45]}{_C.RESET}    "
+            )
+            sys.stdout.flush()
+            if _status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
+                print()
+                break
+
+    # Load findings from automated testing
+    automated_findings = await _load_findings(workspace_id)
+    auto_summary = format_findings(automated_findings)
+
+    from collections import Counter as _Counter
+    _sev = _Counter(f.get("severity", "?") for f in automated_findings)
+    _cls = _Counter(f.get("vulnerability_class", "?") for f in automated_findings)
+    print(
+        f"  {_C.GREEN}[test]{_C.RESET} "
+        f"{len(automated_findings)} findings from automated testing"
+    )
+    for s in ("critical", "high", "medium", "low"):
+        if _sev.get(s):
+            print(f"    {s}: {_sev[s]}")
+
+    # --- Phase 3: AI Exploitation (go deeper on findings) --------------------
+    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 3: AI-Driven Exploitation{_C.RESET}")
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -472,7 +539,15 @@ async def run_agent(
             "role": "user",
             "content": RECON_COMPLETE_PROMPT.format(
                 attack_surface_summary=attack_surface_summary,
-            ),
+            )
+            + "\n\n--- AUTOMATED TEST RESULTS ---\n"
+            + auto_summary
+            + "\n\nAutomated testing is already complete. DO NOT re-run techniques."
+            " Instead, focus on:\n"
+            "1. Exploiting confirmed findings deeper (extract data, read files)\n"
+            "2. Chaining findings together for higher impact\n"
+            "3. Creative manual testing via http_request that automated tools missed\n"
+            "4. Verifying and proving impact of the most critical findings\n",
         },
     ]
 
@@ -524,92 +599,6 @@ async def run_agent(
             if response.content:
                 print(f"\n  {_C.CYAN}[AI]{_C.RESET} {response.content[:500]}")
             break
-
-    # --- Phase 3: Exploitation ---------------------------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 3: Exploitation{_C.RESET}")
-
-    # Load current findings
-    findings = await _load_findings(workspace_id)
-    findings_summary = format_findings(findings)
-
-    if not findings:
-        print(f"  {_C.DIM}[AI]{_C.RESET} No findings to exploit. Skipping.")
-    else:
-        print(
-            f"  {_C.DIM}[AI]{_C.RESET} "
-            f"Reviewing {len(findings)} findings for exploitation..."
-        )
-
-        messages.append({
-            "role": "user",
-            "content": FINDINGS_REVIEW_PROMPT.format(
-                findings_summary=findings_summary,
-            ),
-        })
-
-        exploitation_limit = min(20, max_iterations - iterations_used)
-
-        for i in range(exploitation_limit):
-            iterations_used += 1
-
-            try:
-                response = await ai.chat(messages, tools=AGENT_TOOLS)
-            except Exception as exc:
-                print(f"  {_C.RED}[AI] API error: {exc}{_C.RESET}")
-                break
-
-            total_input_tokens += response.usage.get("input_tokens", 0)
-            total_output_tokens += response.usage.get("output_tokens", 0)
-
-            if response.has_tool_calls:
-                messages.append(ai.format_assistant_tool_calls(response))
-
-                if response.content:
-                    text = response.content.strip()
-                    if text:
-                        display_text = (
-                            text[:200] + "..." if len(text) > 200 else text
-                        )
-                        print(f"  {_C.CYAN}[AI]{_C.RESET} \"{display_text}\"")
-
-                for tc in response.tool_calls:
-                    # Extra scope check for exploitation tools
-                    if tc.name in ("http_request", "extract_sqli_data", "read_file_via_lfi"):
-                        url = tc.arguments.get("url", "")
-                        from bughound.agent_tools import _is_in_scope
-                        if not _is_in_scope(url, target_scope):
-                            print(
-                                f"  {_C.RED}[!]{_C.RESET} "
-                                f"Blocked out-of-scope: {url}"
-                            )
-                            messages.append(
-                                ai.format_tool_result(
-                                    tc.id,
-                                    json.dumps({
-                                        "status": "error",
-                                        "message": f"Out of scope: {url}",
-                                    }),
-                                )
-                            )
-                            continue
-
-                    print(
-                        f"  {_C.CYAN}[AI]{_C.RESET} "
-                        f"{tc.name}({_summarize_args(tc.arguments)})"
-                    )
-
-                    result = await execute_tool(
-                        tc.name, tc.arguments, workspace_id, target_scope,
-                    )
-
-                    summary = _summarize_result(result)
-                    print(f"  {_C.GREEN}[->]{_C.RESET} {summary}")
-
-                    messages.append(ai.format_tool_result(tc.id, result))
-            else:
-                if response.content:
-                    print(f"\n  {_C.CYAN}[AI]{_C.RESET} {response.content[:500]}")
-                break
 
     # --- Phase 4: Report ---------------------------------------------------
     print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 4: Report{_C.RESET}")
