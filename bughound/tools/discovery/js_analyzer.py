@@ -38,6 +38,25 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, str, str]] = [
     ("JWT",             re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),            "JSON Web Token",              "HIGH"),
     ("FIREBASE",        re.compile(r"[a-z0-9-]+\.firebaseio\.com"),                                                "Firebase Database URL",       "HIGH"),
     ("S3_BUCKET",       re.compile(r"[a-z0-9.-]+\.s3\.amazonaws\.com"),                                            "AWS S3 Bucket",               "HIGH"),
+    # Cloud provider tokens
+    ("GOOGLE_OAUTH",     re.compile(r"ya29\.[0-9A-Za-z\-_]+"),                                                          "Google OAuth Token",          "HIGH"),
+    ("GOOGLE_CAPTCHA",   re.compile(r"6L[0-9A-Za-z\-_]{38}"),                                                           "Google reCAPTCHA Key",        "HIGH"),
+    ("STRIPE_LIVE",      re.compile(r"sk_live_[0-9a-zA-Z]{24,}"),                                                       "Stripe Live API Key",         "HIGH"),
+    ("STRIPE_RESTRICTED", re.compile(r"rk_live_[0-9a-zA-Z]{24,}"),                                                      "Stripe Restricted Key",       "HIGH"),
+    ("FACEBOOK_TOKEN",   re.compile(r"EAACEdEose0cBA[0-9A-Za-z]+"),                                                     "Facebook Access Token",       "HIGH"),
+    ("TWILIO_API",       re.compile(r"SK[0-9a-fA-F]{32}"),                                                              "Twilio API Key",              "HIGH"),
+    ("TWILIO_SID",       re.compile(r"AC[a-zA-Z0-9_\-]{32}"),                                                           "Twilio Account SID",          "HIGH"),
+    ("MAILGUN_KEY",      re.compile(r"key-[0-9a-zA-Z]{32}"),                                                            "Mailgun API Key",             "HIGH"),
+    ("SQUARE_TOKEN",     re.compile(r"sq0atp-[0-9A-Za-z\-_]{22,}"),                                                     "Square Access Token",         "HIGH"),
+    ("SQUARE_OAUTH",     re.compile(r"sq0csp-[0-9A-Za-z\-_]{43,}"),                                                     "Square OAuth Secret",         "HIGH"),
+    ("PAYPAL_BRAINTREE", re.compile(r"access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}"),                           "PayPal Braintree Token",      "HIGH"),
+    ("PGP_KEY",          re.compile(r"-----BEGIN PGP PRIVATE KEY BLOCK-----"),                                           "PGP Private Key",             "HIGH"),
+    ("HEROKU_API",       re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "Heroku API Key (UUID)",       "MEDIUM"),
+    ("AMAZON_MWS",       re.compile(r"amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),      "Amazon MWS Auth Token",       "HIGH"),
+    ("SHOPIFY_TOKEN",    re.compile(r"shpat_[a-fA-F0-9]{32}"),                                                          "Shopify Admin Token",         "HIGH"),
+    ("SHOPIFY_KEY",      re.compile(r"shpss_[a-fA-F0-9]{32}"),                                                          "Shopify Shared Secret",       "HIGH"),
+    ("DYNATRACE",        re.compile(r"dt0c01\.[A-Z0-9]{24}\.[A-Z0-9]{64}"),                                             "Dynatrace Token",             "HIGH"),
+    ("SENDGRID_KEY",     re.compile(r"SG\.[0-9A-Za-z\-_]{22}\.[0-9A-Za-z\-_]{43}"),                                    "SendGrid API Key",            "HIGH"),
     # ── MEDIUM confidence ────────────────────────────────────────────────────
     ("API_KEY",         re.compile(r"""(?:api[_-]?key|apikey|api[_-]?secret)[\s:="']+([A-Za-z0-9_\-]{20,})""", re.I),           "API Key",      "MEDIUM"),
     ("BEARER_TOKEN",    re.compile(r"""(?:bearer|authorization|auth[_-]?token)[\s:="']+([A-Za-z0-9_\-\.]{30,})""", re.I),        "Bearer Token", "MEDIUM"),
@@ -46,8 +65,38 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, str, str]] = [
         r"""|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"""
         r"""|192\.168\.\d{1,3}\.\d{1,3})(?:[\"'\s,;:]|$)"""
     ),                                                                                                              "Internal IP",                 "MEDIUM"),
+    # Database connection strings
+    ("MONGODB_URI",      re.compile(r"mongodb(?:\+srv)?://[^\s\"']{10,}"),                                               "MongoDB Connection URI",      "MEDIUM"),
+    ("POSTGRES_URI",     re.compile(r"postgres(?:ql)?://[^\s\"']{10,}"),                                                 "PostgreSQL Connection URI",   "MEDIUM"),
+    ("MYSQL_URI",        re.compile(r"mysql://[^\s\"']{10,}"),                                                           "MySQL Connection URI",        "MEDIUM"),
+    ("REDIS_URI",        re.compile(r"redis://[^\s\"']{10,}"),                                                           "Redis Connection URI",        "MEDIUM"),
+    # Auth patterns
+    ("BASIC_AUTH",       re.compile(r"(?:Authorization|authorization)[:\s]+Basic\s+([A-Za-z0-9+/=]{20,})"),              "HTTP Basic Auth (base64)",    "MEDIUM"),
+    ("CRED_URL",         re.compile(r"https?://[^:@\s]+:[^:@\s]+@[^\s\"']+"),                                           "URL with Credentials",        "MEDIUM"),
+    # Cloud keys
+    ("AZURE_KEY",        re.compile(r"AccountKey=[A-Za-z0-9+/=]{44,}"),                                                 "Azure Storage Key",           "HIGH"),
+    ("AZURE_SAS",        re.compile(r"sv=\d{4}-\d{2}-\d{2}&s[a-z]=.*?&sig=[A-Za-z0-9%+/=]+"),                          "Azure SAS Token",             "MEDIUM"),
+    ("GCP_SERVICE",      re.compile(r'"type"\s*:\s*"service_account"'),                                                  "GCP Service Account JSON",    "HIGH"),
     # ── LOW confidence ───────────────────────────────────────────────────────
     ("GENERIC_SECRET",  re.compile(r"""(?:secret|password|passwd|pwd)[\s:="']+([^\s"']{12,64})""", re.I),          "Generic Secret/Password",     "LOW"),
+    # Generic keyword-value patterns (JS Miner style)
+    ("SESSION_SECRET",   re.compile(r"""(?:session|encrypt|decrypt|ssh|consumer|signing)[-_]?(?:key|secret|token)[\s:="']+([^\s"']{12,64})""", re.I), "Session/Encrypt Secret", "LOW"),
+    ("EMAIL_IN_JS",      re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),                           "Email Address in JS",         "LOW"),
+]
+
+# Cloud service URL patterns (inspired by JS Miner)
+_CLOUD_URL_PATTERNS: list[tuple[str, re.Pattern, str]] = [
+    ("AWS_S3",          re.compile(r"[a-z0-9.-]+\.s3[.-](?:us|eu|ap|sa|ca|me|af)?-?(?:east|west|north|south|central|southeast|northeast)?-?\d?\.?amazonaws\.com"),  "AWS S3 Bucket"),
+    ("AWS_RDS",         re.compile(r"[a-z0-9.-]+\.rds\.amazonaws\.com"),                                                "AWS RDS Instance"),
+    ("AWS_CACHE",       re.compile(r"[a-z0-9.-]+\.cache\.amazonaws\.com"),                                              "AWS ElastiCache"),
+    ("AZURE_BLOB",      re.compile(r"[a-z0-9]+\.blob\.core\.windows\.net"),                                             "Azure Blob Storage"),
+    ("AZURE_TABLE",     re.compile(r"[a-z0-9]+\.table\.core\.windows\.net"),                                            "Azure Table Storage"),
+    ("GCP_STORAGE",     re.compile(r"storage\.googleapis\.com/[a-z0-9._-]+"),                                           "Google Cloud Storage"),
+    ("CLOUDFRONT",      re.compile(r"[a-z0-9]+\.cloudfront\.net"),                                                      "AWS CloudFront"),
+    ("DO_SPACES",       re.compile(r"[a-z0-9.-]+\.digitaloceanspaces\.com"),                                            "DigitalOcean Spaces"),
+    ("ALIBABA_OSS",     re.compile(r"[a-z0-9.-]+\.aliyuncs\.com"),                                                     "Alibaba Cloud OSS"),
+    ("ORACLE_CLOUD",    re.compile(r"[a-z0-9.-]+\.oraclecloud\.com"),                                                  "Oracle Cloud"),
+    ("RACKSPACE_CDN",   re.compile(r"[a-z0-9.-]+\.rackcdn\.com"),                                                      "Rackspace CDN"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -314,6 +363,19 @@ def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
                 "confidence": confidence,
                 "source_file": source_file,
                 "match_position": match.start(),
+            })
+
+    # Cloud URL detection
+    for name, pattern, description in _CLOUD_URL_PATTERNS:
+        for match in pattern.finditer(content):
+            url = match.group(0)
+            secrets.append({
+                "type": name,
+                "description": description,
+                "value": url,
+                "source_file": source_file,
+                "confidence": "MEDIUM",
+                "line": content[:match.start()].count("\n") + 1,
             })
 
     return secrets
