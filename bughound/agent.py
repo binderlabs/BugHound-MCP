@@ -366,8 +366,7 @@ async def run_agent(
     """
     from bughound.agent_tools import AGENT_TOOLS, execute_tool
     from bughound.agent_prompts import (
-        SYSTEM_PROMPT, RECON_COMPLETE_PROMPT,
-        FINDINGS_REVIEW_PROMPT, REPORT_PROMPT,
+        SYSTEM_PROMPT, RECON_COMPLETE_PROMPT, REPORT_PROMPT,
     )
 
     total_input_tokens = 0
