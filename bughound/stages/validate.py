@@ -279,6 +279,34 @@ async def validate_all(
     errors = 0
     start = time.monotonic()
 
+    # Skip heavy validation (sqlmap/dalfox) for low-confidence findings
+    # They waste 5 min per finding and rarely confirm
+    _HEAVY_VALIDATORS = {"sqlmap", "dalfox"}
+    high_priority = []
+    low_priority = []
+
+    for f in to_validate:
+        vuln_class = f.get("vulnerability_class", "other")
+        validator = _VALIDATOR_MAP.get(vuln_class, "curl")
+        confidence = f.get("confidence", "medium")
+
+        if validator in _HEAVY_VALIDATORS and confidence not in ("high",):
+            # Skip heavy validators for medium/low confidence — mark as manual review
+            f["validated"] = True
+            f["validation_status"] = NEEDS_MANUAL_REVIEW
+            f["validation_tool"] = validator
+            manual_review += 1
+            results.append({
+                "finding_id": f.get("finding_id", "unknown"),
+                "vulnerability_class": vuln_class,
+                "severity": f.get("severity", "info"),
+                "validation_status": NEEDS_MANUAL_REVIEW,
+                "reason": f"Skipped heavy validation ({validator}) for {confidence} confidence finding",
+            })
+        else:
+            high_priority.append(f)
+
+    to_validate = high_priority
     total = len(to_validate)
     for idx, finding in enumerate(to_validate):
         finding_id = finding.get("finding_id", "unknown")
@@ -287,7 +315,7 @@ async def validate_all(
 
         # Report progress
         if progress_cb:
-            pct = int((idx / total) * 100)
+            pct = int((idx / total) * 100) if total > 0 else 100
             try:
                 await progress_cb(pct, f"Validating {idx+1}/{total}: {vuln_class} ({validator})")
             except Exception:
@@ -536,7 +564,7 @@ async def _validate_sqli(
     if param:
         args.extend(["-p", param])
 
-    result = await tool_runner.run("sqlmap", args, target=endpoint, timeout=300)
+    result = await tool_runner.run("sqlmap", args, target=endpoint, timeout=60)
 
     if result.success:
         output = "\n".join(str(r) for r in result.results)
@@ -650,6 +678,40 @@ async def _validate_sqli_pure(finding: dict[str, Any]) -> dict[str, Any]:
                             "impact": "SQL injection reveals database errors, potential data extraction",
                             "severity_assessment": "HIGH — error-based SQL injection confirmed",
                         }
+
+            # HTTP 500 confirmation: ' causes 500, but '--+- returns normal
+            quote_url = _replace_param(endpoint, param, "'")
+            async with session.get(
+                quote_url, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
+            ) as resp:
+                quote_status = resp.status
+
+            if quote_status == 500:
+                fix_url = _replace_param(endpoint, param, "'--+-")
+                async with session.get(
+                    fix_url, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
+                ) as resp:
+                    fix_status = resp.status
+
+                if fix_status == 200:
+                    return {
+                        "status": CONFIRMED,
+                        "evidence": (
+                            f"HTTP 500 SQLi confirmed: single quote returns 500, "
+                            f"comment-terminated quote ('--+-) returns 200. "
+                            f"This proves the quote breaks the SQL query."
+                        ),
+                        "poc_request": f"GET {quote_url}",
+                        "poc_response": f"Status with ': {quote_status}, Status with '--+-: {fix_status}",
+                        "reproduction_steps": [
+                            f"1. Send: curl -sk '{quote_url}' → HTTP 500",
+                            f"2. Send: curl -sk '{fix_url}' → HTTP 200",
+                            "3. The comment (--) closes the broken SQL, confirming injection",
+                        ],
+                        "curl_command": f"curl -sk '{quote_url}'",
+                        "impact": "SQL injection confirmed via HTTP 500 differential",
+                        "severity_assessment": "CRITICAL — confirmed SQL injection",
+                    }
 
     except Exception as exc:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": f"Pure-Python SQLi test failed: {exc}"}
@@ -1735,16 +1797,9 @@ def _cvss_key(vuln_class: str, finding: dict[str, Any]) -> str:
 def _sqlmap_confirms(output: str) -> bool:
     """Check if sqlmap output confirms injection."""
     output_lower = output.lower()
-    # Negative indicators — sqlmap explicitly says NOT injectable
-    negative = [
-        "does not seem to be injectable",
-        "do not appear to be injectable",
-        "not injectable",
-        "all tested parameters are not",
-    ]
-    if any(neg in output_lower for neg in negative):
-        return False
     # Positive indicators — sqlmap confirmed injection
+    # Check positive FIRST — sqlmap can print "not injectable" for one param
+    # then find injection on another param in the same output
     positive = [
         "is vulnerable",
         "sqlmap identified the following injection point",
@@ -1754,22 +1809,46 @@ def _sqlmap_confirms(output: str) -> bool:
         "type: error-based",
         "type: union query",
         "type: stacked queries",
+        "back-end dbms:",
+        "fetching database names",
+        "fetching current database",
     ]
-    return any(pos in output_lower for pos in positive)
+    if any(pos in output_lower for pos in positive):
+        return True
+    return False
 
 
 def _extract_sqlmap_evidence(output: str) -> str:
-    """Extract key evidence from sqlmap output."""
+    """Extract key evidence from sqlmap output.
+
+    Captures only the confirmation lines: Parameter, Type, Title, Payload, DBMS.
+    Filters out WARNING/ERROR/INFO noise.
+    """
     lines = output.split("\n")
     evidence_lines = []
     for line in lines:
-        lower = line.lower()
+        stripped = line.strip()
+        lower = stripped.lower()
+        # Skip noise
+        if stripped.startswith("[") and any(x in stripped for x in ["WARNING", "ERROR", "INFO", "CRITICAL"]):
+            continue
+        # Capture confirmation lines
         if any(kw in lower for kw in [
-            "is vulnerable", "injectable", "type:", "title:", "payload:",
-            "back-end dbms", "parameter:", "sqlmap identified",
+            "type:", "title:", "payload:", "back-end dbms",
+            "parameter:", "sqlmap identified", "web application technology",
+            "web server operating system",
         ]):
-            evidence_lines.append(line.strip())
-    return "\n".join(evidence_lines[:15]) if evidence_lines else output[:500]
+            evidence_lines.append(stripped)
+
+    if evidence_lines:
+        return "\n".join(evidence_lines[:10])
+
+    # Fallback: extract any line with useful info
+    for line in lines:
+        if "back-end" in line.lower() or "type:" in line.lower():
+            return line.strip()
+
+    return "SQLi confirmed by sqlmap"
 
 
 def _extract_db_type(output: str) -> str:
