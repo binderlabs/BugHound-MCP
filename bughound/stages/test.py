@@ -678,10 +678,12 @@ async def _run_tests(
 
             if versioned_hosts:
                 try:
+                    # Use template directory path for comprehensive CVE coverage
+                    # -t http/cves/ includes all 3830 CVE templates (vs -tags cve = 3825)
                     result = await nuclei.execute(
                         versioned_hosts,
-                        tags=["cve"],
-                        severity="critical,high",
+                        template_path="http/cves/",
+                        severity="critical,high,medium",
                         rate_limit=nuclei_rate,
                         concurrency=nuclei_concurrency,
                         no_interactsh=no_interactsh,
