@@ -73,6 +73,52 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         },
     },
 
+    {
+        "type": "function",
+        "function": {
+            "name": "browse_page",
+            "description": (
+                "Open a URL in a real browser (Playwright/Chromium). Use this for: "
+                "SPAs that render content via JavaScript, DOM XSS testing, "
+                "pages that require JS to load, authentication flows. "
+                "Returns the rendered HTML (after JS execution), console logs, "
+                "and any JavaScript errors. Slower than read_page but sees what a real browser sees."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to open in browser"},
+                    "wait_seconds": {"type": "integer", "description": "Seconds to wait for JS to render (default: 3)", "default": 3},
+                    "inject_js": {"type": "string", "description": "Optional JavaScript to execute in page context (e.g., 'document.cookie')"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tool",
+            "description": (
+                "Run a security tool available on the system. Use for: "
+                "curl with complex options, nmap port scan, whatweb fingerprint, "
+                "or any Kali tool. Returns stdout output. "
+                "ONLY use for security testing tools, NOT for destructive commands."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Command to run (e.g., 'curl -sk https://target.com/admin', 'whatweb target.com')",
+                    },
+                    "timeout": {"type": "integer", "description": "Timeout in seconds (default: 30)", "default": 30},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+
     # === EXPLOITATION (agent-only) ===
     {
         "type": "function",
@@ -962,6 +1008,117 @@ async def execute_tool(
 
                         return json.dumps(result, default=str)[:_MAX_RESULT_LEN]
 
+            except Exception as exc:
+                return json.dumps({"status": "error", "message": str(exc)[:200]})
+
+        elif name == "browse_page":
+            url = arguments.get("url", "")
+            if not _is_in_scope(url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {url}"})
+
+            wait_secs = arguments.get("wait_seconds", 3)
+            inject_js = arguments.get("inject_js", "")
+
+            try:
+                from playwright.async_api import async_playwright
+
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(headless=True)
+                    page = await browser.new_page()
+
+                    # Capture console logs
+                    console_logs: list[str] = []
+                    page.on("console", lambda msg: console_logs.append(
+                        f"[{msg.type}] {msg.text}"[:100]
+                    ))
+
+                    await page.goto(url, wait_until="networkidle", timeout=15000)
+                    await page.wait_for_timeout(wait_secs * 1000)
+
+                    # Get rendered HTML
+                    rendered = await page.content()
+                    title = await page.title()
+
+                    # Execute optional JS
+                    js_result = ""
+                    if inject_js:
+                        try:
+                            js_result = str(await page.evaluate(inject_js))
+                        except Exception as js_err:
+                            js_result = f"JS error: {js_err}"
+
+                    # Get cookies
+                    cookies = await page.context.cookies()
+                    cookie_list = [
+                        {"name": c["name"], "value": c["value"][:50], "httpOnly": c.get("httpOnly")}
+                        for c in cookies[:10]
+                    ]
+
+                    await browser.close()
+
+                    import re
+                    result = {
+                        "status": "success",
+                        "url": url,
+                        "title": title,
+                        "rendered_length": len(rendered),
+                        "console_logs": console_logs[:20],
+                        "cookies": cookie_list,
+                        "js_result": js_result[:500] if js_result else "",
+                        "body_preview": rendered[:3000],
+                    }
+                    return json.dumps(result, default=str)[:_MAX_RESULT_LEN]
+
+            except ImportError:
+                return json.dumps({"status": "error", "message": "Playwright not installed. Use read_page() instead."})
+            except Exception as exc:
+                return json.dumps({"status": "error", "message": f"Browser error: {str(exc)[:200]}"})
+
+        elif name == "run_tool":
+            command = arguments.get("command", "")
+            cmd_timeout = arguments.get("timeout", 30)
+
+            # Safety: block destructive commands
+            _BLOCKED = ["rm ", "rm -", "rmdir", "mkfs", "dd ", "format ",
+                        "drop ", "delete ", "truncate ", "shutdown",
+                        "> /dev/", "curl.*-X DELETE", "wget.*-O /"]
+            cmd_lower = command.lower()
+            if any(b in cmd_lower for b in _BLOCKED):
+                return json.dumps({"status": "error", "message": f"Blocked: destructive command"})
+
+            # Scope check: any URL in command must be in scope
+            import re as _re
+            urls_in_cmd = _re.findall(r'https?://[^\s"\']+', command)
+            for u in urls_in_cmd:
+                if not _is_in_scope(u, target_scope):
+                    return json.dumps({"status": "error", "message": f"Out of scope URL in command: {u}"})
+
+            try:
+                import subprocess
+                proc = await asyncio.wait_for(
+                    asyncio.create_subprocess_shell(
+                        command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    ),
+                    timeout=5,
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=cmd_timeout,
+                )
+                output = stdout.decode(errors="replace")[:5000]
+                err = stderr.decode(errors="replace")[:1000]
+                result = {
+                    "status": "success",
+                    "command": command,
+                    "exit_code": proc.returncode,
+                    "stdout": output,
+                    "stderr": err if err else "",
+                }
+                return json.dumps(result)[:_MAX_RESULT_LEN]
+
+            except asyncio.TimeoutError:
+                return json.dumps({"status": "error", "message": f"Command timed out after {cmd_timeout}s"})
             except Exception as exc:
                 return json.dumps({"status": "error", "message": str(exc)[:200]})
 
