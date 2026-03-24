@@ -263,23 +263,22 @@ Use `--max-hosts N` to skip the prompt and auto-select the top N hosts.
 
 ## AI Agent Mode
 
-BugHound's agent mode is fundamentally different from CLI scanning. The AI acts as a **manual pentester** — it reads pages, analyzes HTML, crafts specific payloads, and adapts based on responses. It does NOT run automated scans.
+BugHound's agent mode combines **CLI scanning speed** with **AI expert depth**. It runs all 45 automated techniques first, then an AI with 6 specialist experts reviews the findings and goes deeper — extracting data, reading config files, chaining vulnerabilities, and proving impact.
 
-**6 specialist experts built-in:** SQLi (5 DB playbooks), XSS (6 injection contexts), LFI (file priority lists), SSRF (cloud metadata + bypasses), RCE (per-language eval), Auth (login bypass + JWT).
+**Hybrid approach:** CLI breadth + AI depth
+```
+Phase 1: Automated Recon (Stages 0-3)     → discover attack surface
+Phase 2: Automated Testing (45 techniques) → find 30+ vulnerabilities fast
+Phase 3: AI Expert Analysis                → exploit deeper, chain findings, prove impact
+```
 
-**11 tools available to the AI:**
-- `read_page` — fetch and analyze HTML (forms, links, scripts, comments)
-- `browse_page` — open in Playwright browser (for SPAs, DOM XSS)
-- `run_tool` — execute any Kali security tool (curl, nmap, sqlmap)
-- `http_request` — send custom HTTP requests with full control
-- `extract_sqli_data` — extract database data from confirmed SQLi
-- `read_file_via_lfi` — read files through confirmed LFI
-- `add_finding` — record a confirmed vulnerability
-- `get_findings`, `get_attack_surface`, `validate_findings`, `generate_report`
+**6 specialist experts:** SQLi (5 DB extraction playbooks), XSS (6 injection contexts), LFI (config file priority lists), SSRF (cloud metadata + bypasses), RCE (per-language eval), Auth (login bypass + JWT).
+
+**11 AI tools:** `read_page`, `browse_page` (Playwright), `run_tool` (Kali tools), `http_request`, `extract_sqli_data`, `read_file_via_lfi`, `add_finding`, `get_findings`, `get_attack_surface`, `validate_findings`, `generate_report`
 
 ```bash
 # Using OpenRouter (access to all models)
-./bhound agent https://target.com --provider openrouter --model anthropic/claude-sonnet-4.5
+./bhound agent https://target.com --provider openrouter --model openai/gpt-5.4-mini
 
 # Using .env file for API key
 echo "OPENROUTER_API_KEY=sk-or-..." > .env
@@ -292,10 +291,12 @@ echo "OPENROUTER_API_KEY=sk-or-..." > .env
 --provider openrouter   # Any model via OpenRouter
 ```
 
-**How the agent works (different from CLI):**
+**What AI adds beyond CLI:**
 ```
-CLI:   Run all 45 techniques automatically → dump findings
-Agent: Recon → AI reads pages → AI crafts targeted payloads → AI exploits → AI chains findings
+CLI finds:  "SQLi on Bookings.aspx CuntryID (error-based)"
+Agent adds: "Extracted database version (MySQL 9), dumped users table,
+            found admin credentials, chained with LFI to read web.config
+            containing database connection string"
 ```
 
 ## Pipeline Architecture
