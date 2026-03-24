@@ -771,7 +771,7 @@ async def _exec_sqli_fuzz(
                 })
 
     candidates.extend(extra_candidates)
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=30)
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=50)
 
     findings: list[dict[str, Any]] = []
     sem = asyncio.Semaphore(2)
@@ -846,7 +846,7 @@ async def _exec_xss_fuzz(
 
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, "xss_candidates")
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=20)
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=50)
 
     findings: list[dict[str, Any]] = []
     tested_urls: set[str] = set()
@@ -1042,7 +1042,7 @@ async def _exec_crlf(
                 seen.add(key)
                 all_candidates.append(c)
 
-    scoped = await _filter_to_scope(all_candidates, approved_hosts, limit=10)
+    scoped = await _filter_to_scope(all_candidates, approved_hosts, limit=50)
     return await _run_injection_batch_direct(
         scoped, test_crlf, "crlf", "crlf_test", "medium", concurrency,
     )
@@ -1131,7 +1131,7 @@ async def _exec_csti(
             seen.add(key)
             unique.append(c)
 
-    scoped = await _filter_to_scope(unique, approved_hosts, limit=15)
+    scoped = await _filter_to_scope(unique, approved_hosts, limit=50)
 
     return await _run_injection_batch_direct(
         scoped, test_csti, "csti", "csti_test", "medium", concurrency,
@@ -1147,7 +1147,7 @@ async def _exec_reflected_xss(
 
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, "xss_candidates")
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=15)
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=50)
 
     # Generate frontend URL variants for API endpoints
     extra: list[dict[str, Any]] = []
@@ -2451,7 +2451,7 @@ async def _exec_prototype_pollution(
             seen.add(key)
             unique.append(c)
 
-    scoped = await _filter_to_scope(unique, approved_hosts, limit=15)
+    scoped = await _filter_to_scope(unique, approved_hosts, limit=50)
 
     return await _run_injection_batch_direct(
         scoped, test_prototype_pollution, "prototype_pollution",
