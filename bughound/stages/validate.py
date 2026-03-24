@@ -564,7 +564,7 @@ async def _validate_sqli(
     if param:
         args.extend(["-p", param])
 
-    result = await tool_runner.run("sqlmap", args, target=endpoint, timeout=60)
+    result = await tool_runner.run("sqlmap", args, target=endpoint, timeout=120)
 
     if result.success:
         output = "\n".join(str(r) for r in result.results)
