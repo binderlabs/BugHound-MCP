@@ -105,20 +105,25 @@ For each confirmed vulnerability, call `add_finding()` with:
 - Be thorough but efficient — don't repeat the same test
 """
 
-RECON_COMPLETE_PROMPT = """Automated discovery is complete. Here is what was found:
+RECON_COMPLETE_PROMPT = """Automated recon (Stages 0-3) is complete. Here is the attack surface:
 
 {attack_surface_summary}
 
-NOW START YOUR MANUAL ASSESSMENT:
+The recon pipeline already found URLs, parameters, technologies, and probe-confirmed vulnerabilities. YOUR JOB NOW:
 
-1. First, call `read_page()` on the target homepage to see the actual HTML
-2. Study the forms, links, scripts, and comments
-3. Based on what you see, decide what to test first
-4. Test ONE thing at a time using `http_request()`
-5. Analyze each response before deciding the next test
-6. When you confirm a vulnerability, call `add_finding()` and then exploit deeper
+1. **Study the recon data above** — which endpoints have confirmed SQLi/XSS/LFI probes?
+2. **Call `read_page()` on the most interesting endpoints** — see the actual HTML, forms, hidden inputs
+3. **Craft targeted payloads based on what you see** — not generic, specific to the context
+4. **Test using `http_request()`** — one endpoint, one payload at a time
+5. **When you confirm a vulnerability, call `add_finding()`** with evidence and curl command
+6. **Go deeper** — if SQLi confirmed, extract data. If LFI confirmed, read config files.
+7. **Chain findings** — LFI reads .env → DB credentials → use on SQLi endpoint
 
-Remember: you are a manual pentester, not a scanner. Read first, think, then test specifically."""
+IMPORTANT:
+- The recon data tells you WHERE to look. You decide HOW to test.
+- Probe-confirmed means the parameter reflects input. Start testing those first.
+- Read the actual page HTML to understand the injection context (HTML? JS? attribute?)
+- Craft payloads for THAT specific context, not generic payloads."""
 
 REPORT_PROMPT = """Your manual assessment is complete. Review your findings:
 
