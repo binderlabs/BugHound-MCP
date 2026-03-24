@@ -269,11 +269,41 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "update_finding_status",
+            "description": (
+                "Update the validation status of an existing finding. "
+                "Use after you validate a finding with http_request or read_page. "
+                "Set status to CONFIRMED if you verified it's real, "
+                "LIKELY_FALSE_POSITIVE if it's not exploitable, "
+                "or NEEDS_MANUAL_REVIEW if you're unsure."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "finding_index": {
+                        "type": "integer",
+                        "description": "The finding number (e.g., 1 for finding #1)",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["CONFIRMED", "LIKELY_FALSE_POSITIVE", "NEEDS_MANUAL_REVIEW"],
+                    },
+                    "evidence": {
+                        "type": "string",
+                        "description": "Updated evidence from your validation (e.g., 'SQL error: Unclosed quotation mark in response')",
+                    },
+                },
+                "required": ["finding_index", "status"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "add_finding",
             "description": (
-                "Manually add a finding discovered through exploitation tools. "
-                "Use when http_request reveals a vuln that automated techniques "
-                "did not catch."
+                "Add a NEW finding discovered through manual testing. "
+                "Use when you find a vulnerability that automated techniques missed."
             ),
             "parameters": {
                 "type": "object",
@@ -1179,6 +1209,40 @@ async def execute_tool(
 
         elif name == "generate_report":
             result = await _tool_generate_report(ws_id)
+
+        elif name == "update_finding_status":
+            idx = arguments.get("finding_index", 0) - 1  # 1-based to 0-based
+            status = arguments.get("status", "NEEDS_MANUAL_REVIEW")
+            new_evidence = arguments.get("evidence", "")
+
+            try:
+                from bughound.core import workspace
+                raw = await workspace.read_data(ws_id, "vulnerabilities/scan_results.json")
+                findings = raw.get("data", raw) if isinstance(raw, dict) else (raw or [])
+
+                if not isinstance(findings, list) or idx < 0 or idx >= len(findings):
+                    return json.dumps({"status": "error", "message": f"Finding index {idx+1} out of range (total: {len(findings)})"})
+
+                findings[idx]["validation_status"] = status
+                findings[idx]["validated"] = True
+                findings[idx]["validation_tool"] = "ai_agent"
+                if new_evidence:
+                    findings[idx]["evidence"] = new_evidence
+
+                await workspace.write_data(
+                    ws_id, "vulnerabilities/scan_results.json", findings,
+                    generated_by="ai_agent", target="validation",
+                )
+
+                cls = findings[idx].get("vulnerability_class", "?")
+                ep = findings[idx].get("endpoint", "?")[:50]
+                return json.dumps({
+                    "status": "success",
+                    "message": f"Finding #{idx+1} ({cls}) → {status}",
+                    "endpoint": ep,
+                })
+            except Exception as exc:
+                return json.dumps({"status": "error", "message": str(exc)[:200]})
 
         elif name == "add_finding":
             result = await _tool_add_finding(

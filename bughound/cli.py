@@ -101,13 +101,17 @@ def _setup_logging(verbose: bool) -> None:
     import structlog
 
     if verbose:
-        # Show all debug/info logs to stderr in colored format
+        # Show BugHound debug/info logs to stderr in colored format
         logging.basicConfig(
             format="%(message)s",
             stream=sys.stderr,
             level=logging.DEBUG,
             force=True,
         )
+        # Suppress noisy HTTP client / AI SDK logs
+        for noisy in ("httpx", "openai", "httpcore", "anthropic", "urllib3",
+                       "aiohttp", "asyncio", "charset_normalizer"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
         structlog.configure(
             processors=[
                 structlog.stdlib.add_log_level,
