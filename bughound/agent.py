@@ -368,6 +368,25 @@ async def run_agent(
     from bughound.agent_prompts import (
         SYSTEM_PROMPT, RECON_COMPLETE_PROMPT, REPORT_PROMPT,
     )
+    from bughound.agent_experts import (
+        SQLI_EXPERT, XSS_EXPERT, LFI_EXPERT, SSRF_EXPERT,
+        RCE_EXPERT, AUTH_EXPERT, ORCHESTRATOR_DELEGATION,
+    )
+
+    # Build the full system prompt with all expert knowledge
+    full_system_prompt = (
+        SYSTEM_PROMPT + "\n\n"
+        "# SPECIALIST KNOWLEDGE\n\n"
+        "You have the following expert-level knowledge for each vulnerability class. "
+        "Apply the right specialist's methodology when you encounter that type.\n\n"
+        f"## SQL Injection Specialist\n{SQLI_EXPERT}\n\n"
+        f"## XSS Specialist\n{XSS_EXPERT}\n\n"
+        f"## LFI Specialist\n{LFI_EXPERT}\n\n"
+        f"## SSRF Specialist\n{SSRF_EXPERT}\n\n"
+        f"## RCE Specialist\n{RCE_EXPERT}\n\n"
+        f"## Auth Specialist\n{AUTH_EXPERT}\n\n"
+        f"## Orchestration\n{ORCHESTRATOR_DELEGATION}"
+    )
 
     total_input_tokens = 0
     total_output_tokens = 0
@@ -471,7 +490,7 @@ async def run_agent(
     )
 
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": full_system_prompt},
         {
             "role": "user",
             "content": RECON_COMPLETE_PROMPT.format(
