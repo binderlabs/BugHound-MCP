@@ -556,55 +556,58 @@ async def run_agent(
         )
 
     # --- Phase 2: Automated Testing (CLI speed) --------------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 2: Automated Testing{_C.RESET}")
-    print(f"  {_C.DIM}[test]{_C.RESET} Running all 45 techniques (same as CLI)...")
+    if _start_phase <= 2:
+        print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 2: Automated Testing{_C.RESET}")
+        print(f"  {_C.DIM}[test]{_C.RESET} Running all 45 techniques (same as CLI)...")
 
-    from bughound.core.job_manager import JobManager as _JM
-    from bughound.stages import test as stage_test
-    from bughound.stages import analyze as stage_analyze
+        from bughound.core.job_manager import JobManager as _JM
+        from bughound.stages import test as stage_test
+        from bughound.stages import analyze as stage_analyze
 
-    _target_host = target
-    if "://" in _target_host:
-        _target_host = urlparse(_target_host).hostname or _target_host
+        _target_host = target
+        if "://" in _target_host:
+            _target_host = urlparse(_target_host).hostname or _target_host
 
-    _suggested = attack_surface.get("suggested_test_classes", [])
-    if not _suggested:
-        _suggested = [
-            "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
-            "crlf", "idor", "rce", "xxe", "header_injection",
-            "graphql", "jwt", "misconfig", "default_creds",
-            "cors", "bac", "csti", "cve_specific",
-        ]
+        _suggested = attack_surface.get("suggested_test_classes", [])
+        if not _suggested:
+            _suggested = [
+                "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
+                "crlf", "idor", "rce", "xxe", "header_injection",
+                "graphql", "jwt", "misconfig", "default_creds",
+                "cors", "bac", "csti", "cve_specific",
+            ]
 
-    _scan_plan = {
-        "targets": [{"host": _target_host, "priority": 1, "test_classes": _suggested}],
-        "global_settings": {
-            "nuclei_severity": "critical,high,medium,low,info",
-            "nuclei_rate_limit": 100,
-            "nuclei_concurrency": 25,
-        },
-    }
-    await stage_analyze.submit_scan_plan(workspace_id, _scan_plan)
+        _scan_plan = {
+            "targets": [{"host": _target_host, "priority": 1, "test_classes": _suggested}],
+            "global_settings": {
+                "nuclei_severity": "critical,high,medium,low,info",
+                "nuclei_rate_limit": 100,
+                "nuclei_concurrency": 25,
+            },
+        }
+        await stage_analyze.submit_scan_plan(workspace_id, _scan_plan)
 
-    _jm = _JM()
-    _test_result = await stage_test.execute_tests(workspace_id, _jm)
+        _jm = _JM()
+        _test_result = await stage_test.execute_tests(workspace_id, _jm)
 
-    if _test_result.get("status") == "job_started":
-        _job_id = _test_result["job_id"]
-        while True:
-            await asyncio.sleep(5)
-            _status = await _jm.get_status(_job_id)
-            if _status is None:
-                break
-            _pct = _status.get("progress_pct", 0)
-            _msg = _status.get("message", "")
-            sys.stdout.write(
-                f"\r  {_progress_bar(_pct)} {_C.DIM}{_msg[:45]}{_C.RESET}    "
-            )
-            sys.stdout.flush()
-            if _status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
-                print()
-                break
+        if _test_result.get("status") == "job_started":
+            _job_id = _test_result["job_id"]
+            while True:
+                await asyncio.sleep(5)
+                _status = await _jm.get_status(_job_id)
+                if _status is None:
+                    break
+                _pct = _status.get("progress_pct", 0)
+                _msg = _status.get("message", "")
+                sys.stdout.write(
+                    f"\r  {_progress_bar(_pct)} {_C.DIM}{_msg[:45]}{_C.RESET}    "
+                )
+                sys.stdout.flush()
+                if _status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
+                    print()
+                    break
+    else:
+        print(f"\n{_C.DIM}[*] Phase 2: Skipped (resuming){_C.RESET}")
 
     # Load automated findings
     automated_findings = await _load_findings(workspace_id)
