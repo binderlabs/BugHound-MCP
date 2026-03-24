@@ -262,6 +262,61 @@ def format_findings(findings: list[dict[str, Any]]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _describe_action(tool_name: str, arguments: dict[str, Any]) -> str:
+    """Human-readable one-line description of what the AI is doing."""
+    url = arguments.get("url", arguments.get("command", ""))
+    if isinstance(url, str) and len(url) > 60:
+        url = url[:57] + "..."
+    param = arguments.get("param", "")
+    descriptions = {
+        "read_page": f"Reading page: {url}",
+        "browse_page": f"Opening in browser: {url}",
+        "http_request": f"Sending {arguments.get('method', 'GET')} to {url}",
+        "run_tool": f"Running: {url[:60]}",
+        "extract_sqli_data": f"Extracting SQL data from {url}",
+        "read_file_via_lfi": f"Reading {arguments.get('file_path', '?')} via LFI",
+        "add_finding": f"Recording {arguments.get('vulnerability_class', '?')} ({arguments.get('severity', '?')})",
+        "get_findings": "Reviewing current findings",
+        "get_attack_surface": "Analyzing attack surface",
+        "validate_findings": "Validating findings",
+        "generate_report": "Generating reports",
+    }
+    return descriptions.get(tool_name, f"{tool_name}()")
+
+
+def _short_result(tool_name: str, result_json: str) -> str:
+    """Short one-line result for non-verbose mode."""
+    try:
+        r = json.loads(result_json)
+    except Exception:
+        return ""
+    if not isinstance(r, dict):
+        return ""
+    status = r.get("status_code", r.get("status", ""))
+    if tool_name == "read_page":
+        title = r.get("title", "")
+        forms = len(r.get("forms", []))
+        links = len(r.get("links", []))
+        return f"title=\"{title[:30]}\" forms={forms} links={links}"
+    elif tool_name == "http_request":
+        size = r.get("content_length", len(r.get("body", "")))
+        return f"status={status} size={size}"
+    elif tool_name == "browse_page":
+        return f"rendered {r.get('rendered_length', '?')} chars"
+    elif tool_name == "add_finding":
+        return r.get("message", "finding added")[:60]
+    elif tool_name == "extract_sqli_data":
+        return r.get("status", "")[:60]
+    elif tool_name == "read_file_via_lfi":
+        return r.get("status", "")[:60]
+    elif tool_name == "get_findings":
+        return f"{r.get('findings_count', '?')} findings"
+    elif tool_name == "run_tool":
+        out = r.get("stdout", "")[:60]
+        return f"exit={r.get('exit_code', '?')} {out}"
+    return ""
+
+
 def _summarize_args(arguments: dict[str, Any]) -> str:
     """Short summary of tool call arguments for terminal display."""
     parts = []
@@ -520,44 +575,59 @@ async def run_agent(
         total_output_tokens += response.usage.get("output_tokens", 0)
 
         if response.has_tool_calls:
-            # Add assistant message with tool calls
             messages.append(ai.format_assistant_tool_calls(response))
 
-            # Print AI's reasoning if it included text
-            if response.content:
-                # Truncate long AI reasoning for display
+            # AI reasoning — only show in verbose
+            if verbose and response.content:
                 text = response.content.strip()
                 if text:
-                    display_text = text[:200] + "..." if len(text) > 200 else text
-                    print(f"  {_C.CYAN}[AI]{_C.RESET} \"{display_text}\"")
+                    display = text[:300] + "..." if len(text) > 300 else text
+                    print(f"  {_C.CYAN}[AI]{_C.RESET} \"{display}\"")
 
-            # Execute each tool call
             for tc in response.tool_calls:
-                print(
-                    f"  {_C.CYAN}[AI]{_C.RESET} "
-                    f"{tc.name}({_summarize_args(tc.arguments)})"
-                )
+                # Normal mode: short action description
+                # Verbose mode: full tool call with args
+                if verbose:
+                    print(
+                        f"  {_C.CYAN}[AI]{_C.RESET} "
+                        f"{tc.name}({_summarize_args(tc.arguments)})"
+                    )
+                else:
+                    # Clean one-line description
+                    action = _describe_action(tc.name, tc.arguments)
+                    print(f"  {_C.DIM}[{iterations_used}/{max_iterations}]{_C.RESET} {action}")
 
                 try:
                     result = await asyncio.wait_for(
                         execute_tool(tc.name, tc.arguments, workspace_id, target_scope),
-                        timeout=600,  # 10 min max per tool
+                        timeout=600,
                     )
                 except asyncio.TimeoutError:
-                    result = json.dumps({"status": "error", "message": "Tool timed out (10 min)"})
-                    print(f"  {_C.RED}[->]{_C.RESET} Tool timed out")
+                    result = json.dumps({"status": "error", "message": "Tool timed out"})
+                    print(f"  {_C.RED}  -> timed out{_C.RESET}")
                     messages.append(ai.format_tool_result(tc.id, result))
                     continue
 
                 summary = _summarize_result(result)
-                print(f"  {_C.GREEN}[->]{_C.RESET} {summary}")
+                if verbose:
+                    print(f"  {_C.GREEN}[->]{_C.RESET} {summary}")
+                else:
+                    # Short result
+                    short = _short_result(tc.name, result)
+                    if short:
+                        print(f"  {_C.GREEN}  -> {short}{_C.RESET}")
 
-                # Add tool result to conversation
                 messages.append(ai.format_tool_result(tc.id, result))
         else:
-            # AI finished this phase -- print analysis
             if response.content:
-                print(f"\n  {_C.CYAN}[AI]{_C.RESET} {response.content[:500]}")
+                # Show AI's final assessment (always, not just verbose)
+                text = response.content.strip()
+                if verbose:
+                    print(f"\n  {_C.CYAN}[AI]{_C.RESET} {text[:500]}")
+                else:
+                    # Just show first 2 lines
+                    lines = text.split("\n")[:2]
+                    print(f"  {_C.CYAN}[AI]{_C.RESET} {' '.join(l.strip() for l in lines)[:150]}")
             break
 
     # --- Phase 4: Report ---------------------------------------------------
