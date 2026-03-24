@@ -535,13 +535,77 @@ async def run_agent(
             f"{len(chains)} attack chains detected"
         )
 
-    # --- Phase 2: AI-Driven Manual Testing -----------------------------------
-    # NO automated scanner. The AI reads pages, crafts payloads, and tests
-    # manually — like a human pentester, not a scanner wrapper.
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 2: AI Manual Testing{_C.RESET}")
+    # --- Phase 2: Automated Testing (CLI speed) --------------------------------
+    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 2: Automated Testing{_C.RESET}")
+    print(f"  {_C.DIM}[test]{_C.RESET} Running all 45 techniques (same as CLI)...")
+
+    from bughound.core.job_manager import JobManager as _JM
+    from bughound.stages import test as stage_test
+    from bughound.stages import analyze as stage_analyze
+
+    _target_host = target
+    if "://" in _target_host:
+        _target_host = urlparse(_target_host).hostname or _target_host
+
+    _suggested = attack_surface.get("suggested_test_classes", [])
+    if not _suggested:
+        _suggested = [
+            "sqli", "xss", "ssrf", "lfi", "ssti", "open_redirect",
+            "crlf", "idor", "rce", "xxe", "header_injection",
+            "graphql", "jwt", "misconfig", "default_creds",
+            "cors", "bac", "csti", "cve_specific",
+        ]
+
+    _scan_plan = {
+        "targets": [{"host": _target_host, "priority": 1, "test_classes": _suggested}],
+        "global_settings": {
+            "nuclei_severity": "critical,high,medium,low,info",
+            "nuclei_rate_limit": 100,
+            "nuclei_concurrency": 25,
+        },
+    }
+    await stage_analyze.submit_scan_plan(workspace_id, _scan_plan)
+
+    _jm = _JM()
+    _test_result = await stage_test.execute_tests(workspace_id, _jm)
+
+    if _test_result.get("status") == "job_started":
+        _job_id = _test_result["job_id"]
+        while True:
+            await asyncio.sleep(5)
+            _status = await _jm.get_status(_job_id)
+            if _status is None:
+                break
+            _pct = _status.get("progress_pct", 0)
+            _msg = _status.get("message", "")
+            sys.stdout.write(
+                f"\r  {_progress_bar(_pct)} {_C.DIM}{_msg[:45]}{_C.RESET}    "
+            )
+            sys.stdout.flush()
+            if _status["status"] in ("COMPLETED", "FAILED", "TIMED_OUT"):
+                print()
+                break
+
+    # Load automated findings
+    automated_findings = await _load_findings(workspace_id)
+    auto_summary = format_findings(automated_findings)
+
+    from collections import Counter as _Counter
+    _sev = _Counter(f.get("severity", "?") for f in automated_findings)
+    print(
+        f"  {_C.GREEN}[test]{_C.RESET} "
+        f"{len(automated_findings)} findings from automated testing"
+    )
+    for s in ("critical", "high", "medium", "low"):
+        if _sev.get(s):
+            print(f"    {s}: {_sev[s]}")
+
+    # --- Phase 3: AI Enhancement (expert depth) --------------------------------
+    # AI reviews BOTH recon data + automated findings, then goes deeper
+    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 3: AI Expert Analysis{_C.RESET}")
     print(
         f"  {_C.DIM}[AI]{_C.RESET} "
-        f"Starting manual assessment (read pages, craft payloads, test)..."
+        f"Reviewing {len(automated_findings)} findings with 6 specialist experts..."
     )
 
     messages: list[dict[str, Any]] = [
@@ -550,7 +614,18 @@ async def run_agent(
             "role": "user",
             "content": RECON_COMPLETE_PROMPT.format(
                 attack_surface_summary=attack_surface_summary,
-            ),
+            )
+            + "\n\n--- AUTOMATED TESTING RESULTS ---\n"
+            + auto_summary
+            + "\n\nAutomated testing found the above findings. YOUR JOB NOW:\n"
+            "1. Review the findings — which are worth exploiting deeper?\n"
+            "2. Use read_page() to see the actual page HTML for interesting endpoints\n"
+            "3. For confirmed SQLi: use extract_sqli_data() to extract DB version, tables, credentials\n"
+            "4. For confirmed LFI: use read_file_via_lfi() to read config files for secrets\n"
+            "5. For login forms: try auth bypass with http_request()\n"
+            "6. Chain findings: LFI reads .env → DB password → prove with SQLi\n"
+            "7. Use add_finding() for any NEW vulnerabilities you discover\n"
+            "8. DO NOT re-test what automated testing already found — go DEEPER on existing findings\n",
         },
     ]
 
