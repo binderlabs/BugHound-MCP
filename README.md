@@ -263,7 +263,19 @@ Use `--max-hosts N` to skip the prompt and auto-select the top N hosts.
 
 ## AI Agent Mode
 
-BugHound includes an autonomous agent mode that uses an LLM to drive the entire scanning pipeline:
+BugHound's agent mode is fundamentally different from CLI scanning. The AI acts as a **manual pentester** — it reads pages, analyzes HTML, crafts specific payloads, and adapts based on responses. It does NOT run automated scans.
+
+**6 specialist experts built-in:** SQLi (5 DB playbooks), XSS (6 injection contexts), LFI (file priority lists), SSRF (cloud metadata + bypasses), RCE (per-language eval), Auth (login bypass + JWT).
+
+**11 tools available to the AI:**
+- `read_page` — fetch and analyze HTML (forms, links, scripts, comments)
+- `browse_page` — open in Playwright browser (for SPAs, DOM XSS)
+- `run_tool` — execute any Kali security tool (curl, nmap, sqlmap)
+- `http_request` — send custom HTTP requests with full control
+- `extract_sqli_data` — extract database data from confirmed SQLi
+- `read_file_via_lfi` — read files through confirmed LFI
+- `add_finding` — record a confirmed vulnerability
+- `get_findings`, `get_attack_surface`, `validate_findings`, `generate_report`
 
 ```bash
 # Using OpenRouter (access to all models)
@@ -278,6 +290,12 @@ echo "OPENROUTER_API_KEY=sk-or-..." > .env
 --provider openai       # GPT-4o
 --provider grok         # Grok-3 (xAI)
 --provider openrouter   # Any model via OpenRouter
+```
+
+**How the agent works (different from CLI):**
+```
+CLI:   Run all 45 techniques automatically → dump findings
+Agent: Recon → AI reads pages → AI crafts targeted payloads → AI exploits → AI chains findings
 ```
 
 ## Pipeline Architecture
