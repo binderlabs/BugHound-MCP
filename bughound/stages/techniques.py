@@ -846,7 +846,7 @@ async def _exec_xss_fuzz(
 
     pc = await _load_param_classification(workspace_id)
     candidates = _get_param_candidates(pc, "xss_candidates")
-    scoped = await _filter_to_scope(candidates, approved_hosts, limit=10)
+    scoped = await _filter_to_scope(candidates, approved_hosts, limit=20)
 
     findings: list[dict[str, Any]] = []
     tested_urls: set[str] = set()
