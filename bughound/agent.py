@@ -399,6 +399,8 @@ async def run_agent(
     depth: str = "light",
     max_iterations: int = 50,
     verbose: bool = False,
+    resume_workspace_id: str | None = None,
+    from_phase: int | None = None,
 ) -> None:
     """Run the full BugHound agent pipeline.
 
@@ -488,24 +490,42 @@ async def run_agent(
             print(f" {_C.RED}failed: {err_msg[:80]}{_C.RESET}")
         sys.exit(1)
 
-    # --- Phase 1: Automated Recon (Stages 0-3) -----------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 1: Reconnaissance{_C.RESET}")
-
-    # Stage 0: Init
-    print(f"  {_C.DIM}[init]{_C.RESET} Classifying target and creating workspace...")
-    workspace_id = await _run_stage0(target, depth)
-    print(f"  {_C.DIM}[init]{_C.RESET} Workspace: {workspace_id}")
-
-    # Extract target scope for scope validation
+    # Determine starting phase
+    _start_phase = from_phase or 1
+    workspace_id = resume_workspace_id or ""
     target_scope = target
 
-    # Stage 1: Enumerate
-    print(f"  {_C.DIM}[enumerate]{_C.RESET} Running subdomain enumeration...")
-    await _run_stage1(workspace_id, verbose)
+    if resume_workspace_id:
+        workspace_id = resume_workspace_id
+        from bughound.core import workspace as _ws
+        _meta = await _ws.get_workspace(workspace_id)
+        if _meta is None:
+            print(f"  {_C.RED}Workspace '{workspace_id}' not found{_C.RESET}")
+            sys.exit(1)
+        target_scope = _meta.target or target
+        print(f"  {_C.GREEN}Resuming workspace: {workspace_id}{_C.RESET}")
+        if _start_phase > 1:
+            print(f"  {_C.GREEN}Starting from Phase {_start_phase}{_C.RESET}")
 
-    # Stage 2: Discover
-    print(f"  {_C.DIM}[discover]{_C.RESET} Running discovery (probe, crawl, JS analysis)...")
-    await _run_stage2(workspace_id, verbose)
+    # --- Phase 1: Automated Recon (Stages 0-3) -----------------------------
+    if _start_phase <= 1:
+        print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 1: Reconnaissance{_C.RESET}")
+
+        # Stage 0: Init
+        if not workspace_id:
+            print(f"  {_C.DIM}[init]{_C.RESET} Classifying target and creating workspace...")
+            workspace_id = await _run_stage0(target, depth)
+            print(f"  {_C.DIM}[init]{_C.RESET} Workspace: {workspace_id}")
+
+        # Stage 1: Enumerate
+        print(f"  {_C.DIM}[enumerate]{_C.RESET} Running subdomain enumeration...")
+        await _run_stage1(workspace_id, verbose)
+
+        # Stage 2: Discover
+        print(f"  {_C.DIM}[discover]{_C.RESET} Running discovery (probe, crawl, JS analysis)...")
+        await _run_stage2(workspace_id, verbose)
+    else:
+        print(f"\n{_C.DIM}[*] Phase 1: Skipped (resuming){_C.RESET}")
 
     # Stage 3: Analyze
     print(f"  {_C.DIM}[analyze]{_C.RESET} Building attack surface model...")

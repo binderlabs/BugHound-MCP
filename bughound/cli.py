@@ -1190,6 +1190,13 @@ async def cmd_agent(args: argparse.Namespace) -> None:
         print()
 
     from bughound.agent import run_agent
+
+    # Determine from_phase
+    from_phase = getattr(args, "from_phase", None)
+    if from_phase and not resume_workspace_id:
+        print(f"  {_C.RED}Error: --from-phase requires --resume{_C.RESET}")
+        sys.exit(1)
+
     await run_agent(
         target=args.target,
         provider_name=args.provider,
@@ -1198,6 +1205,8 @@ async def cmd_agent(args: argparse.Namespace) -> None:
         depth=args.depth,
         max_iterations=args.max_iterations,
         verbose=getattr(args, "verbose", False),
+        resume_workspace_id=resume_workspace_id,
+        from_phase=from_phase,
     )
 
 
@@ -1302,6 +1311,8 @@ def main() -> None:
                               help="Max AI reasoning steps (default: 50)")
     agent_parser.add_argument("--resume", metavar="WORKSPACE_ID",
                               help="Resume scan from existing workspace")
+    agent_parser.add_argument("--from-phase", type=int, default=None, choices=[1, 2, 3, 4, 5],
+                              help="Start from specific phase (1=recon, 2=test, 3=validate, 4=AI, 5=report). Requires --resume")
 
     # serve
     subparsers.add_parser("serve", parents=[_common], help="Start MCP server")
