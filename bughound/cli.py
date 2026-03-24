@@ -1114,6 +1114,11 @@ async def cmd_agent(args: argparse.Namespace) -> None:
     import os
     from pathlib import Path
 
+    # Validate: need either target or --resume
+    if not args.target and not getattr(args, "resume", None):
+        print(f"  {_C.RED}Error: target is required (or use --resume){_C.RESET}")
+        sys.exit(1)
+
     # Load .env file if it exists (project root or current dir)
     for env_path in [Path(".env"), Path(__file__).resolve().parent.parent / ".env"]:
         if env_path.is_file():
@@ -1297,7 +1302,8 @@ def main() -> None:
     # agent
     agent_parser = subparsers.add_parser("agent", parents=[_common],
                                          help="AI-powered autonomous scanning")
-    agent_parser.add_argument("target", help="Target URL or domain")
+    agent_parser.add_argument("target", nargs="?", default=None,
+                              help="Target URL or domain (not needed with --resume)")
     agent_parser.add_argument("--provider", default=None,
                               choices=["anthropic", "openai", "grok", "openrouter"],
                               help="AI provider (auto-detected from .env if not set)")
