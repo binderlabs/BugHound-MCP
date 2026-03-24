@@ -351,6 +351,8 @@ async def _run_discover(workspace_id: str, job_manager: Any,
     # Run discover synchronously (not as background job) because input()
     # for interactive host selection requires stdin access.
     # Pass job_manager=None to force synchronous execution.
+    _spinner_task: asyncio.Task | None = None
+
     async def _spin():
         """Print dots while waiting."""
         chars = ["|", "/", "-", "\\"]
@@ -361,11 +363,27 @@ async def _run_discover(workspace_id: str, job_manager: Any,
             i += 1
             await asyncio.sleep(1)
 
-    spinner = asyncio.create_task(_spin())
+    # Wrap host_filter to pause spinner during interactive prompt
+    _original_filter = host_filter
+
+    async def _filter_with_spinner_pause(live_hosts: list) -> list | None:
+        nonlocal _spinner_task
+        # Stop spinner so input() prompt is visible
+        if _spinner_task and not _spinner_task.done():
+            _spinner_task.cancel()
+            sys.stdout.write("\r" + " " * 60 + "\r")
+            sys.stdout.flush()
+        result = await _original_filter(live_hosts)
+        # Restart spinner for remaining discovery
+        _spinner_task = asyncio.create_task(_spin())
+        return result
+
+    _spinner_task = asyncio.create_task(_spin())
     try:
         result = await asyncio.wait_for(
             stage_discover.discover(
-                workspace_id, job_manager=None, host_filter_cb=host_filter,
+                workspace_id, job_manager=None,
+                host_filter_cb=_filter_with_spinner_pause,
             ),
             timeout=timeout_mins * 60,
         )
@@ -373,8 +391,9 @@ async def _run_discover(workspace_id: str, job_manager: Any,
         print(f"\n  {_C.RED}Discovery timed out after {timeout_mins} minutes{_C.RESET}")
         result = {"status": "error", "message": "Discovery timed out"}
     finally:
-        spinner.cancel()
-        sys.stdout.write("\r" + " " * 50 + "\r")  # Clear spinner line
+        if _spinner_task and not _spinner_task.done():
+            _spinner_task.cancel()
+        sys.stdout.write("\r" + " " * 60 + "\r")
         sys.stdout.flush()
 
     if result.get("status") == "job_started":
