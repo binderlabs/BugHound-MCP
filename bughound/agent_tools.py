@@ -55,76 +55,20 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         },
     },
 
-    # === TARGETED TESTING ===
+    # === PAGE ANALYSIS (agent reads pages like a human pentester) ===
     {
         "type": "function",
         "function": {
-            "name": "run_technique",
-            "description": (
-                "Run a specific testing technique. Use this for targeted "
-                "testing based on your analysis of the attack surface."
-            ),
+            "name": "read_page",
+            "description": "Fetch a URL and return the HTML content for analysis. Use this to read page source, find forms, hidden inputs, JavaScript, comments, and understand the application structure. Returns status code, headers, and body content.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "workspace_id": {"type": "string"},
-                    "technique_id": {
-                        "type": "string",
-                        "enum": [
-                            "sqli_error_test", "sqli_param_fuzz",
-                            "cookie_sqli", "post_sqli",
-                            "reflected_xss_test", "xss_param_fuzz",
-                            "stored_xss", "dom_xss", "cookie_xss",
-                            "lfi_test", "rce_test", "post_rce",
-                            "ssrf_test", "ssti_test", "post_ssti",
-                            "csti_test", "xxe_test",
-                            "crlf_test", "idor_test", "path_idor_test",
-                            "open_redirect_test",
-                            "header_injection_test",
-                            "prototype_pollution_test",
-                            "security_headers_check",
-                            "transport_security_check",
-                            "version_disclosure_check",
-                            "pii_html_leakage",
-                            "vulnerable_components_check",
-                            "sensitive_leakage_test",
-                            "viewstate_mac_check",
-                            "default_credentials_test",
-                            "cookie_deserialization",
-                            "graphql_test", "jwt_test",
-                            "wordpress_test", "spring_actuator_test",
-                            "broken_access_control",
-                            "rate_limit_test", "mass_assignment_test",
-                            "cors_misconfig",
-                        ],
-                    },
+                    "url": {"type": "string", "description": "URL to fetch"},
+                    "method": {"type": "string", "enum": ["GET", "POST"], "default": "GET"},
+                    "headers": {"type": "object", "description": "Custom headers to send"},
                 },
-                "required": ["workspace_id", "technique_id"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_full_test",
-            "description": (
-                "Run ALL techniques (full Stage 4). Use when you want "
-                "comprehensive testing instead of targeted techniques."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "workspace_id": {"type": "string"},
-                    "test_classes": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Which vulnerability classes to test. "
-                            "Omit for all classes."
-                        ),
-                    },
-                },
-                "required": ["workspace_id"],
+                "required": ["url"],
             },
         },
     },
@@ -940,6 +884,86 @@ async def execute_tool(
             result = await _tool_run_full_test(
                 ws_id, arguments.get("test_classes"),
             )
+
+        elif name == "read_page":
+            url = arguments.get("url", "")
+            method = arguments.get("method", "GET")
+            custom_headers = arguments.get("headers", {})
+
+            if not _is_in_scope(url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {url}"})
+
+            try:
+                headers = {"User-Agent": _USER_AGENT}
+                headers.update(custom_headers)
+
+                # Get auth headers if set
+                try:
+                    from bughound.tools.testing.injection_tester import _AUTH_HEADERS
+                    headers.update(_AUTH_HEADERS)
+                except Exception:
+                    pass
+
+                async with aiohttp.ClientSession() as session:
+                    async with session.request(
+                        method, url, headers=headers, ssl=False, timeout=_HTTP_TIMEOUT,
+                    ) as resp:
+                        body = await resp.text(errors="replace")
+                        resp_headers = {k.lower(): v for k, v in resp.headers.items()}
+
+                        # Extract useful info for the AI
+                        import re
+
+                        # Find forms
+                        forms = re.findall(r'<form[^>]*>(.*?)</form>', body, re.S | re.I)
+                        form_summary = []
+                        for form_html in forms[:10]:
+                            action = re.search(r'action=["\']([^"\']*)["\']', form_html, re.I)
+                            method_attr = re.search(r'method=["\']([^"\']*)["\']', form_html, re.I)
+                            inputs = re.findall(r'<input[^>]*name=["\']([^"\']*)["\']', form_html, re.I)
+                            form_summary.append({
+                                "action": action.group(1) if action else "",
+                                "method": method_attr.group(1) if method_attr else "GET",
+                                "inputs": inputs,
+                            })
+
+                        # Find links
+                        links = list(set(re.findall(r'href=["\']([^"\']*)["\']', body, re.I)))[:30]
+
+                        # Find scripts src
+                        scripts = list(set(re.findall(r'src=["\']([^"\']*\.js[^"\']*)["\']', body, re.I)))[:10]
+
+                        # Find HTML comments
+                        comments = re.findall(r'<!--(.*?)-->', body, re.S)
+                        comments = [c.strip()[:100] for c in comments if len(c.strip()) > 5][:10]
+
+                        # Find hidden inputs
+                        hidden = re.findall(r'<input[^>]*type=["\']hidden["\'][^>]*name=["\']([^"\']*)["\'][^>]*value=["\']([^"\']*)["\']', body, re.I)
+
+                        # Find meta tags
+                        meta = re.findall(r'<meta[^>]*name=["\']([^"\']*)["\'][^>]*content=["\']([^"\']*)["\']', body, re.I)
+
+                        result = {
+                            "status": "success",
+                            "url": url,
+                            "status_code": resp.status,
+                            "content_type": resp_headers.get("content-type", ""),
+                            "content_length": len(body),
+                            "headers": dict(list(resp_headers.items())[:15]),
+                            "title": (re.search(r'<title>(.*?)</title>', body, re.I | re.S) or type('', (), {'group': lambda s, n: ''})()).group(1)[:100],
+                            "forms": form_summary,
+                            "links": links,
+                            "scripts": scripts,
+                            "comments": comments,
+                            "hidden_inputs": [{"name": n, "value": v[:50]} for n, v in hidden],
+                            "meta": [{"name": n, "content": v[:50]} for n, v in meta[:10]],
+                            "body_preview": body[:3000],
+                        }
+
+                        return json.dumps(result, default=str)[:_MAX_RESULT_LEN]
+
+            except Exception as exc:
+                return json.dumps({"status": "error", "message": str(exc)[:200]})
 
         elif name == "http_request":
             # Scope validation for HTTP requests
