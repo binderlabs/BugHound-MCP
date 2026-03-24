@@ -620,77 +620,35 @@ async def run_agent(
         if _sev.get(s):
             print(f"    {s}: {_sev[s]}")
 
-    # --- Phase 3: Validation ------------------------------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 3: Validation{_C.RESET}")
-    print(f"  {_C.DIM}[validate]{_C.RESET} Confirming findings with sqlmap/dalfox/curl...")
+    # --- Phase 3: AI Validation + Discovery ------------------------------------
+    # AI IS the validator. No sqlmap/dalfox — AI is smarter and faster.
+    # AI reads pages, sends targeted payloads, confirms or rejects each finding.
+    # AI also discovers new vulns by reading page source.
 
-    from bughound.stages import validate as stage_validate
-
-    async def _val_progress(pct: int, msg: str) -> None:
-        sys.stdout.write(
-            f"\r  {_progress_bar(pct)} {_C.DIM}{msg[:45]}{_C.RESET}    "
-        )
-        sys.stdout.flush()
-
-    try:
-        val_result = await asyncio.wait_for(
-            stage_validate.validate_all(workspace_id, progress_cb=_val_progress),
-            timeout=600,  # 10 min max for validation
-        )
-        print()
-        _confirmed = val_result.get("confirmed", 0)
-        _fps = val_result.get("false_positives", 0)
-        _review = val_result.get("needs_manual_review", 0)
-        print(
-            f"  {_C.GREEN}[validate]{_C.RESET} "
-            f"confirmed={_confirmed} false_positives={_fps} review={_review}"
-        )
-    except asyncio.TimeoutError:
-        print(f"\n  {_C.YELLOW}[validate]{_C.RESET} Timed out (10 min)")
-    except Exception as exc:
-        print(f"\n  {_C.YELLOW}[validate]{_C.RESET} {str(exc)[:60]}")
-
-    # Reload findings with validation status
-    validated_findings = await _load_findings(workspace_id)
-
-    # Filter out nuclei "other" noise (unclassified templates)
-    clean_findings = [
-        f for f in validated_findings
+    # Filter nuclei "other" noise
+    automated_findings = [
+        f for f in automated_findings
         if f.get("vulnerability_class") not in ("other", None, "")
     ]
 
-    # Build summary for AI — group by status
-    confirmed_list = [f for f in clean_findings if f.get("validation_status") == "CONFIRMED"]
-    review_list = [f for f in clean_findings if f.get("validation_status") == "NEEDS_MANUAL_REVIEW"]
-    definitive_list = [f for f in clean_findings if not f.get("needs_validation")]
-
-    validated_summary = format_findings(clean_findings)
-
-    # Build detailed summary for AI with confirmed findings highlighted
-    confirmed_detail = ""
-    if confirmed_list:
-        confirmed_detail = "\n\nCONFIRMED FINDINGS (proven exploitable):\n"
-        for cf in confirmed_list:
-            cls = cf.get("vulnerability_class", "?")
-            ep = cf.get("endpoint", "?")[:70]
-            ev = str(cf.get("evidence", ""))[:100]
-            confirmed_detail += f"  [{cls}] {ep}\n    Evidence: {ev}\n"
-
-    review_detail = ""
-    if review_list:
-        review_detail = "\n\nNEEDS MANUAL REVIEW (likely real but needs proof):\n"
-        for rf in review_list[:10]:
-            cls = rf.get("vulnerability_class", "?")
-            ep = rf.get("endpoint", "?")[:70]
-            review_detail += f"  [{cls}] {ep}\n"
-
-    # --- Phase 4: AI Expert Enhancement ----------------------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 4: AI Expert Analysis{_C.RESET}")
+    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 3: AI Validation + Discovery{_C.RESET}")
     print(
         f"  {_C.DIM}[AI]{_C.RESET} "
-        f"{len(confirmed_list)} confirmed + {len(review_list)} review "
-        f"+ {len(definitive_list)} definitive findings for AI analysis..."
+        f"Validating {len(automated_findings)} findings + hunting for missed vulns..."
     )
+
+    # Build detailed finding list for AI to validate
+    finding_details = ""
+    for idx, f in enumerate(automated_findings[:30], 1):
+        cls = f.get("vulnerability_class", "?")
+        sev = f.get("severity", "?")
+        ep = f.get("endpoint", "?")[:70]
+        ev = str(f.get("evidence", ""))[:80]
+        param = f.get("payload_used", "") or ""
+        finding_details += (
+            f"\n  #{idx} [{sev}] {cls} — {ep}\n"
+            f"    Evidence: {ev}\n"
+        )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": full_system_prompt},
@@ -699,28 +657,36 @@ async def run_agent(
             "content": RECON_COMPLETE_PROMPT.format(
                 attack_surface_summary=attack_surface_summary,
             )
-            + "\n\n--- VALIDATED FINDINGS ---\n"
-            + validated_summary
-            + confirmed_detail
-            + review_detail
+            + "\n\n--- AUTOMATED SCANNER FINDINGS (need validation) ---\n"
+            + finding_details
             + "\n\n--- YOUR MISSION ---\n"
-            "The automated scanner + validator already ran. You have CONFIRMED findings above.\n"
-            "DO NOT re-test what's already found. Instead:\n\n"
-            "1. FOR EACH CONFIRMED SQLi:\n"
-            "   - Call extract_sqli_data() to extract database version, table names, user credentials\n"
-            "   - Identify the exact database type from the evidence\n"
-            "   - Use the right extraction query for that database\n\n"
-            "2. FOR EACH CONFIRMED LFI:\n"
-            "   - Call read_file_via_lfi() to read: .env, web.config, /proc/self/environ\n"
-            "   - Look for database credentials, API keys, secret keys\n\n"
-            "3. FOR LOGIN FORMS:\n"
-            "   - Try auth bypass: http_request(POST, login_url, body='username=admin%27+OR+%271%27%3D%271--&password=x')\n"
-            "   - Try default creds: admin:admin, admin:password\n\n"
-            "4. CHAIN FINDINGS:\n"
-            "   - If LFI reads config with DB password → prove it works via SQLi extraction\n"
-            "   - If auth bypass works → access admin panel → document exposed data\n\n"
-            "5. USE add_finding() for any NEW vulnerabilities you discover through exploitation\n\n"
-            "START NOW. Pick the most critical confirmed finding and exploit it deeper.\n",
+            "You are the validator. The automated scanner found the above findings.\n"
+            "For EACH finding, you must verify if it's real or false positive.\n\n"
+            "HOW TO VALIDATE EACH TYPE:\n\n"
+            "SQLi findings:\n"
+            "  1. read_page(endpoint) — see the actual page\n"
+            "  2. http_request(GET, endpoint_with_single_quote) — check for SQL error\n"
+            "  3. If error found → CONFIRMED. Call add_finding() with validation_status='CONFIRMED'\n"
+            "  4. If no error → try boolean: send OR 1=1 vs AND 1=2, compare responses\n"
+            "  5. If no difference → FALSE_POSITIVE\n\n"
+            "XSS findings:\n"
+            "  1. read_page(endpoint_with_xss_payload) — check if payload reflects unescaped\n"
+            "  2. If <script> or event handler appears in HTML → CONFIRMED\n"
+            "  3. For SPA targets → browse_page() to check DOM XSS\n\n"
+            "LFI findings:\n"
+            "  1. http_request(GET, endpoint_with_traversal) — check for root:x:0:0\n"
+            "  2. If file content appears → CONFIRMED\n"
+            "  3. Try reading config files: .env, web.config\n\n"
+            "RCE findings:\n"
+            "  1. http_request(GET, endpoint_with_cmd) — check for uid= or command output\n"
+            "  2. If command output appears → CONFIRMED\n\n"
+            "ALSO: Look at the recon data for endpoints the scanner MISSED.\n"
+            "  - Read interesting pages with read_page()\n"
+            "  - Check login forms for auth bypass\n"
+            "  - Check hidden endpoints from JS analysis\n\n"
+            "For each finding you validate, call add_finding() with the correct status.\n"
+            "For new discoveries, call add_finding() with full evidence.\n"
+            "START with the highest severity findings first.\n",
         },
     ]
 
@@ -800,8 +766,8 @@ async def run_agent(
                     print(f"  {_C.CYAN}[AI]{_C.RESET} {' '.join(l.strip() for l in lines)[:150]}")
             break
 
-    # --- Phase 5: Report ---------------------------------------------------
-    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 5: Report{_C.RESET}")
+    # --- Phase 4: Report ---------------------------------------------------
+    print(f"\n{_C.CYAN}{_C.BOLD}[*] Phase 4: Report{_C.RESET}")
 
     # Reload findings (may have been updated during exploitation)
     final_findings = await _load_findings(workspace_id)

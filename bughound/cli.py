@@ -1311,8 +1311,8 @@ def main() -> None:
                               help="Max AI reasoning steps (default: 50)")
     agent_parser.add_argument("--resume", metavar="WORKSPACE_ID",
                               help="Resume scan from existing workspace")
-    agent_parser.add_argument("--from-phase", type=int, default=None, choices=[1, 2, 3, 4, 5],
-                              help="Start from specific phase (1=recon, 2=test, 3=validate, 4=AI, 5=report). Requires --resume")
+    agent_parser.add_argument("--from-phase", type=int, default=None, choices=[1, 2, 3, 4],
+                              help="Start from specific phase (1=recon, 2=test, 3=AI validation, 4=report). Requires --resume")
 
     # serve
     subparsers.add_parser("serve", parents=[_common], help="Start MCP server")
