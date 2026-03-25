@@ -737,6 +737,30 @@ async def test_default_credentials(
             # so we can distinguish "normal page" from "login failed" responses.
             baseline_failures = set(_FAILURE_INDICATORS.findall(base_body.lower()))
 
+            # ── Baseline: submit with obviously wrong credentials ──
+            # If this also redirects, the site redirects everything and
+            # a redirect is NOT a success signal.
+            baseline_redirect_location = None
+            try:
+                bl_get_status, bl_get_body, _ = await _fetch(session, login_url)
+                bl_hidden = _extract_hidden_fields(bl_get_body) if bl_get_status else {}
+                extra = form_data.get("extra_fields")
+                if isinstance(extra, dict):
+                    bl_hidden.update(extra)
+                bl_data = {
+                    **bl_hidden,
+                    username_field: f"bughound_invalid_{id(session)}",
+                    password_field: f"bughound_invalid_{id(session)}",
+                }
+                bl_status, _bl_body, bl_headers = await _fetch(
+                    session, action_url, method=method,
+                    data=bl_data, allow_redirects=False,
+                )
+                if bl_status in (301, 302, 303, 307, 308):
+                    baseline_redirect_location = bl_headers.get("location", "")
+            except Exception:
+                pass  # If baseline fails, proceed without it
+
             for username, password in _DEFAULT_CREDS:
                 # Step 1: GET the login page fresh to extract CSRF / hidden tokens.
                 get_status, get_body, _get_headers = await _fetch(session, login_url)
@@ -787,8 +811,14 @@ async def test_default_credentials(
                     location = post_headers.get("location", "")
                     # A redirect to the same login page usually means failure.
                     if login_url not in location:
-                        success = True
-                        evidence_detail = f"HTTP {post_status} redirect to {location}"
+                        # If baseline (wrong creds) also redirected to the same
+                        # place, this redirect is NOT a success signal — the site
+                        # just redirects everything.
+                        if baseline_redirect_location is not None and location == baseline_redirect_location:
+                            pass  # Same redirect as wrong creds — not a real login
+                        else:
+                            success = True
+                            evidence_detail = f"HTTP {post_status} redirect to {location}"
 
                 if not success and has_success_text and not has_new_failure:
                     success = True
