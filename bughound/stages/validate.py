@@ -611,13 +611,16 @@ async def _validate_sqli_pure(finding: dict[str, Any]) -> dict[str, Any]:
 
     try:
         async with aiohttp.ClientSession() as session:
-            # Baseline request
-            base_start = time.monotonic()
-            async with session.get(
-                endpoint, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
-            ) as resp:
-                await resp.text()
-            baseline_time = time.monotonic() - base_start
+            # Take 3 baseline measurements to reduce false positives from network jitter
+            baseline_times = []
+            for _ in range(3):
+                base_start = time.monotonic()
+                async with session.get(
+                    endpoint, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
+                ) as resp:
+                    await resp.text()
+                baseline_times.append(time.monotonic() - base_start)
+            max_baseline = max(baseline_times)
 
             for payload_str, delay in payloads:
                 test_url = _replace_param(endpoint, param, payload_str)
@@ -629,18 +632,18 @@ async def _validate_sqli_pure(finding: dict[str, Any]) -> dict[str, Any]:
                     await resp.text(errors="replace")
                 req_time = time.monotonic() - req_start
 
-                if req_time >= baseline_time + delay - 0.5:
+                if req_time >= max_baseline + delay - 0.5:
                     curl_cmd = f"curl -s -o /dev/null -w '%{{time_total}}' '{test_url}'"
                     return {
                         "status": CONFIRMED,
                         "evidence": (
-                            f"Time-based blind SQLi: baseline={baseline_time:.1f}s, "
+                            f"Time-based blind SQLi: max_baseline={max_baseline:.1f}s, "
                             f"payload={req_time:.1f}s (delay={delay}s)"
                         ),
                         "poc_request": f"GET {test_url}",
-                        "poc_response": f"Response time: {req_time:.1f}s (expected ~{baseline_time + delay:.1f}s)",
+                        "poc_response": f"Response time: {req_time:.1f}s (expected ~{max_baseline + delay:.1f}s)",
                         "reproduction_steps": [
-                            f"1. Send baseline request to {endpoint} (response time: {baseline_time:.1f}s)",
+                            f"1. Send 3 baseline requests to {endpoint} (max response time: {max_baseline:.1f}s)",
                             f"2. Send payload: {payload_str} in parameter '{param}'",
                             f"3. Observe response time: {req_time:.1f}s (delay of ~{delay}s confirms injection)",
                         ],
@@ -1036,10 +1039,10 @@ async def _validate_ssti(finding: dict[str, Any]) -> dict[str, Any]:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": "No param for SSTI test"}
 
     payloads = [
-        ("{{7*7}}", "49"),
-        ("${7*7}", "49"),
-        ("<%= 7*7 %>", "49"),
-        ("#{7*7}", "49"),
+        ("{{1337*7331}}", "9799447"),
+        ("${1337*7331}", "9799447"),
+        ("<%= 1337*7331 %>", "9799447"),
+        ("#{1337*7331}", "9799447"),
     ]
 
     try:
@@ -1053,7 +1056,7 @@ async def _validate_ssti(finding: dict[str, Any]) -> dict[str, Any]:
                     if expected in body and payload_str not in body:
                         return {
                             "status": CONFIRMED,
-                            "evidence": f"SSTI confirmed: {payload_str} evaluated to {expected}",
+                            "evidence": f"SSTI confirmed: {payload_str} evaluated to {expected} (unique math result)",
                             "poc_request": f"GET {test_url}",
                             "poc_response": body[:1000],
                             "reproduction_steps": [

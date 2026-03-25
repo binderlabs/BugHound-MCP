@@ -168,8 +168,8 @@ PIPELINE_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "ssti_quick_test",
         "name": "SSTI Quick Test",
-        "description": "Quick SSTI detection — inject {{7*7}} and check for 49 in response",
-        "steps": "gf(ssti) → urldedupe(-s) → qsreplace({{7*7}}) → httpx(match 49)",
+        "description": "Quick SSTI detection — inject {{1337*7331}} and check for 9799447 in response",
+        "steps": "gf(ssti) → urldedupe(-s) → qsreplace({{1337*7331}}) → httpx(match 9799447)",
         "vuln_class": "ssti",
         "requires_data": ["urls"],
     },
@@ -374,11 +374,17 @@ async def _httpx_verify(
                                 header_matched = True
                                 break
 
-                    # Check location match
+                    # Check location match + verify redirect is to external domain
                     location_matched = False
                     if match_location:
                         location = headers.get("Location", "")
-                        location_matched = match_location in location
+                        if match_location in location:
+                            # Verify redirect host differs from original URL host
+                            from urllib.parse import urlparse as _urlparse
+                            orig_host = _urlparse(url).hostname or ""
+                            redir_host = _urlparse(location).hostname or ""
+                            if redir_host and redir_host != orig_host and not redir_host.endswith(f".{orig_host}"):
+                                location_matched = True
 
                     if body_matched or header_matched or location_matched:
                         hit = {
@@ -625,7 +631,7 @@ async def _exec_mass_lfi(urls: list[str], workspace_id: str) -> list[dict]:
 
     hits = await _httpx_verify(
         probed,
-        match_strings=["root:x:0", "root:x:0:0", "daemon:x:"],
+        match_strings=["root:x:0:0"],
     )
     for h in hits:
         h["type"] = "lfi_confirmed"
@@ -675,10 +681,15 @@ async def _exec_smart_sqli(urls: list[str], workspace_id: str) -> list[dict]:
     hits = await _httpx_verify(
         probed,
         match_strings=[
-            "sql syntax", "mysql", "postgresql", "oracle", "sqlite",
-            "unclosed quotation", "quoted string not properly terminated",
-            "you have an error in your sql", "warning: mysql",
-            "syntax error", "ORA-", "PG::", "SQLSTATE",
+            "sql syntax",
+            "You have an error in your SQL",
+            "ERROR:  syntax error",
+            "ORA-",
+            "SQLite3::",
+            "unclosed quotation",
+            "quoted string not properly terminated",
+            "warning: mysql",
+            "PG::", "SQLSTATE",
         ],
     )
     for h in hits:
@@ -713,7 +724,7 @@ async def _exec_mass_crlf(urls: list[str], workspace_id: str) -> list[dict]:
 
 
 async def _exec_ssti_quick(urls: list[str], workspace_id: str) -> list[dict]:
-    """gf(ssti) → urldedupe(-s) → qsreplace({{7*7}}) → httpx(match 49)."""
+    """gf(ssti) → urldedupe(-s) → qsreplace({{1337*7331}}) → httpx(match 9799447)."""
     ssti_urls = await gf_tool.execute(urls, "ssti")
     if not ssti_urls:
         return []
@@ -722,19 +733,16 @@ async def _exec_ssti_quick(urls: list[str], workspace_id: str) -> list[dict]:
     if not deduped:
         return []
 
-    probed = await qsreplace.execute(deduped, "{{7*7}}")
+    probed = await qsreplace.execute(deduped, "{{1337*7331}}")
     if not probed:
         return []
 
-    hits = await _httpx_verify(probed, match_strings=["49"])
-    # Filter out false positives: "49" is common in pages.
-    # Only keep hits where 49 appears in a suspicious context
+    hits = await _httpx_verify(probed, match_strings=["9799447"])
     confirmed: list[dict] = []
     for h in hits:
         h["type"] = "ssti_candidate"
         h["severity"] = "critical"
-        h["description"] = "SSTI — template expression evaluated ({{7*7}} = 49)"
-        h["needs_manual_verification"] = True
+        h["description"] = "SSTI — template expression evaluated ({{1337*7331}} = 9799447)"
         confirmed.append(h)
     return confirmed
 

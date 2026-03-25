@@ -380,8 +380,8 @@ async def test_sqli(
         for true_payload, false_payload in blind_pairs:
             true_url = _replace_param(target_url, param, true_payload)
             false_url = _replace_param(target_url, param, false_payload)
-            _, true_body, _ = await _send(session, true_url)
-            _, false_body, _ = await _send(session, false_url)
+            true_status, true_body, _ = await _send(session, true_url)
+            false_status, false_body, _ = await _send(session, false_url)
 
             if true_body and false_body:
                 true_len = len(true_body)
@@ -389,9 +389,11 @@ async def test_sqli(
                 # Significant size difference between true/false = blind SQLi
                 # Case 1: OR 1=1 returns more than AND 1=2
                 # Case 2: AND 1=2 returns less than baseline (true == baseline)
+                # Require same HTTP status as baseline to avoid counting error pages
                 size_diff = abs(true_len - false_len)
-                if (size_diff > 200
-                        and (true_len > false_len or false_len < baseline_len - 200)):
+                if (size_diff > 500
+                        and true_status == baseline_status
+                        and (true_len > false_len or false_len < baseline_len - 500)):
                     return {
                         "vulnerable": True,
                         "url": target_url,
@@ -432,11 +434,11 @@ async def test_sqli(
         ]
 
         baseline_times = []
-        for _ in range(2):
+        for _ in range(3):
             t0 = time.monotonic()
             await _send(session, target_url)
             baseline_times.append(time.monotonic() - t0)
-        avg_baseline = sum(baseline_times) / len(baseline_times)
+        max_baseline = max(baseline_times)
 
         for payload, delay in time_payloads:
             test_url = _replace_param(target_url, param, payload)
@@ -447,14 +449,14 @@ async def test_sqli(
             if status == 0:
                 continue
 
-            if elapsed > avg_baseline + delay - 0.5 and elapsed > delay:
+            if elapsed > max_baseline + delay - 0.5 and elapsed > delay * 0.8:
                 return {
                     "vulnerable": True,
                     "url": test_url,
                     "param": param,
                     "technique": "time-based-blind",
                     "payload": payload,
-                    "evidence": f"Response delayed {elapsed:.1f}s vs baseline {avg_baseline:.1f}s (injected {delay}s delay)",
+                    "evidence": f"Response delayed {elapsed:.1f}s vs baseline max {max_baseline:.1f}s (injected {delay}s delay)",
                     "confidence": "medium",
                 }
 
@@ -636,30 +638,19 @@ async def test_ssrf(
                     "url": test_url,
                 }
 
-            # Blind SSRF detection
+            # Blind SSRF detection — candidates only (needs validation)
             size_diff = abs(len(body) - baseline_len) > 500
             status_diff = status != baseline_status and status not in (0, 400, 404)
-            massive_size_diff = abs(len(body) - baseline_len) > 5000
 
-            # Massive size change alone is strong indicator (e.g. redirect to internal page)
-            if massive_size_diff:
-                return {
-                    "vulnerable": True,
-                    "payload": payload,
-                    "evidence": f"Response changed: status {baseline_status}->{status}, size {baseline_len}->{len(body)}",
-                    "type": "potential_blind_ssrf",
-                    "confidence": "medium",
-                    "param": param,
-                    "url": test_url,
-                }
-            # Moderate size + status change together
+            # Moderate size + status change together — candidate only
             if size_diff and status_diff:
                 return {
-                    "vulnerable": True,
+                    "vulnerable": False,
                     "payload": payload,
                     "evidence": f"Response changed: status {baseline_status}->{status}, size {baseline_len}->{len(body)}",
                     "type": "blind_ssrf",
-                    "confidence": "medium",
+                    "confidence": "low",
+                    "needs_validation": True,
                     "param": param,
                     "url": test_url,
                 }
@@ -873,7 +864,7 @@ _LFI_PAYLOADS_WINDOWS = [
 
 # Base64-encoded /etc/passwd starts with "cm9vd" (base64 of "root:")
 _LFI_LINUX_INDICATORS = re.compile(
-    r"root:x:0:0|/bin/bash|/bin/sh|daemon:x:|cm9vdD|USER=|HOME=|PATH=|HOSTNAME=",
+    r"root:x:0:0|/bin/bash|/bin/sh|daemon:x:|cm9vdD|USER=root|USER=www-data|HOME=/root|HOME=/var|PATH=/usr",
 )
 _LFI_WINDOWS_INDICATORS = re.compile(r"\[extensions\]|\[fonts\]|for 16-bit app support")
 
@@ -899,14 +890,18 @@ async def test_lfi(
             if status == 0:
                 continue
 
-            lfi_match = _LFI_LINUX_INDICATORS.search(body)
-            if lfi_match and not baseline_has_linux:
+            lfi_matches = list(_LFI_LINUX_INDICATORS.finditer(body))
+            baseline_matches = list(_LFI_LINUX_INDICATORS.finditer(baseline_body)) if baseline_has_linux else []
+            # Require at least 2 indicator matches to confirm LFI (reduces false positives)
+            if len(lfi_matches) >= 2 and len(lfi_matches) > len(baseline_matches):
+                lfi_match = lfi_matches[0]
                 start = max(0, lfi_match.start() - 20)
                 end = min(len(body), lfi_match.end() + 200)
+                matched_indicators = [m.group(0) for m in lfi_matches[:5]]
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "evidence": f"LFI confirmed: '{lfi_match.group(0)}' found in response\n{body[start:end].strip()}",
+                    "evidence": f"LFI confirmed: {len(lfi_matches)} indicators found ({', '.join(matched_indicators)})\n{body[start:end].strip()}",
                     "os": "linux",
                     "param": param,
                     "url": test_url,
@@ -1094,12 +1089,12 @@ async def test_ssti(
 _CSTI_PAYLOADS = [
     # AngularJS (most common)
     ("{{constructor.constructor('return 1')()}}", "1", "angularjs"),
-    ("{{1337*7}}", "9359", "angularjs"),
+    ("{{1337*7331}}", "9799447", "angularjs"),
     # Vue.js
     ("{{_openBlock.constructor('return 1')()}}", "1", "vuejs"),
     # Generic
-    ("${1337*7}", "9359", "generic_el"),
-    ("#{1337*7}", "9359", "generic_el"),
+    ("${1337*7331}", "9799447", "generic_el"),
+    ("#{1337*7331}", "9799447", "generic_el"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -1261,7 +1256,7 @@ async def test_reflected_xss(
 
 
 # Polyglot probe — detect which engine is in use
-_CSTI_PROBE = "{{1337*7}}${1337*7}#{1337*7}<%= 1337*7 %>"
+_CSTI_PROBE = "{{1337*7331}}${1337*7331}#{1337*7331}<%= 1337*7331 %>"
 
 
 async def test_csti(
@@ -1281,14 +1276,14 @@ async def test_csti(
         if status == 0:
             return {"vulnerable": False, "url": target_url, "param": param}
 
-        # Check if "9359" appears (any engine computed 1337*7)
-        if "9359" in body and "9359" not in baseline_body:
+        # Check if "9799447" appears (any engine computed 1337*7331)
+        if "9799447" in body and "9799447" not in baseline_body:
             return {
                 "vulnerable": True,
                 "url": probe_url,
                 "param": param,
                 "payload": _CSTI_PROBE,
-                "evidence": "Template expression 1337*7=9359 computed — CSTI confirmed",
+                "evidence": "Template expression 1337*7331=9799447 computed — CSTI confirmed",
                 "engine": "unknown",
             }
 
@@ -1340,11 +1335,11 @@ async def test_prototype_pollution(
         if baseline_status == 0:
             return {"vulnerable": False, "url": target_url, "param": param}
 
-        # Test payloads — inject __proto__ via query param
+        # Test payloads — inject __proto__ via query param (unique canary marker)
         payloads = [
-            ('{"__proto__":{"polluted":"true"}}', 'polluted'),
+            ('{"__proto__":{"bughound_pp_confirmed":"true"}}', 'bughound_pp_confirmed'),
             ('{"__proto__":{"isAdmin":true}}', 'isAdmin'),
-            ('{"constructor":{"prototype":{"polluted":"true"}}}', 'polluted'),
+            ('{"constructor":{"prototype":{"bughound_pp_confirmed":"true"}}}', 'bughound_pp_confirmed'),
         ]
 
         for payload, marker in payloads:
@@ -1368,18 +1363,6 @@ async def test_prototype_pollution(
                     "payload": payload,
                     "evidence": f"Prototype pollution: '{marker}' appeared in response after injection",
                     "confidence": "medium",
-                }
-
-            # Check for different response (pollution changed behavior)
-            if abs(len(body) - len(baseline_body)) > 200 and status == baseline_status:
-                return {
-                    "vulnerable": True,
-                    "url": test_url,
-                    "param": param,
-                    "payload": payload,
-                    "evidence": f"Response size changed significantly ({len(baseline_body)} → {len(body)} bytes) after prototype pollution injection",
-                    "confidence": "low",
-                    "suspicious": True,
                 }
 
     return {"vulnerable": False, "url": target_url, "param": param}
@@ -1453,21 +1436,21 @@ async def test_header_injection(target_url: str) -> dict[str, Any]:
         status, body, _ = await _send(
             session, target_url, headers={"Host": "example.com"},
         )
-        if status != 0 and "example.com" in body:
+        if status != 0 and "example.com" in body and "example.com" not in baseline_body:
             results.append({
                 "technique": "host_header_poisoning",
-                "evidence": "Host: example.com reflected in response body",
+                "evidence": "Host: example.com reflected in response body (not in baseline)",
                 "severity": "high",
             })
 
-        # Test 2: X-Forwarded-For bypass
+        # Test 2: X-Forwarded-For bypass — require 403/401 -> 200 status change
         status, body, _ = await _send(
             session, target_url, headers={"X-Forwarded-For": "127.0.0.1"},
         )
-        if status != 0 and status != baseline_status:
+        if status != 0 and baseline_status in (401, 403) and status == 200:
             results.append({
                 "technique": "x_forwarded_for_bypass",
-                "evidence": f"Response changed: {baseline_status} -> {status}",
+                "evidence": f"Access control bypass: {baseline_status} -> {status}",
                 "severity": "medium",
             })
 
@@ -1475,10 +1458,10 @@ async def test_header_injection(target_url: str) -> dict[str, Any]:
         status, body, _ = await _send(
             session, target_url, headers={"X-Forwarded-Host": "example.com"},
         )
-        if status != 0 and "example.com" in body:
+        if status != 0 and "example.com" in body and "example.com" not in baseline_body:
             results.append({
                 "technique": "x_forwarded_host_reflection",
-                "evidence": "X-Forwarded-Host: example.com reflected in response body",
+                "evidence": "X-Forwarded-Host: example.com reflected in response body (not in baseline)",
                 "severity": "medium",
             })
 
@@ -1561,15 +1544,20 @@ async def test_idor(
 
         for test_val in test_values:
             test_url = _replace_param(target_url, param, test_val)
-            status, body, _ = await _send(session, test_url)
+            status, body, resp_headers = await _send(session, test_url)
 
             if status == 0:
                 continue
 
+            # Skip non-HTML/JSON responses (error pages often have different content types)
+            resp_ct = resp_headers.get("content-type", "")
+            if resp_ct and "text/html" not in resp_ct and "application/json" not in resp_ct:
+                continue
+
             body_hash = hashlib.md5(body.encode(), usedforsecurity=False).hexdigest()
 
-            # Different value returns 200 with different content
-            if status == 200 and body_hash != baseline_hash and len(body) > 10:
+            # Different value returns 200 with different content (require size > 200 to skip trivial responses)
+            if status == 200 and body_hash != baseline_hash and len(body) > 200:
                 confidence = "medium" if original_value.isdigit() else "low"
                 return {
                     "potential_idor": True,
