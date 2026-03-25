@@ -1660,8 +1660,13 @@ async def _write_findings(
     findings: list[dict[str, Any]],
 ) -> None:
     """Write findings to vulnerabilities/scan_results.json."""
+    # Filter out nuclei "other" class noise (unclassified templates)
+    filtered = [
+        f for f in findings
+        if f.get("vulnerability_class") not in ("other", None, "")
+    ]
     await workspace.write_data(
-        workspace_id, "vulnerabilities/scan_results.json", findings,
+        workspace_id, "vulnerabilities/scan_results.json", filtered,
         generated_by="stage4", target="multiple",
     )
 
@@ -1685,6 +1690,9 @@ async def _append_findings(
     existing_ids = {f.get("finding_id") for f in existing_items if isinstance(f, dict)}
     merged = list(existing_items)
     for f in new_findings:
+        # Filter out "other" class noise
+        if f.get("vulnerability_class") in ("other", None, ""):
+            continue
         if f.get("finding_id") not in existing_ids:
             merged.append(f)
 

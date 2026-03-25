@@ -275,14 +275,15 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "Use after you validate a finding with http_request or read_page. "
                 "Set status to CONFIRMED if you verified it's real, "
                 "LIKELY_FALSE_POSITIVE if it's not exploitable, "
-                "or NEEDS_MANUAL_REVIEW if you're unsure."
+                "or NEEDS_MANUAL_REVIEW if you're unsure. "
+                "Use the finding_id shown in the findings list."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "finding_index": {
-                        "type": "integer",
-                        "description": "The finding number (e.g., 1 for finding #1)",
+                    "finding_id": {
+                        "type": "string",
+                        "description": "The finding ID (e.g., 'finding_high_a1b2c3d4')",
                     },
                     "status": {
                         "type": "string",
@@ -293,7 +294,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                         "description": "Updated evidence from your validation (e.g., 'SQL error: Unclosed quotation mark in response')",
                     },
                 },
-                "required": ["finding_index", "status"],
+                "required": ["finding_id", "status"],
             },
         },
     },
@@ -795,14 +796,19 @@ async def _tool_get_findings(workspace_id: str) -> dict[str, Any]:
     items = raw.get("data", raw) if isinstance(raw, dict) else raw
     findings = items if isinstance(items, list) else []
 
+    # Filter out "other" class noise
+    findings = [
+        f for f in findings
+        if isinstance(f, dict) and f.get("vulnerability_class") not in ("other", None, "")
+    ]
+
     # Count by severity and class
     from collections import Counter
     sev_counts: Counter[str] = Counter()
     class_counts: Counter[str] = Counter()
     for f in findings:
-        if isinstance(f, dict):
-            sev_counts[f.get("severity", "info")] += 1
-            class_counts[f.get("vulnerability_class", "other")] += 1
+        sev_counts[f.get("severity", "info")] += 1
+        class_counts[f.get("vulnerability_class", "?")] += 1
 
     return {
         "status": "success",
@@ -1211,7 +1217,7 @@ async def execute_tool(
             result = await _tool_generate_report(ws_id)
 
         elif name == "update_finding_status":
-            idx = arguments.get("finding_index", 0) - 1  # 1-based to 0-based
+            fid = arguments.get("finding_id", "")
             status = arguments.get("status", "NEEDS_MANUAL_REVIEW")
             new_evidence = arguments.get("evidence", "")
 
@@ -1220,25 +1226,44 @@ async def execute_tool(
                 raw = await workspace.read_data(ws_id, "vulnerabilities/scan_results.json")
                 findings = raw.get("data", raw) if isinstance(raw, dict) else (raw or [])
 
-                if not isinstance(findings, list) or idx < 0 or idx >= len(findings):
-                    return json.dumps({"status": "error", "message": f"Finding index {idx+1} out of range (total: {len(findings)})"})
+                if not isinstance(findings, list):
+                    return json.dumps({"status": "error", "message": "No findings loaded"})
 
-                findings[idx]["validation_status"] = status
-                findings[idx]["validated"] = True
-                findings[idx]["validation_tool"] = "ai_agent"
+                # Find by finding_id
+                matched_idx = None
+                for i, f in enumerate(findings):
+                    if isinstance(f, dict) and f.get("finding_id") == fid:
+                        matched_idx = i
+                        break
+
+                if matched_idx is None:
+                    # Fallback: try as 1-based integer index
+                    try:
+                        idx_int = int(fid) - 1
+                        if 0 <= idx_int < len(findings):
+                            matched_idx = idx_int
+                    except (ValueError, TypeError):
+                        pass
+
+                if matched_idx is None:
+                    return json.dumps({"status": "error", "message": f"Finding '{fid}' not found (total: {len(findings)})"})
+
+                findings[matched_idx]["validation_status"] = status
+                findings[matched_idx]["validated"] = True
+                findings[matched_idx]["validation_tool"] = "ai_agent"
                 if new_evidence:
-                    findings[idx]["evidence"] = new_evidence
+                    findings[matched_idx]["evidence"] = new_evidence
 
                 await workspace.write_data(
                     ws_id, "vulnerabilities/scan_results.json", findings,
                     generated_by="ai_agent", target="validation",
                 )
 
-                cls = findings[idx].get("vulnerability_class", "?")
-                ep = findings[idx].get("endpoint", "?")[:50]
+                cls = findings[matched_idx].get("vulnerability_class", "?")
+                ep = findings[matched_idx].get("endpoint", "?")[:50]
                 return json.dumps({
                     "status": "success",
-                    "message": f"Finding #{idx+1} ({cls}) → {status}",
+                    "message": f"Finding {fid} ({cls}) -> {status}",
                     "endpoint": ep,
                 })
             except Exception as exc:

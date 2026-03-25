@@ -268,6 +268,8 @@ def _describe_action(tool_name: str, arguments: dict[str, Any]) -> str:
     if isinstance(url, str) and len(url) > 60:
         url = url[:57] + "..."
     param = arguments.get("param", "")
+    fid = arguments.get("finding_id", "")
+    fstatus = arguments.get("status", "")
     descriptions = {
         "read_page": f"Reading page: {url}",
         "browse_page": f"Opening in browser: {url}",
@@ -275,6 +277,7 @@ def _describe_action(tool_name: str, arguments: dict[str, Any]) -> str:
         "run_tool": f"Running: {url[:60]}",
         "extract_sqli_data": f"Extracting SQL data from {url}",
         "read_file_via_lfi": f"Reading {arguments.get('file_path', '?')} via LFI",
+        "update_finding_status": f"Marking {fid[:30]} -> {fstatus}",
         "add_finding": f"Recording {arguments.get('vulnerability_class', '?')} ({arguments.get('severity', '?')})",
         "get_findings": "Reviewing current findings",
         "get_attack_surface": "Analyzing attack surface",
@@ -303,6 +306,8 @@ def _short_result(tool_name: str, result_json: str) -> str:
         return f"status={status} size={size}"
     elif tool_name == "browse_page":
         return f"rendered {r.get('rendered_length', '?')} chars"
+    elif tool_name == "update_finding_status":
+        return r.get("message", "")[:60]
     elif tool_name == "add_finding":
         return r.get("message", "finding added")[:60]
     elif tool_name == "extract_sqli_data":
@@ -647,9 +652,9 @@ async def run_agent(
         sev = f.get("severity", "?")
         ep = f.get("endpoint", "?")[:70]
         ev = str(f.get("evidence", ""))[:80]
-        param = f.get("payload_used", "") or ""
+        fid = f.get("finding_id", f"unknown_{idx}")
         finding_details += (
-            f"\n  #{idx} [{sev}] {cls} — {ep}\n"
+            f"\n  #{idx} [id={fid}] [{sev}] {cls} — {ep}\n"
             f"    Evidence: {ev}\n"
         )
 
@@ -665,28 +670,27 @@ async def run_agent(
             + "\n\n--- YOUR MISSION ---\n"
             "You are the validator. The automated scanner found the above findings.\n"
             "For EACH finding, verify if it's real using http_request() or read_page().\n"
-            "Then call update_finding_status(finding_index, status) to mark it.\n\n"
+            "Then call update_finding_status(finding_id, status) to mark it.\n"
+            "IMPORTANT: Use the finding_id (e.g. 'finding_high_a1b2c3d4'), NOT a number.\n\n"
             "HOW TO VALIDATE EACH TYPE:\n\n"
             "SQLi findings:\n"
             "  1. http_request(GET, endpoint_with_single_quote) — check for SQL error\n"
-            "  2. If error found → update_finding_status(N, 'CONFIRMED', 'SQL error: ...')\n"
+            "  2. If error found → update_finding_status('finding_id_here', 'CONFIRMED', 'SQL error: ...')\n"
             "  3. If no error → try boolean: OR 1=1 vs AND 1=2, compare responses\n"
-            "  4. If no difference → update_finding_status(N, 'LIKELY_FALSE_POSITIVE')\n\n"
+            "  4. If no difference → update_finding_status('finding_id_here', 'LIKELY_FALSE_POSITIVE')\n\n"
             "XSS findings:\n"
             "  1. read_page(endpoint_with_xss_payload) — check if reflected unescaped\n"
-            "  2. If reflected → update_finding_status(N, 'CONFIRMED', 'XSS reflected in HTML body')\n"
+            "  2. If reflected → update_finding_status('finding_id_here', 'CONFIRMED', 'XSS reflected in HTML body')\n"
             "  3. For SPA → browse_page() to check DOM XSS\n\n"
             "LFI findings:\n"
             "  1. http_request(GET, endpoint_with_traversal) — check for root:x:0:0\n"
-            "  2. If file content → update_finding_status(N, 'CONFIRMED', 'File read confirmed')\n\n"
+            "  2. If file content → update_finding_status('finding_id_here', 'CONFIRMED', 'File read confirmed')\n\n"
             "RCE findings:\n"
             "  1. http_request(GET, endpoint_with_cmd) — check for uid= or command output\n"
-            "  2. If output → update_finding_status(N, 'CONFIRMED')\n\n"
-            "'other' class findings:\n"
-            "  - Mark as LIKELY_FALSE_POSITIVE: update_finding_status(N, 'LIKELY_FALSE_POSITIVE')\n\n"
+            "  2. If output → update_finding_status('finding_id_here', 'CONFIRMED')\n\n"
             "ALSO: Look for vulns the scanner missed using read_page() on interesting endpoints.\n"
             "For new discoveries → add_finding() with full evidence.\n\n"
-            "IMPORTANT: Use update_finding_status() for EXISTING findings.\n"
+            "IMPORTANT: Use update_finding_status() with finding_id for EXISTING findings.\n"
             "Use add_finding() only for NEW discoveries.\n"
             "START with the highest severity findings. Validate as many as you can.\n",
         },

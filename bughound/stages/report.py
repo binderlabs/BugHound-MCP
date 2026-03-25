@@ -417,7 +417,9 @@ def _process_findings(data: dict[str, Any]) -> dict[str, Any]:
         seen_ids.add(fid)
 
         if fid in false_pos_ids:
-            continue  # Skip false positives
+            continue  # Skip false positives (Stage 5)
+        if f.get("validation_status") == "LIKELY_FALSE_POSITIVE":
+            continue  # Skip AI-agent-marked false positives
 
         # If we have a confirmed version, use it (richer data)
         if fid in confirmed_map:
@@ -444,6 +446,12 @@ def _process_findings(data: dict[str, Any]) -> dict[str, Any]:
 
     # Sort by severity
     merged.sort(key=lambda f: _SEV_ORDER.get(f.get("severity", "info").lower(), 5))
+
+    # Filter out nuclei "other" noise (unclassified templates)
+    merged = [
+        f for f in merged
+        if f.get("vulnerability_class") not in ("other", None, "")
+    ]
 
     # Group by vulnerability class
     by_class: dict[str, list[dict[str, Any]]] = {}
