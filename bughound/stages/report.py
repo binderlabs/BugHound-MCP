@@ -964,25 +964,35 @@ def _generate_full_html(
             </section>'''
 
     # --- Build testing coverage HTML ---
+    # Use ALL raw findings (including FP) for coverage — we tested those classes
+    all_raw_findings = data.get("findings", [])
     test_classes = attack_surface.get("suggested_test_classes", [])
-    technique_counts: dict[str, int] = {}
+    # Count findings by vulnerability_class (matches test_class names)
+    class_counts: dict[str, int] = {}
     tools_used: set[str] = set()
-    for f in findings:
-        tid = f.get("technique_id", "")
-        if tid:
-            technique_counts[tid] = technique_counts.get(tid, 0) + 1
+    for f in all_raw_findings:
+        vc = f.get("vulnerability_class", "")
+        if vc:
+            class_counts[vc] = class_counts.get(vc, 0) + 1
         t = f.get("tool", "")
         if t:
             tools_used.add(t)
+
+    # Also collect tools from technique definitions
+    for tc in test_classes:
+        if isinstance(tc, dict):
+            for t in tc.get("tools", []):
+                if t:
+                    tools_used.add(t)
 
     coverage_cards: list[str] = []
     for tc in test_classes:
         if isinstance(tc, dict):
             tc_name = tc.get("test_class", "")
-            fc = technique_counts.get(tc_name, 0)
+            fc = class_counts.get(tc_name, 0)
         elif isinstance(tc, str):
             tc_name = tc
-            fc = technique_counts.get(tc, 0)
+            fc = class_counts.get(tc, 0)
         else:
             continue
         count_color = "#10b981" if fc > 0 else "#4b5563"
