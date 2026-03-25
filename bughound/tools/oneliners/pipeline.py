@@ -365,12 +365,14 @@ async def _httpx_verify(
                     # Check body match strings
                     body_matched = any(ms in body for ms in match_strings) if match_strings else False
 
-                    # Check header match
+                    # Check header match (name AND value must contain canary)
                     header_matched = False
                     if match_header:
-                        header_matched = match_header.lower() in {
-                            k.lower() for k in headers
-                        }
+                        hdr_lower = match_header.lower()
+                        for k, v in headers.items():
+                            if k.lower() == hdr_lower and "BugHound" in v:
+                                header_matched = True
+                                break
 
                     # Check location match
                     location_matched = False

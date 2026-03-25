@@ -1072,12 +1072,20 @@ async def _validate_ssti(finding: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _validate_open_redirect(finding: dict[str, Any]) -> dict[str, Any]:
-    """Validate open redirect by following the redirect chain."""
+    """Validate open redirect by following the redirect chain.
+
+    A redirect is ONLY confirmed if the Location header points to an
+    EXTERNAL domain (not the target itself).  Sites that 301/302 to their
+    own domain (e.g. language redirects) are NOT open redirects.
+    """
+    from urllib.parse import urlparse as _urlparse
+
     endpoint = finding.get("endpoint", "")
     param = _extract_param_name(finding)
     if not param:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": "No param for redirect test"}
 
+    target_domain = _urlparse(endpoint).hostname or ""
     redirect_targets = ["https://evil.com", "//evil.com", "https://evil.com/phish"]
 
     try:
@@ -1090,6 +1098,10 @@ async def _validate_open_redirect(finding: dict[str, Any]) -> dict[str, Any]:
                 ) as resp:
                     location = resp.headers.get("Location", "")
                     if resp.status in (301, 302, 303, 307, 308) and "evil.com" in location:
+                        # Verify redirect goes to external domain, not same domain
+                        redir_host = _urlparse(location).hostname or ""
+                        if redir_host == target_domain or redir_host.endswith(f".{target_domain}"):
+                            continue  # Same-domain redirect — NOT an open redirect
                         return {
                             "status": CONFIRMED,
                             "evidence": f"Open redirect: {resp.status} -> {location}",

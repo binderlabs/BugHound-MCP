@@ -709,7 +709,21 @@ async def test_open_redirect(
     target_url: str, param: str, original_value: str,
 ) -> dict[str, Any]:
     """Test open redirect by injecting external URLs."""
+    from urllib.parse import urlparse as _urlparse
+
+    # Extract target domain to compare against redirect destination
+    target_domain = _urlparse(target_url).hostname or ""
+
+    # First, get baseline redirect (no payload) to detect natural redirects
+    # Sites often do 301 from /page?lang=x → /en/page regardless of param
+    baseline_location = ""
     async with aiohttp.ClientSession() as session:
+        baseline_status, _, baseline_headers = await _send(
+            session, target_url, allow_redirects=False,
+        )
+        if baseline_status in (301, 302, 303, 307, 308):
+            baseline_location = baseline_headers.get("location", "")
+
         for payload in _REDIRECT_PAYLOADS:
             test_url = _replace_param(target_url, param, payload)
             status, body, headers = await _send(
@@ -721,7 +735,20 @@ async def test_open_redirect(
 
             location = headers.get("location", "")
 
-            # Check if redirect points to example.com
+            # Skip if Location is the same as baseline (site always redirects)
+            if location and location == baseline_location:
+                continue
+
+            # Skip if redirect stays on the same domain (NOT an open redirect)
+            if location:
+                redir_host = _urlparse(location).hostname or ""
+                if redir_host and (
+                    redir_host == target_domain
+                    or redir_host.endswith(f".{target_domain}")
+                ):
+                    continue
+
+            # Check if redirect points to example.com (our canary)
             if "example.com" in location:
                 return {
                     "vulnerable": True,
@@ -732,23 +759,26 @@ async def test_open_redirect(
                     "url": test_url,
                 }
 
-            # Partial — redirect to a path we control
+            # Partial — redirect to a path we control, but ONLY if the
+            # destination is an external domain (not the target itself)
             if status in (301, 302, 303, 307, 308) and payload in location:
-                return {
-                    "vulnerable": True,
-                    "payload": payload,
-                    "redirected_to": location,
-                    "type": "partial_redirect",
-                    "param": param,
-                    "url": test_url,
-                }
+                redir_host = _urlparse(location).hostname or ""
+                # Only confirm if redirect goes to a DIFFERENT domain
+                if redir_host and redir_host != target_domain and not redir_host.endswith(f".{target_domain}"):
+                    return {
+                        "vulnerable": True,
+                        "payload": payload,
+                        "redirected_to": location,
+                        "type": "partial_redirect",
+                        "param": param,
+                        "url": test_url,
+                    }
 
             # Check body for JS/meta-based redirects
             if "example.com" in body:
-                # Look for window.location, meta refresh, etc.
                 js_redirect = re.search(
                     r'(window\.location|location\.href|location\.replace|'
-                    r'meta\s+http-equiv=["\']refresh["\'])[^>]*evil\.com',
+                    r'meta\s+http-equiv=["\']refresh["\'])[^>]*example\.com',
                     body, re.I,
                 )
                 if js_redirect:
@@ -761,10 +791,6 @@ async def test_open_redirect(
                         "param": param,
                         "url": test_url,
                     }
-                # Reflection of example.com in body without redirect is NOT a
-                # redirect vulnerability — it is at most an informational
-                # finding (e.g. reflected input).  Removed to avoid false
-                # positives.
 
     return {"vulnerable": False, "param": param, "url": target_url, "type": None}
 
@@ -937,46 +963,62 @@ _CRLF_PAYLOADS = [
 async def test_crlf(
     target_url: str, param: str, original_value: str,
 ) -> dict[str, Any]:
-    """Test CRLF injection by checking for injected headers."""
+    """Test CRLF injection by checking for injected headers.
+
+    IMPORTANT: Must use allow_redirects=False to check raw response headers.
+    If we follow redirects, we see the final page's headers (not injected ones).
+    Also verify the header value matches our canary — just having an
+    x-injected header isn't enough (some servers add custom headers).
+    """
+    _CRLF_CANARY = "BugHound"
+
     async with aiohttp.ClientSession() as session:
         for payload in _CRLF_PAYLOADS:
             # Append payload to the original value
             test_url = _replace_param(target_url, param, original_value + payload)
-            status, body, headers = await _send(session, test_url)
+            status, body, headers = await _send(
+                session, test_url, allow_redirects=False,
+            )
 
             if status == 0:
                 continue
 
-            # Check if our injected header appears
-            if "x-injected" in headers:
+            # Check if our injected header appears WITH our canary value
+            injected_val = headers.get("x-injected", "")
+            if injected_val and _CRLF_CANARY in injected_val:
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "injected_header": f"X-Injected: {headers.get('x-injected', '')}",
+                    "injected_header": f"X-Injected: {injected_val}",
                     "param": param,
                     "url": test_url,
                 }
 
-        # Also try replacing the value entirely (for params that set headers directly)
+        # Also try replacing the value entirely
         for payload in _CRLF_PAYLOADS:
             test_url = _replace_param(target_url, param, payload)
-            status, body, headers = await _send(session, test_url)
+            status, body, headers = await _send(
+                session, test_url, allow_redirects=False,
+            )
             if status == 0:
                 continue
-            if "x-injected" in headers:
+
+            injected_val = headers.get("x-injected", "")
+            if injected_val and _CRLF_CANARY in injected_val:
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "injected_header": f"X-Injected: {headers.get('x-injected', '')}",
+                    "injected_header": f"X-Injected: {injected_val}",
                     "param": param,
                     "url": test_url,
                 }
-            # Also check for Set-Cookie injection
-            if "bughound=1" in headers.get("set-cookie", ""):
+            # Also check for Set-Cookie injection with our canary
+            cookie_val = headers.get("set-cookie", "")
+            if "bughound=1" in cookie_val:
                 return {
                     "vulnerable": True,
                     "payload": payload,
-                    "injected_header": f"Set-Cookie injection: {headers.get('set-cookie', '')}",
+                    "injected_header": f"Set-Cookie injection: {cookie_val}",
                     "param": param,
                     "url": test_url,
                 }
