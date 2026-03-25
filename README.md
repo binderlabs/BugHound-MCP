@@ -87,6 +87,39 @@ BugHound works with zero external tools using 29 pure-Python techniques. For ful
 
 Run `./scripts/install-tools.sh` to install all Go tools automatically.
 
+### API Keys for Better Subdomain Coverage (Optional)
+
+BugHound's subdomain enumeration uses `subfinder`, which supports passive data sources via API keys. Without keys, you still get results from free sources (crtsh, HackerTarget, CertSpotter). With keys, you get significantly more subdomains.
+
+Configure in `~/.config/subfinder/provider-config.yaml`:
+
+```yaml
+chaos:
+  - your-chaos-api-key
+virustotal:
+  - your-virustotal-api-key
+securitytrails:
+  - your-securitytrails-api-key
+shodan:
+  - your-shodan-api-key
+censys:
+  - your-censys-api-key
+```
+
+| Source | Sign up | Free? |
+|--------|---------|-------|
+| Chaos (ProjectDiscovery) | [chaos.projectdiscovery.io](https://chaos.projectdiscovery.io) | Yes |
+| VirusTotal | [virustotal.com](https://www.virustotal.com) | Yes |
+| SecurityTrails | [securitytrails.com](https://securitytrails.com) | Yes (50 queries/month) |
+| Censys | [search.censys.io](https://search.censys.io) | Yes (250 queries/month) |
+| Shodan | [shodan.io](https://shodan.io) | Paid ($49 lifetime) |
+
+Chaos also requires an environment variable:
+
+```bash
+echo 'export CHAOS_API_KEY="your-key"' >> ~/.zshrc && source ~/.zshrc
+```
+
 ## MCP Configuration
 
 ### Claude Code
