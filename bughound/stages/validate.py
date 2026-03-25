@@ -289,6 +289,22 @@ async def validate_all(
         vuln_class = f.get("vulnerability_class", "other")
         validator = _VALIDATOR_MAP.get(vuln_class, "curl")
         confidence = f.get("confidence", "medium")
+        endpoint = f.get("endpoint", "")
+
+        # Skip static assets entirely — no point running sqlmap/dalfox on .js/.css
+        if endpoint and _is_static_asset(endpoint) and validator in _HEAVY_VALIDATORS:
+            f["validated"] = True
+            f["validation_status"] = LIKELY_FALSE_POSITIVE
+            f["validation_tool"] = validator
+            false_positives += 1
+            results.append({
+                "finding_id": f.get("finding_id", "unknown"),
+                "vulnerability_class": vuln_class,
+                "severity": f.get("severity", "info"),
+                "validation_status": LIKELY_FALSE_POSITIVE,
+                "reason": f"Static asset ({endpoint.split('/')[-1].split('?')[0]}) — skipped {validator}",
+            })
+            continue
 
         if validator in _HEAVY_VALIDATORS and confidence not in ("high",):
             # Skip heavy validators for medium/low confidence — mark as manual review
@@ -518,12 +534,34 @@ async def validate_immediate_wins(
 # ---------------------------------------------------------------------------
 
 
+_STATIC_EXTENSIONS = frozenset({
+    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+    ".woff", ".woff2", ".ttf", ".eot", ".map", ".webp", ".avif",
+})
+
+
+def _is_static_asset(endpoint: str) -> bool:
+    """Check if endpoint is a static file that shouldn't be validated."""
+    from urllib.parse import urlparse
+    path = urlparse(endpoint).path.lower()
+    # Strip query string artifacts from path and check extension
+    return any(path.rstrip("/").endswith(ext) for ext in _STATIC_EXTENSIONS)
+
+
 async def _run_validator(
     validator: str,
     finding: dict[str, Any],
     workspace_id: str,
 ) -> dict[str, Any]:
     """Dispatch to the appropriate validator."""
+    # Skip heavy tools on static assets (.js, .css, images, fonts)
+    endpoint = finding.get("endpoint", "")
+    if endpoint and _is_static_asset(endpoint) and validator in ("sqlmap", "dalfox"):
+        return {
+            "status": LIKELY_FALSE_POSITIVE,
+            "reason": f"Static asset ({endpoint.split('/')[-1].split('?')[0]}) — skipped {validator}",
+        }
+
     if validator == "sqlmap":
         return await _validate_sqli(finding, workspace_id)
     elif validator == "dalfox":
