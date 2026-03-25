@@ -832,15 +832,16 @@ async def _validate_xss(
 
 
 async def _validate_xss_pure(finding: dict[str, Any]) -> dict[str, Any]:
-    """Pure-Python XSS verification by checking reflection."""
+    """Pure-Python XSS verification — send <script> and check if it reflects unencoded."""
     endpoint = finding.get("endpoint", "")
     param = _extract_param_name(finding)
     if not endpoint:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": "No endpoint"}
 
-    canary = f"bughound{hashlib.md5(endpoint.encode(), usedforsecurity=False).hexdigest()[:8]}"
+    canary = f"bh{hashlib.md5(endpoint.encode(), usedforsecurity=False).hexdigest()[:6]}"
+    # Test with actual script tag — the simplest, most reliable check
     test_payloads = [
-        (canary, "reflection"),
+        (f"<script>{canary}</script>", "script_injection"),
         (f"<{canary}>", "html_injection"),
         (f'"{canary}', "attribute_escape"),
     ]
@@ -858,30 +859,53 @@ async def _validate_xss_pure(finding: dict[str, Any]) -> dict[str, Any]:
                     test_url, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
                 ) as resp:
                     body = await resp.text(errors="replace")
-                    if payload_str in body:
-                        if check_type == "html_injection" and f"<{canary}>" in body:
-                            return {
-                                "status": CONFIRMED,
-                                "evidence": f"HTML injection confirmed: <{canary}> reflected unescaped",
-                                "poc_request": f"GET {test_url}",
-                                "poc_response": body[:1000],
-                                "reproduction_steps": [
-                                    f"1. Send request with param '{param or 'q'}' = <{canary}>",
-                                    "2. Tag is reflected unescaped in HTML response",
-                                    "3. This confirms XSS is possible with script tags",
-                                ],
-                                "curl_command": f"curl -sk '{test_url}'",
-                                "impact": "HTML injection leads to XSS — session hijacking, credential theft",
-                                "severity_assessment": "MEDIUM — HTML tag injection confirmed, XSS likely",
-                            }
-                        elif check_type == "reflection":
-                            return {
-                                "status": NEEDS_MANUAL_REVIEW,
-                                "reason": f"Canary '{canary}' reflected but need to verify execution context",
-                                "evidence": "Input reflected in response body",
-                                "poc_request": f"GET {test_url}",
-                                "poc_response": body[:500],
-                            }
+
+                    if check_type == "script_injection" and f"<script>{canary}</script>" in body:
+                        return {
+                            "status": CONFIRMED,
+                            "evidence": f"XSS confirmed: <script>{canary}</script> reflected unescaped in HTML",
+                            "poc_request": f"GET {test_url}",
+                            "poc_response": body[:1000],
+                            "reproduction_steps": [
+                                f"1. curl -sk '{test_url}'",
+                                f"2. Response contains <script>{canary}</script> unescaped",
+                                "3. JavaScript executes in browser context",
+                            ],
+                            "curl_command": f"curl -sk '{test_url}'",
+                            "impact": "Cross-site scripting — session hijacking, credential theft",
+                            "severity_assessment": "HIGH — confirmed reflected XSS",
+                        }
+
+                    if check_type == "html_injection" and f"<{canary}>" in body:
+                        return {
+                            "status": CONFIRMED,
+                            "evidence": f"HTML injection confirmed: <{canary}> reflected unescaped",
+                            "poc_request": f"GET {test_url}",
+                            "poc_response": body[:1000],
+                            "reproduction_steps": [
+                                f"1. curl -sk '{test_url}'",
+                                f"2. HTML tag <{canary}> reflected unescaped",
+                                "3. XSS possible with <script> or event handlers",
+                            ],
+                            "curl_command": f"curl -sk '{test_url}'",
+                            "impact": "HTML injection leads to XSS",
+                            "severity_assessment": "MEDIUM — HTML tag injection confirmed",
+                        }
+
+                    if check_type == "attribute_escape" and f'"{canary}' in body:
+                        return {
+                            "status": CONFIRMED,
+                            "evidence": f"Attribute escape confirmed: quote + canary reflected unescaped",
+                            "poc_request": f"GET {test_url}",
+                            "poc_response": body[:1000],
+                            "reproduction_steps": [
+                                f"1. curl -sk '{test_url}'",
+                                "2. Double-quote not escaped — attribute breakout possible",
+                            ],
+                            "curl_command": f"curl -sk '{test_url}'",
+                            "impact": "Attribute injection leads to XSS via event handlers",
+                            "severity_assessment": "MEDIUM — attribute escape confirmed",
+                        }
 
     except Exception as exc:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": f"XSS verification failed: {exc}"}
