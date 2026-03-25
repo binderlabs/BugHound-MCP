@@ -547,7 +547,7 @@ async def _tool_http_request(
                 return {
                     "status_code": resp.status,
                     "headers": resp_headers,
-                    "body": resp_body[:3000],
+                    "body": resp_body[:10000],
                     "body_length": len(resp_body),
                     "redirect_url": str(resp.headers.get("Location", "")),
                 }
@@ -669,7 +669,7 @@ async def _tool_extract_sqli_data(
                             "status": "partial",
                             "method": "error_based",
                             "payload": error_payload,
-                            "response_snippet": body[:2000],
+                            "response_snippet": body[:10000],
                             "curl_command": f"curl -sk '{test_url}'",
                         }
             except Exception:
@@ -1039,7 +1039,7 @@ async def execute_tool(
                             "comments": comments,
                             "hidden_inputs": [{"name": n, "value": v[:50]} for n, v in hidden],
                             "meta": [{"name": n, "content": v[:50]} for n, v in meta[:10]],
-                            "body_preview": body[:3000],
+                            "body_preview": body[:10000],
                         }
 
                         return json.dumps(result, default=str)[:_MAX_RESULT_LEN]
@@ -1101,7 +1101,7 @@ async def execute_tool(
                         "console_logs": console_logs[:20],
                         "cookies": cookie_list,
                         "js_result": js_result[:500] if js_result else "",
-                        "body_preview": rendered[:3000],
+                        "body_preview": rendered[:10000],
                     }
                     return json.dumps(result, default=str)[:_MAX_RESULT_LEN]
 
