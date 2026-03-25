@@ -66,6 +66,8 @@ class OpenAICompatProvider(AIProvider):
 
         response = await self.client.chat.completions.create(**kwargs)
 
+        if not response.choices:
+            return AIResponse(content="No response from model", tool_calls=[], usage={})
         choice = response.choices[0]
         content = choice.message.content or ""
         tool_calls: list[ToolCall] = []

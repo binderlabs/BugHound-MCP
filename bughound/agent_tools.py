@@ -1032,7 +1032,7 @@ async def execute_tool(
                             "content_type": resp_headers.get("content-type", ""),
                             "content_length": len(body),
                             "headers": dict(list(resp_headers.items())[:15]),
-                            "title": (re.search(r'<title>(.*?)</title>', body, re.I | re.S) or type('', (), {'group': lambda s, n: ''})()).group(1)[:100],
+                            "title": (lambda m: m.group(1)[:100] if m else "")(re.search(r'<title>(.*?)</title>', body, re.I | re.S)),
                             "forms": form_summary,
                             "links": links,
                             "scripts": scripts,
@@ -1171,7 +1171,7 @@ async def execute_tool(
                 }
             else:
                 result = await _tool_http_request(
-                    method=arguments["method"],
+                    method=arguments.get("method", "GET"),
                     url=url,
                     headers=arguments.get("headers"),
                     body=arguments.get("body"),
@@ -1188,9 +1188,9 @@ async def execute_tool(
             else:
                 result = await _tool_extract_sqli_data(
                     url=url,
-                    param=arguments["param"],
-                    db_type=arguments["db_type"],
-                    query=arguments["query"],
+                    param=arguments.get("param", ""),
+                    db_type=arguments.get("db_type", "mysql"),
+                    query=arguments.get("query", ""),
                 )
 
         elif name == "read_file_via_lfi":
@@ -1203,8 +1203,8 @@ async def execute_tool(
             else:
                 result = await _tool_read_file_via_lfi(
                     url=url,
-                    param=arguments["param"],
-                    file_path=arguments["file_path"],
+                    param=arguments.get("param", ""),
+                    file_path=arguments.get("file_path", "/etc/passwd"),
                 )
 
         elif name == "get_findings":

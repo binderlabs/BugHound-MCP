@@ -419,9 +419,9 @@ async def test_sqli(
                             "param": param,
                             "technique": "boolean-blind",
                             "payload": f"{true_payload} vs {false_payload}",
-                        "evidence": f"Content differs: true={true_hash}, false={false_hash}, baseline={baseline_hash}",
-                        "confidence": "medium",
-                    }
+                            "evidence": f"Content differs: true={true_hash}, false={false_hash}, baseline={baseline_hash}",
+                            "confidence": "medium",
+                        }
 
         # Phase 4: Time-based blind SQLi
         time_payloads = [
@@ -438,7 +438,7 @@ async def test_sqli(
             t0 = time.monotonic()
             await _send(session, target_url)
             baseline_times.append(time.monotonic() - t0)
-        max_baseline = max(baseline_times)
+        max_baseline = max(baseline_times) if baseline_times else 1.0
 
         for payload, delay in time_payloads:
             test_url = _replace_param(target_url, param, payload)

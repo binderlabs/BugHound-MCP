@@ -75,7 +75,7 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, str, str]] = [
     ("CRED_URL",         re.compile(r"https?://[^:@\s]+:[^:@\s]+@[^\s\"']+"),                                           "URL with Credentials",        "MEDIUM"),
     # Cloud keys
     ("AZURE_KEY",        re.compile(r"AccountKey=[A-Za-z0-9+/=]{44,}"),                                                 "Azure Storage Key",           "HIGH"),
-    ("AZURE_SAS",        re.compile(r"sv=\d{4}-\d{2}-\d{2}&s[a-z]=.*?&sig=[A-Za-z0-9%+/=]+"),                          "Azure SAS Token",             "MEDIUM"),
+    ("AZURE_SAS",        re.compile(r"sv=\d{4}-\d{2}-\d{2}&s[a-z]=[^&]*&sig=[A-Za-z0-9%+/=]+"),                          "Azure SAS Token",             "MEDIUM"),
     ("GCP_SERVICE",      re.compile(r'"type"\s*:\s*"service_account"'),                                                  "GCP Service Account JSON",    "HIGH"),
     # ── LOW confidence ───────────────────────────────────────────────────────
     ("GENERIC_SECRET",  re.compile(r"""(?:secret|password|passwd|pwd)[\s:="']+([^\s"']{12,64})""", re.I),          "Generic Secret/Password",     "LOW"),

@@ -788,6 +788,7 @@ async def run_agent(
                 from bughound.core import workspace as _ws
                 _raw = await _ws.read_data(workspace_id, "vulnerabilities/scan_results.json")
                 _items = _raw.get("data", _raw) if isinstance(_raw, dict) else (_raw or [])
+                if not isinstance(_items, list): _items = []
                 _pending = [
                     f for f in _items
                     if isinstance(f, dict)
