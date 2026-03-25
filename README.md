@@ -8,19 +8,19 @@
 
 <p align="center">
   <code>Black Hat Arsenal Asia 2026</code> &nbsp;|&nbsp;
-  <code>43 Techniques</code> &nbsp;|&nbsp;
+  <code>45 Techniques</code> &nbsp;|&nbsp;
   <code>35 Vuln Classes</code> &nbsp;|&nbsp;
   <code>3 Modes</code>
 </p>
 
 ---
 
-BugHound is a Model Context Protocol (MCP) server that provides a complete pipeline for web application security reconnaissance and vulnerability assessment. It exposes structured security tools as MCP endpoints, enabling AI clients (Claude, Gemini, Codex) to orchestrate a 7-stage pipeline from target input to verified vulnerability report. BugHound ships with 43 testing techniques -- 29 of which are pure-Python and require zero external tools -- covering injection, access control, server-side, configuration, and data leakage vulnerability classes.
+BugHound is a Model Context Protocol (MCP) server that provides a complete pipeline for web application security reconnaissance and vulnerability assessment. It exposes structured security tools as MCP endpoints, enabling AI clients (Claude, Gemini, Codex) to orchestrate a 7-stage pipeline from target input to verified vulnerability report. BugHound ships with 45 testing techniques -- 29 of which are pure-Python and require zero external tools -- covering injection, access control, server-side, configuration, and data leakage vulnerability classes.
 
 ## Features
 
 - **7-Stage Pipeline** -- Init, Enumerate, Discover, Analyze, Test, Validate, Report -- stages collapse based on target type
-- **43 Testing Techniques** -- pure-Python fallbacks for every category; no external tools required to start
+- **45 Testing Techniques** -- pure-Python fallbacks for every category; no external tools required to start
 - **3 Execution Modes** -- MCP Server (for AI clients), CLI (for terminal workflows), AI Agent (autonomous scanning)
 - **Professional HTML Reports** -- dark teal dashboard with filtering, export, and executive summary
 - **Auth-Aware Testing** -- JWT auto-propagation across all testing techniques
@@ -32,7 +32,7 @@ BugHound is a Model Context Protocol (MCP) server that provides a complete pipel
 ## Quick Start
 
 ```bash
-git clone https://github.com/user/BugHound.git
+git clone https://github.com/binderlabs/BugHound-MCP.git
 cd BugHound
 pip install -r requirements.txt
 ./scripts/install-tools.sh  # Optional: install Go/external tools
@@ -263,18 +263,19 @@ Use `--max-hosts N` to skip the prompt and auto-select the top N hosts.
 
 ## AI Agent Mode
 
-BugHound's agent mode combines **CLI scanning speed** with **AI expert depth**. It runs all 45 automated techniques first, then an AI with 6 specialist experts reviews the findings and goes deeper — extracting data, reading config files, chaining vulnerabilities, and proving impact.
+BugHound's agent mode combines **CLI scanning speed** with **AI validation depth**. It runs all 45 automated techniques first, then an AI with 6 specialist experts validates every finding individually -- sending targeted payloads, reading pages, confirming or rejecting each one. No finding goes unverified.
 
 **Hybrid approach:** CLI breadth + AI depth
 ```
 Phase 1: Automated Recon (Stages 0-3)     → discover attack surface
-Phase 2: Automated Testing (45 techniques) → find 30+ vulnerabilities fast
-Phase 3: AI Expert Analysis                → exploit deeper, chain findings, prove impact
+Phase 2: Automated Testing (45 techniques) → find vulnerabilities fast
+Phase 3: AI Validation + Discovery         → verify each finding, reject false positives
+Phase 4: Report Generation                 → professional deliverables
 ```
 
 **6 specialist experts:** SQLi (5 DB extraction playbooks), XSS (6 injection contexts), LFI (config file priority lists), SSRF (cloud metadata + bypasses), RCE (per-language eval), Auth (login bypass + JWT).
 
-**11 AI tools:** `read_page`, `browse_page` (Playwright), `run_tool` (Kali tools), `http_request`, `extract_sqli_data`, `read_file_via_lfi`, `add_finding`, `get_findings`, `get_attack_surface`, `validate_findings`, `generate_report`
+**12 AI tools:** `read_page`, `browse_page` (Playwright), `run_tool` (Kali tools), `http_request`, `extract_sqli_data`, `read_file_via_lfi`, `update_finding_status`, `add_finding`, `get_findings`, `get_attack_surface`, `validate_findings`, `generate_report`
 
 ```bash
 # Using OpenRouter (access to all models)
@@ -293,10 +294,9 @@ echo "OPENROUTER_API_KEY=sk-or-..." > .env
 
 **What AI adds beyond CLI:**
 ```
-CLI finds:  "SQLi on Bookings.aspx CuntryID (error-based)"
-Agent adds: "Extracted database version (MySQL 9), dumped users table,
-            found admin credentials, chained with LFI to read web.config
-            containing database connection string"
+CLI scan:    36 findings, all PENDING — needs human review
+Agent mode:  36 findings → 22 CONFIRMED, 12 FALSE POSITIVE, 2 MANUAL REVIEW
+             AI sent 27 http_requests to verify each finding individually
 ```
 
 ## Pipeline Architecture
@@ -306,7 +306,7 @@ Stage 0: Init        -->  Target classification + workspace
 Stage 1: Enumerate   -->  Subdomain discovery (skipped for single hosts)
 Stage 2: Discover    -->  Probe, crawl, JS analysis, dir scan, param classification
 Stage 3: Analyze     -->  Attack surface, chains, immediate wins, scan plan
-Stage 4: Test        -->  43 techniques in parallel (nuclei + pure-Python)
+Stage 4: Test        -->  45 techniques in parallel (nuclei + pure-Python)
 Stage 5: Validate    -->  Surgical verification (sqlmap, dalfox, curl)
 Stage 6: Report      -->  HTML dashboard, bug bounty MD, executive summary
 ```
@@ -317,7 +317,7 @@ Stages collapse based on target type:
 - **Single endpoint** (`https://dev.example.com/api`): Stage 1 skipped, Stage 2 crawls from path only
 - **URL list**: Stage 1 skipped, batch probe and crawl
 
-## Techniques (43 Total)
+## Techniques (45 Total)
 
 **Injection**
 - SQLi (error-based, blind, time-based), XSS (reflected, stored, DOM), SSTI, CSTI, CRLF, header injection
