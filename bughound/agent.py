@@ -692,7 +692,9 @@ async def run_agent(
             "For new discoveries → add_finding() with full evidence.\n\n"
             "IMPORTANT: Use update_finding_status() with finding_id for EXISTING findings.\n"
             "Use add_finding() only for NEW discoveries.\n"
-            "START with the highest severity findings. Validate as many as you can.\n",
+            "You MUST validate EVERY finding — do NOT stop after the first batch.\n"
+            "START with critical/high severity, then work through medium/low.\n"
+            "Do NOT call generate_report() until ALL findings have been validated.\n",
         },
     ]
 
@@ -770,6 +772,39 @@ async def run_agent(
                     # Just show first 2 lines
                     lines = text.split("\n")[:2]
                     print(f"  {_C.CYAN}[AI]{_C.RESET} {' '.join(l.strip() for l in lines)[:150]}")
+
+            # Check if there are still unvalidated findings before stopping
+            try:
+                from bughound.core import workspace as _ws
+                _raw = await _ws.read_data(workspace_id, "vulnerabilities/scan_results.json")
+                _items = _raw.get("data", _raw) if isinstance(_raw, dict) else (_raw or [])
+                _pending = [
+                    f for f in _items
+                    if isinstance(f, dict)
+                    and not f.get("validation_status")
+                    and f.get("vulnerability_class") not in ("other", None, "")
+                ]
+                if _pending and iterations_used < max_iterations - 1:
+                    # Push AI to keep validating — include FULL finding_ids
+                    pending_lines = "\n".join(
+                        f"  - {f.get('finding_id','?')} [{f.get('severity','?')}] "
+                        f"{f.get('vulnerability_class','?')} — {f.get('endpoint','?')[:60]}"
+                        for f in _pending[:15]
+                    )
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"You still have {len(_pending)} PENDING findings. "
+                            f"Do NOT stop yet. Validate these next:\n{pending_lines}\n\n"
+                            "Use the EXACT finding_id shown above (copy it fully). "
+                            "For each: call update_finding_status(finding_id, status)."
+                        ),
+                    })
+                    print(f"  {_C.DIM}[AI]{_C.RESET} {len(_pending)} findings still pending, continuing...")
+                    continue
+            except Exception:
+                pass  # If we can't check, just stop
+
             break
 
     # --- Phase 4: Report ---------------------------------------------------

@@ -1229,12 +1229,19 @@ async def execute_tool(
                 if not isinstance(findings, list):
                     return json.dumps({"status": "error", "message": "No findings loaded"})
 
-                # Find by finding_id
+                # Find by finding_id (exact match first, then prefix match)
                 matched_idx = None
                 for i, f in enumerate(findings):
                     if isinstance(f, dict) and f.get("finding_id") == fid:
                         matched_idx = i
                         break
+
+                if matched_idx is None and len(fid) >= 10:
+                    # Prefix match — AI sometimes truncates the last 1-2 hex chars
+                    for i, f in enumerate(findings):
+                        if isinstance(f, dict) and f.get("finding_id", "").startswith(fid):
+                            matched_idx = i
+                            break
 
                 if matched_idx is None:
                     # Fallback: try as 1-based integer index
