@@ -984,6 +984,61 @@ async def _run_tests(
         ("cors", "cors_misconfig"),
     ]
 
+    # -- CMS-aware technique filtering ----------------------------------
+    # When a CMS is detected, skip generic injection on CMS URLs.
+    # Only run: CMS-specific scanner + config checks + injection on custom URLs.
+    cms_data_phase4d = await _load_cms_detection(workspace_id)
+    if cms_data_phase4d and cms_data_phase4d.get("cms_type") and cms_data_phase4d.get("confidence") == "high":
+        cms_type = cms_data_phase4d["cms_type"]
+        # Techniques that are still useful on CMS sites
+        _CMS_KEEP_TECHNIQUES = {
+            # CMS-specific
+            "wordpress_test", "joomla_test", "drupal_test", "magento_test",
+            # Config/info checks (always useful)
+            "security_headers_check", "transport_security_check",
+            "version_disclosure_check", "sensitive_leakage_test",
+            "pii_html_leakage", "vulnerable_components_check",
+            "git_exposure_test", "default_credentials_test",
+            "sqli_auth_bypass_test",
+            # Access control (useful on any site)
+            "broken_access_control", "rate_limit_test", "cors_misconfig",
+            # Auth
+            "jwt_test",
+            # API
+            "graphql_test",
+        }
+        # Filter injection techniques: only keep if there are non-CMS custom URLs
+        skip_paths = _CMS_SKIP_PATHS.get(cms_type, [])
+        # Check if there are any custom (non-CMS) parameterized URLs worth testing
+        pc_raw = await workspace.read_data(workspace_id, "urls/parameter_classification.json")
+        pc_items = pc_raw.get("data", pc_raw) if isinstance(pc_raw, dict) else (pc_raw or [])
+        custom_param_urls = 0
+        for item in pc_items:
+            if isinstance(item, dict):
+                url = item.get("url", "")
+                if url and not any(sp in url.lower() for sp in skip_paths):
+                    custom_param_urls += 1
+
+        if custom_param_urls < 5:
+            # Very few custom URLs — skip all generic injection, just run CMS scanner
+            original_count = len(injection_techniques)
+            injection_techniques = [
+                (cls, tid) for cls, tid in injection_techniques
+                if tid in _CMS_KEEP_TECHNIQUES
+            ]
+            skipped = original_count - len(injection_techniques)
+            await _progress(
+                49, f"CMS detected ({cms_type}): skipped {skipped} generic injection "
+                f"techniques ({custom_param_urls} custom URLs — not worth full scan)",
+                "cms_filter",
+            )
+        else:
+            # Some custom URLs exist — keep injection but log the filter
+            await _progress(
+                49, f"CMS detected ({cms_type}): {custom_param_urls} custom URLs "
+                f"found — running filtered injection testing", "cms_filter",
+            )
+
     # -- Build runnable task list (filter by test_class + availability) -
     # Heavy tools that spawn subprocesses — limit concurrency
     _HEAVY_TECHNIQUES = {"sqli_param_fuzz", "xss_param_fuzz", "deep_dirfuzz"}
