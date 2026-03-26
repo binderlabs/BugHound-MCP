@@ -1456,6 +1456,14 @@ def _generate_flags(
 # ---------------------------------------------------------------------------
 
 
+_ARJUN_SKIP_EXTENSIONS = frozenset({
+    ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+    ".woff", ".woff2", ".ttf", ".eot", ".map", ".webp", ".avif",
+    ".pdf", ".zip", ".gz", ".tar", ".mp3", ".mp4", ".wav",
+    ".xml", ".json", ".txt", ".csv", ".doc", ".docx", ".xls",
+})
+
+
 def _pick_arjun_targets(
     urls: list[dict[str, str]],
     hidden_endpoints: list[dict[str, Any]],
@@ -1464,21 +1472,29 @@ def _pick_arjun_targets(
     """Pick the most interesting endpoints for parameter discovery.
 
     Prioritizes: hidden endpoints > endpoints with existing params > API paths.
+    Skips static files (.js, .css, .png, .pdf, etc.) — they don't accept params.
     """
     from urllib.parse import urlparse
+
+    def _is_static(url: str) -> bool:
+        try:
+            path = urlparse(url).path.lower().rstrip("/")
+            return any(path.endswith(ext) for ext in _ARJUN_SKIP_EXTENSIONS)
+        except Exception:
+            return False
 
     candidates: list[tuple[int, str]] = []  # (priority, url)
 
     # Hidden endpoints are top priority
     for ep in hidden_endpoints:
         path = ep.get("path", "")
-        if path and "://" in path:
+        if path and "://" in path and not _is_static(path):
             candidates.append((0, path))
 
     # URLs with query params (likely accept more params)
     for entry in urls:
         u = entry.get("url", "")
-        if not u:
+        if not u or _is_static(u):
             continue
         parsed = urlparse(u)
         if parsed.query:
