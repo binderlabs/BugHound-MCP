@@ -343,6 +343,39 @@ async def _run_discover(
             url_tool_counts.setdefault(tool_name, 0)
             warnings.append(f"{tool_name}: {exc}")
 
+    # Filter passive URLs to live hosts only — gau/waybackurls return URLs
+    # from dead subdomains (e.g. ecor.yueco.edu.mm) that waste scan time.
+    if all_urls and live_hosts:
+        from urllib.parse import urlparse as _urlparse_filter
+        live_hostnames: set[str] = set()
+        for lh in live_hosts:
+            if isinstance(lh, dict):
+                h = lh.get("host", "")
+                u = lh.get("url", "")
+                if h:
+                    live_hostnames.add(h.lower())
+                if u:
+                    try:
+                        live_hostnames.add(_urlparse_filter(u).hostname.lower())
+                    except Exception:
+                        pass
+
+        pre_filter = len(all_urls)
+        filtered_urls = []
+        for item in all_urls:
+            url = item.get("url", "") if isinstance(item, dict) else str(item)
+            try:
+                hostname = _urlparse_filter(url).hostname
+                if hostname and hostname.lower() in live_hostnames:
+                    filtered_urls.append(item)
+            except Exception:
+                filtered_urls.append(item)  # keep if can't parse
+
+        dropped = pre_filter - len(filtered_urls)
+        if dropped > 0:
+            logger.info("discover.url_filter_dead_hosts", dropped=dropped, remaining=len(filtered_urls))
+        all_urls = filtered_urls
+
     # Passive endpoint sources (AlienVault OTX, URLScan, Common Crawl)
     try:
         from bughound.tools.recon.passive_sources import gather_endpoints
@@ -409,28 +442,29 @@ async def _run_discover(
         url_tool_counts["crawler"] = -1
         warnings.append("No crawler installed (katana or gospider) — active crawling skipped.")
 
-    # Wayback Machine URLs (pure Python, runs alongside other sources)
-    if progress_cb:
-        await progress_cb(33, "Fetching Wayback Machine URLs", "wayback_cdx")
-    target_domain = meta.target.replace("http://", "").replace("https://", "").strip("/")
+    # Wayback Machine URLs — only if waybackurls binary didn't already run
     wayback_urls_found: list[str] = []
-    try:
-        async with aiohttp.ClientSession() as _wb_session:
-            wayback_urls_found = await _fetch_wayback_urls(target_domain, _wb_session)
-            for wb_url in wayback_urls_found:
-                all_urls.append({"url": wb_url, "source": "wayback_cdx"})
-            url_tool_counts["wayback_cdx"] = len(wayback_urls_found)
-    except Exception as exc:
-        warnings.append(f"Wayback Machine CDX fetch failed: {exc}")
+    if url_tool_counts.get("waybackurls", 0) <= 0:
+        # waybackurls binary not available or returned nothing — use CDX API
+        if progress_cb:
+            await progress_cb(33, "Fetching Wayback Machine URLs (CDX API)", "wayback_cdx")
+        target_domain = meta.target.replace("http://", "").replace("https://", "").strip("/")
+        try:
+            async with aiohttp.ClientSession() as _wb_session:
+                wayback_urls_found = await _fetch_wayback_urls(target_domain, _wb_session)
+                for wb_url in wayback_urls_found:
+                    all_urls.append({"url": wb_url, "source": "wayback_cdx"})
+                url_tool_counts["wayback_cdx"] = len(wayback_urls_found)
+        except Exception as exc:
+            warnings.append(f"Wayback Machine CDX fetch failed: {exc}")
 
-    # Save wayback URLs to workspace
-    if wayback_urls_found:
-        await workspace.write_data(
-            workspace_id, "urls/wayback.json",
-            [{"url": u, "source": "wayback_cdx"} for u in wayback_urls_found],
-            generated_by="wayback_cdx", target=target_label,
-        )
-        files_written.append("urls/wayback.json")
+        if wayback_urls_found:
+            await workspace.write_data(
+                workspace_id, "urls/wayback.json",
+                [{"url": u, "source": "wayback_cdx"} for u in wayback_urls_found],
+                generated_by="wayback_cdx", target=target_label,
+            )
+            files_written.append("urls/wayback.json")
 
     # OpenAPI/Swagger spec extraction (pure Python)
     if progress_cb:
@@ -1812,29 +1846,12 @@ async def _fetch_openapi_spec(
 async def _fetch_wayback_urls(
     domain: str, session: aiohttp.ClientSession, limit: int = 5000,
 ) -> list[str]:
-    """Fetch historical URLs using waybackurls binary (preferred) or CDX API fallback."""
-    # Prefer waybackurls binary — it queries Wayback + Common Crawl + OTX
-    if tool_runner.is_available("waybackurls"):
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "waybackurls",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            stdout, _ = await asyncio.wait_for(
-                proc.communicate(input=domain.encode()), timeout=120,
-            )
-            if stdout:
-                urls = []
-                for line in stdout.decode(errors="replace").splitlines():
-                    line = line.strip()
-                    if line.startswith("http"):
-                        urls.append(line)
-                if urls:
-                    return urls[:limit]
-        except Exception:
-            pass
+    """Fetch historical URLs from Wayback Machine CDX API. Pure Python fallback only.
+
+    Note: waybackurls binary runs separately via the tool wrapper in the passive
+    URL sources section. This function is ONLY called when waybackurls binary
+    is not available or returned nothing.
+    """
 
     # Fallback: pure-Python CDX API
     urls: list[str] = []
