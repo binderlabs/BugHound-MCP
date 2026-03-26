@@ -102,6 +102,7 @@ _VALIDATOR_MAP: dict[str, str] = {
     "rce": "curl",
     "idor": "curl",
     "header_injection": "curl",
+    "prototype_pollution": "proto_check",
     "jwt": "curl",
     "deserialization": "curl",
     "broken_access_control": "curl",
@@ -566,6 +567,8 @@ async def _run_validator(
         return await _validate_sqli(finding, workspace_id)
     elif validator == "dalfox":
         return await _validate_xss(finding, workspace_id)
+    elif validator == "proto_check":
+        return await _validate_prototype_pollution(finding)
     elif validator == "dns":
         return await _validate_dns(finding)
     else:
@@ -911,6 +914,71 @@ async def _validate_xss_pure(finding: dict[str, Any]) -> dict[str, Any]:
         return {"status": NEEDS_MANUAL_REVIEW, "reason": f"XSS verification failed: {exc}"}
 
     return {"status": LIKELY_FALSE_POSITIVE, "reason": "No reflection detected"}
+
+
+async def _validate_prototype_pollution(finding: dict[str, Any]) -> dict[str, Any]:
+    """Validate prototype pollution — check if injected property actually appears in response.
+
+    Prototype pollution is client-side (JavaScript). On server-side frameworks
+    (ASP.NET, PHP, Python, Ruby, Java), __proto__ payloads are just reflected
+    in URLs or ignored — NOT a real vulnerability.
+    """
+    endpoint = finding.get("endpoint", "")
+    if not endpoint:
+        return {"status": LIKELY_FALSE_POSITIVE, "reason": "No endpoint"}
+
+    # Check response headers for server-side framework indicators
+    # If server-side backend detected → auto FP (proto pollution is JS-only)
+    try:
+        async with aiohttp.ClientSession() as session:
+            # First: check what tech the server runs
+            base_url = endpoint.split("?")[0]
+            async with session.get(
+                base_url, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
+            ) as resp:
+                headers = dict(resp.headers)
+                header_str = " ".join(f"{k}:{v}" for k, v in headers.items()).lower()
+
+                # Server-side frameworks → prototype pollution is FP
+                server_side_indicators = [
+                    "asp.net", "x-aspnet", "php", "x-powered-by: php",
+                    "django", "flask", "rails", "ruby", "java", "spring",
+                    "laravel", "express",  # Express could be vulnerable but unlikely via URL params
+                ]
+                for indicator in server_side_indicators:
+                    if indicator in header_str:
+                        return {
+                            "status": LIKELY_FALSE_POSITIVE,
+                            "reason": f"Server-side framework detected ({indicator}) — prototype pollution is client-side JS only",
+                        }
+
+            # Second: send a unique canary and check if it appears as a property in response
+            canary = f"bh_pp_{hashlib.md5(endpoint.encode(), usedforsecurity=False).hexdigest()[:6]}"
+            test_url = f"{base_url}?__proto__[{canary}]=1"
+            async with session.get(
+                test_url, headers=_HEADERS, ssl=False, timeout=_TIMEOUT,
+            ) as resp:
+                body = await resp.text(errors="replace")
+                # Real proto pollution: canary appears as a property name in JS objects
+                # FP: canary only appears in the URL itself (form action, links)
+                body_without_urls = body
+                # Remove all href/action/src attributes that just reflect the URL
+                import re
+                body_without_urls = re.sub(r'(?:href|action|src)=["\'][^"\']*["\']', '', body)
+                if canary in body_without_urls:
+                    return {
+                        "status": CONFIRMED,
+                        "evidence": f"Prototype pollution canary '{canary}' found in response body (not just URL reflection)",
+                        "poc_request": f"GET {test_url}",
+                        "curl_command": f"curl -sk '{test_url}'",
+                        "impact": "Prototype pollution can lead to XSS, auth bypass, or DoS",
+                        "severity_assessment": "HIGH — confirmed prototype pollution",
+                    }
+
+    except Exception as exc:
+        return {"status": NEEDS_MANUAL_REVIEW, "reason": f"Proto pollution check failed: {exc}"}
+
+    return {"status": LIKELY_FALSE_POSITIVE, "reason": "Payload only reflected in URL, not in JS object properties"}
 
 
 async def _validate_with_curl(finding: dict[str, Any]) -> dict[str, Any]:
