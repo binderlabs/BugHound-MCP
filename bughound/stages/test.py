@@ -22,7 +22,7 @@ import json
 import re
 from collections import Counter
 from typing import Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, unquote, quote
 
 import aiofiles
 import structlog
@@ -45,6 +45,9 @@ _TEST_CLASS_TAGS: dict[str, list[str]] = {
     "ssrf": ["ssrf"],
     "graphql": ["graphql"],
     "wordpress": ["wordpress"],
+    "joomla": ["joomla"],
+    "drupal": ["drupal"],
+    "magento": ["magento"],
     "lfi": ["lfi"],
     "rfi": ["rfi"],
     "open_redirect": ["redirect"],
@@ -143,6 +146,44 @@ _URL_LEVEL_TAGS = [
 _HOST_MISCONFIG_TAGS = [
     "exposure", "misconfig", "cve", "default-login", "security-headers",
 ]
+
+# CMS-specific nuclei template directories
+_CMS_NUCLEI_TEMPLATES: dict[str, list[str]] = {
+    "wordpress": [
+        "http/technologies/wordpress/",
+        "http/cves/wordpress/",
+        "http/vulnerabilities/wordpress/",
+    ],
+    "joomla": [
+        "http/technologies/joomla/",
+        "http/cves/joomla/",
+    ],
+    "drupal": [
+        "http/technologies/drupal/",
+        "http/cves/drupal/",
+    ],
+    "magento": [
+        "http/technologies/magento/",
+        "http/cves/magento/",
+    ],
+}
+
+# CMS static paths to skip during generic injection testing
+_CMS_SKIP_PATHS: dict[str, list[str]] = {
+    "wordpress": [
+        "/wp-content/themes/", "/wp-content/plugins/", "/wp-includes/",
+        "/wp-admin/css/", "/wp-admin/js/", "/wp-admin/images/",
+    ],
+    "joomla": [
+        "/media/", "/templates/", "/components/com_", "/modules/mod_",
+    ],
+    "drupal": [
+        "/sites/default/files/", "/core/", "/modules/contrib/",
+    ],
+    "magento": [
+        "/skin/", "/js/mage/", "/media/catalog/",
+    ],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +587,33 @@ async def _run_tests(
 
             deduped_urls = [u for u in (_sanitize_url(u) for u in deduped_urls) if u]
 
+            # CMS URL filtering: remove CMS static paths from generic injection testing
+            # Keep URLs with query params (dynamic) even if in CMS paths
+            cms_data_pre = await _load_cms_detection(workspace_id)
+            if cms_data_pre and cms_data_pre.get("cms_type") in _CMS_SKIP_PATHS:
+                skip_paths = _CMS_SKIP_PATHS[cms_data_pre["cms_type"]]
+                pre_filter_count = len(deduped_urls)
+
+                def _should_keep_url(url: str) -> bool:
+                    """Keep URL if it has query params OR is not in CMS skip paths."""
+                    try:
+                        parsed = urlparse(url)
+                        if parsed.query:
+                            return True  # dynamic URL, always test
+                        path_lower = parsed.path.lower()
+                        return not any(sp in path_lower for sp in skip_paths)
+                    except Exception:
+                        return True
+
+                deduped_urls = [u for u in deduped_urls if _should_keep_url(u)]
+                cms_filtered = pre_filter_count - len(deduped_urls)
+                if cms_filtered > 0:
+                    phase_stats["4A1_cms_filtered"] = cms_filtered
+                    await _progress(
+                        3, f"Phase 4A-1: Filtered {cms_filtered} CMS static URLs "
+                        f"({len(deduped_urls)} remaining for injection testing)", "nuclei",
+                    )
+
             # Batch large URL sets to avoid timeouts
             _BATCH_SIZE = 50
             url_batches = [
@@ -701,6 +769,63 @@ async def _run_tests(
         else:
             phase_stats["4A4_cve_scan"] = 0
 
+        # =================================================================
+        # Phase 4A-5: CMS-specific Nuclei Scan (35-38%)
+        # =================================================================
+        cms_findings_before = len(nuclei_findings)
+        cms_data = await _load_cms_detection(workspace_id)
+        cms_type = cms_data.get("cms_type") if cms_data else None
+
+        if cms_type and cms_type in _CMS_NUCLEI_TEMPLATES:
+            await _progress(35, f"Phase 4A-5: {cms_type} CMS-specific scan", "nuclei")
+
+            cms_template_dirs = _CMS_NUCLEI_TEMPLATES[cms_type]
+            for tpl_dir in cms_template_dirs:
+                try:
+                    result = await nuclei.execute(
+                        host_urls,
+                        template_path=tpl_dir,
+                        severity="critical,high,medium,low",
+                        rate_limit=nuclei_rate,
+                        concurrency=nuclei_concurrency,
+                        no_interactsh=no_interactsh,
+                        timeout=nuclei_timeout,
+                    )
+                    if result.success and result.results:
+                        raw = result.results if isinstance(result.results, list) else []
+                        processed = _process_nuclei_findings(raw, workspace_id)
+                        processed = _deduplicate_nuclei_findings(processed)
+                        nuclei_findings.extend(processed)
+                except Exception as exc:
+                    warnings.append(f"nuclei CMS-specific ({tpl_dir}) error: {exc}")
+
+            # Run wpscan for WordPress targets
+            if cms_type == "wordpress":
+                try:
+                    from bughound.tools.scanning import wpscan
+                    if wpscan.is_available():
+                        await _progress(37, "Phase 4A-5: Running wpscan", "wpscan")
+                        for wp_url in host_urls[:5]:
+                            try:
+                                import os
+                                wp_token = os.environ.get("WPSCAN_API_TOKEN")
+                                wp_result = await wpscan.execute(wp_url, api_token=wp_token, timeout=300)
+                                if wp_result.success and wp_result.results:
+                                    for r in wp_result.results:
+                                        if isinstance(r, dict):
+                                            r["finding_id"] = _make_finding_id(r)
+                                            r.setdefault("validated", False)
+                                            r.setdefault("validation_status", None)
+                                            nuclei_findings.append(r)
+                            except Exception as exc:
+                                warnings.append(f"wpscan error on {wp_url}: {exc}")
+                    else:
+                        warnings.append("wpscan not installed — skipping WordPress-specific scan.")
+                except ImportError:
+                    warnings.append("wpscan module not available.")
+
+        phase_stats["4A5_cms_specific"] = len(nuclei_findings) - cms_findings_before
+
         # Final deduplication across all 4A sub-phases
         nuclei_findings = _deduplicate_nuclei_findings(nuclei_findings)
 
@@ -722,6 +847,7 @@ async def _run_tests(
         phase_stats["4A2_host_misconfig"] = 0
         phase_stats["4A3_tech_specific"] = 0
         phase_stats["4A4_cve_scan"] = 0
+        phase_stats["4A5_cms_specific"] = 0
 
     # =================================================================
     # Phase 4B: Deep Directory Fuzzing — now runs in Stage 2 (discover)
@@ -848,6 +974,9 @@ async def _run_tests(
         ("graphql", "graphql_test"),
         ("jwt", "jwt_test"),
         ("wordpress", "wordpress_test"),
+        ("joomla", "joomla_test"),
+        ("drupal", "drupal_test"),
+        ("magento", "magento_test"),
         ("spring", "spring_actuator_test"),
         ("bac", "broken_access_control"),
         ("rate_limiting", "rate_limit_test"),
@@ -1317,16 +1446,74 @@ def _classify_vuln(template_id: str, matcher_name: str) -> str:
     return "other"
 
 
+def _normalize_url(url: str) -> str:
+    """Normalize a URL for deduplication.
+
+    - Lowercases the path portion (handles IIS/ASP.NET case-insensitive paths)
+    - Strips trailing slashes from the path
+    - Normalizes percent-encoding (decode then re-encode consistently)
+    - Preserves query parameter casing (values may be case-sensitive)
+    """
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        # Decode percent-encoding, then re-encode to normalize %XX casing
+        path = unquote(parsed.path)
+        path = path.lower()
+        path = path.rstrip("/")
+        # Re-encode special chars consistently (safe=/ keeps path separators)
+        path = quote(path, safe="/-_.~")
+        normalized = urlunparse((
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            path,
+            parsed.params,
+            parsed.query,  # Keep query params as-is (case-sensitive values)
+            "",  # Drop fragment
+        ))
+        return normalized
+    except Exception:
+        return url
+
+
 def _make_finding_id(finding: dict[str, Any]) -> str:
-    """Generate a unique finding_id from finding data."""
+    """Generate a unique finding_id from finding data.
+
+    Uses _normalize_url on host/endpoint fields so that URLs differing
+    only in path casing (e.g. Login.aspx vs login.aspx on IIS) produce
+    the same finding ID.
+    """
     severity = finding.get("severity", "info").lower()
+    host = _normalize_url(finding.get("host", "") or "")
+    endpoint = _normalize_url(finding.get("endpoint", "") or "")
     hash_input = (
-        f"{finding.get('tool', '')}:{finding.get('host', '')}:"
-        f"{finding.get('endpoint', '')}:{finding.get('payload_used', '')}:"
+        f"{finding.get('tool', '')}:{host}:"
+        f"{endpoint}:{finding.get('payload_used', '')}:"
         f"{finding.get('description', '')}"
     )
     hash8 = hashlib.sha256(hash_input.encode()).hexdigest()[:8]
     return f"finding_{severity}_{hash8}"
+
+
+# ---------------------------------------------------------------------------
+# CMS detection loading
+# ---------------------------------------------------------------------------
+
+
+async def _load_cms_detection(workspace_id: str) -> dict[str, Any] | None:
+    """Load CMS detection data from workspace. Returns dict or None."""
+    raw = await workspace.read_data(workspace_id, "hosts/cms_detection.json")
+    if raw is None:
+        return None
+    items = raw.get("data", raw) if isinstance(raw, dict) else raw
+    if isinstance(items, list) and items:
+        first = items[0]
+        if isinstance(first, dict) and first.get("cms_type"):
+            return first
+    elif isinstance(items, dict) and items.get("cms_type"):
+        return items
+    return None
 
 
 # ---------------------------------------------------------------------------

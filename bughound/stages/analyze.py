@@ -86,6 +86,7 @@ async def _load_all_data(workspace_id: str) -> dict[str, Any]:
         "forms": "urls/forms.json",
         "auth_discovery": "hosts/auth_discovery.json",
         "openapi_specs": "endpoints/openapi_specs.json",
+        "cms_detection": "hosts/cms_detection.json",
     }
     result: dict[str, list[Any]] = {}
     for key, path in files.items():
@@ -1558,6 +1559,53 @@ def _compute_stats(data: dict[str, list]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Framework-aware test class filtering
+# ---------------------------------------------------------------------------
+
+_FRAMEWORK_SKIP_MAP: dict[str, set[str]] = {
+    "ASP.NET": {"prototype_pollution"},
+    "IIS": {"prototype_pollution"},
+    ".NET": {"prototype_pollution"},
+    "Node.js": {"viewstate"},
+    "Express": {"viewstate"},
+    "React": {"viewstate"},
+    "Next.js": {"viewstate"},
+    "Django": {"viewstate", "prototype_pollution"},
+    "Flask": {"viewstate", "prototype_pollution"},
+    "Rails": {"viewstate", "prototype_pollution"},
+    "Ruby": {"viewstate", "prototype_pollution"},
+    "Laravel": {"viewstate"},
+    "PHP": {"viewstate"},
+    "Spring": {"viewstate"},
+    "Java": {"viewstate"},
+    "WordPress": {"viewstate"},
+    "Static": {"sqli", "ssti", "rce", "lfi", "prototype_pollution"},
+}
+
+
+def _detect_tech_names(data: dict[str, list]) -> set[str]:
+    """Extract a lowercased set of technology names from Stage 2 data.
+
+    Checks live_hosts technologies and the technologies data file.
+    """
+    names: set[str] = set()
+    for host in data.get("live_hosts", []):
+        for t in host.get("technologies", []):
+            if isinstance(t, str):
+                names.add(t.lower())
+            elif isinstance(t, dict):
+                names.add(t.get("name", "").lower())
+    for entry in _extract_items(data.get("technologies")):
+        if isinstance(entry, dict):
+            for t in entry.get("technologies", []):
+                if isinstance(t, str):
+                    names.add(t.lower())
+                elif isinstance(t, dict):
+                    names.add(t.get("name", "").lower())
+    return names
+
+
+# ---------------------------------------------------------------------------
 # Suggested test classes (derived from chains + playbooks)
 # ---------------------------------------------------------------------------
 
@@ -1674,6 +1722,20 @@ def _suggest_test_classes(
         if has_wp:
             classes.add("wordpress")
 
+        # CMS detection → CMS-specific test classes
+        cms_items = _extract_items(data.get("cms_detection"))
+        if cms_items:
+            cms_info = cms_items[0] if isinstance(cms_items[0], dict) else {}
+            cms_type = cms_info.get("cms_type", "")
+            _cms_class_map = {
+                "wordpress": "wordpress",
+                "joomla": "joomla",
+                "drupal": "drupal",
+                "magento": "magento",
+            }
+            if cms_type in _cms_class_map:
+                classes.add(_cms_class_map[cms_type])
+
     # Always include these baseline classes
     classes.update([
         "nuclei_general", "cve_specific", "misconfig", "default_creds",
@@ -1681,6 +1743,24 @@ def _suggest_test_classes(
         "cors", "csti", "info_leak", "vulnerable_component",
         "deserialization", "prototype_pollution",
     ])
+
+    # Framework-aware filtering: remove test classes that don't apply
+    # to the detected technology stack.
+    if data:
+        detected_techs = _detect_tech_names(data)
+        if detected_techs:
+            to_remove: set[str] = set()
+            for tech_name, skip_classes in _FRAMEWORK_SKIP_MAP.items():
+                if tech_name.lower() in detected_techs:
+                    for sc in skip_classes:
+                        if sc in classes:
+                            to_remove.add(sc)
+                            logger.info(
+                                "analyze.filtered_test_class",
+                                test_class=sc,
+                                reason=f"not applicable to {tech_name}",
+                            )
+            classes -= to_remove
 
     return sorted(classes)
 
@@ -1963,6 +2043,78 @@ def _summarize_dir_findings(data: dict[str, list]) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# CMS detection summary (Part 7b)
+# ---------------------------------------------------------------------------
+
+_CMS_URL_PATTERNS_ANALYZE: dict[str, list[str]] = {
+    "wordpress": ["/wp-content/", "/wp-includes/", "/wp-json/", "/wp-login.php", "/xmlrpc.php", "/wp-admin/"],
+    "joomla": ["/administrator/", "/components/com_", "/modules/mod_", "/templates/"],
+    "drupal": ["/sites/default/", "/core/misc/", "/modules/contrib/", "/profiles/"],
+    "magento": ["/skin/frontend/", "/js/mage/", "/downloader/", "/app/etc/"],
+    "prestashop": ["/modules/ps_", "/themes/classic/", "/admin_ps/"],
+    "opencart": ["/catalog/view/", "/admin/view/", "/system/storage/"],
+}
+
+_SAAS_CMS_ANALYZE = {"shopify", "wix", "squarespace", "webflow", "blogger", "weebly", "hubspot"}
+
+
+def _summarize_cms(data: dict[str, list]) -> dict[str, Any]:
+    """Summarize CMS detection for attack surface output.
+
+    Counts CMS vs custom URLs and adds strategic notes.
+    """
+    cms_items = _extract_items(data.get("cms_detection"))
+    if not cms_items:
+        return {"detected": False}
+
+    cms_info = cms_items[0] if cms_items and isinstance(cms_items[0], dict) else {}
+    if not cms_info or not cms_info.get("cms_type"):
+        return {"detected": False}
+
+    cms_type = cms_info["cms_type"]
+    is_saas = cms_info.get("is_saas", cms_type in _SAAS_CMS_ANALYZE)
+
+    # Count CMS vs custom URLs
+    crawled = _extract_items(data.get("crawled_urls"))
+    cms_patterns = _CMS_URL_PATTERNS_ANALYZE.get(cms_type, [])
+    cms_url_count = 0
+    custom_url_count = 0
+
+    for entry in crawled:
+        url_str = entry.get("url", "") if isinstance(entry, dict) else str(entry)
+        url_lower = url_str.lower()
+        if any(pat in url_lower for pat in cms_patterns):
+            cms_url_count += 1
+        else:
+            custom_url_count += 1
+
+    result: dict[str, Any] = {
+        "detected": True,
+        "type": cms_type,
+        "version": cms_info.get("cms_version"),
+        "confidence": cms_info.get("confidence", "medium"),
+        "is_saas": is_saas,
+        "cms_urls": cms_url_count,
+        "custom_urls": custom_url_count,
+        "url_match_count": cms_info.get("url_match_count", 0),
+    }
+
+    if is_saas:
+        result["note"] = (
+            f"SaaS-hosted {cms_type} — limited attack surface. "
+            "Focus on custom integrations, API endpoints, and business logic."
+        )
+    else:
+        result["note"] = (
+            f"Self-hosted {cms_type} detected. "
+            f"CMS-specific nuclei templates and {'wpscan' if cms_type == 'wordpress' else 'CMS-targeted'} "
+            f"testing recommended. {custom_url_count} custom URLs available for generic injection testing."
+        )
+
+    return result
+
+
 # ===================================================================
 # PUBLIC API — Part 1 + 7: get_attack_surface
 # ===================================================================
@@ -2068,6 +2220,7 @@ async def get_attack_surface(workspace_id: str) -> dict[str, Any]:
         "forms_discovered": _summarize_forms(data),
         "parameter_classification": _summarize_param_classification(data),
         "directory_discovery": _summarize_dir_findings(data),
+        "cms_detected": _summarize_cms(data),
         "hidden_parameters": data.get("hidden_parameters", [])[:30],
         "reasoning_prompts": reasoning,
         "next_step": (

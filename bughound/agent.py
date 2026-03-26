@@ -520,7 +520,13 @@ async def run_agent(
         if not workspace_id:
             print(f"  {_C.DIM}[init]{_C.RESET} Classifying target and creating workspace...")
             workspace_id = await _run_stage0(target, depth)
+            # Show target type
+            from bughound.core import workspace as _ws
+            _meta = await _ws.get_workspace(workspace_id)
+            _ttype = getattr(_meta, "target_type", None) or "unknown"
+            _ttype_str = _ttype.value if hasattr(_ttype, "value") else str(_ttype)
             print(f"  {_C.DIM}[init]{_C.RESET} Workspace: {workspace_id}")
+            print(f"  {_C.DIM}[init]{_C.RESET} Target type: {_ttype_str}")
 
         # Stage 1: Enumerate
         print(f"  {_C.DIM}[enumerate]{_C.RESET} Running subdomain enumeration...")
@@ -963,18 +969,74 @@ async def _run_stage2(
     """Stage 2: Discovery (probe, crawl, JS analysis)."""
     from bughound.stages import discover as stage_discover
 
-    # Agent auto-selects top N hosts (no interactive prompt)
+    # Interactive host selection — same as CLI mode
     async def _auto_filter(live_hosts: list) -> list | None:
-        if len(live_hosts) <= max_hosts:
-            return None  # Scan all
-        selected = live_hosts[:max_hosts]
-        print(
-            f"  {_C.GREEN}[discover]{_C.RESET} "
-            f"Auto-selected {len(selected)} of {len(live_hosts)} live hosts"
-        )
-        for h in selected:
-            url = h.get("url", "?") if isinstance(h, dict) else str(h)
-            print(f"    {_C.DIM}{url}{_C.RESET}")
+        if len(live_hosts) <= 1:
+            return None  # Only 1 host, scan it
+
+        # Show live hosts list
+        print(f"\n  {_C.BOLD}Found {len(live_hosts)} live hosts:{_C.RESET}\n")
+        for i, h in enumerate(live_hosts[:30], 1):
+            if isinstance(h, dict):
+                url = h.get("url", "?")
+                status = h.get("status_code", "?")
+                title = h.get("title", "")
+                techs = h.get("technologies", [])
+                tech_str = f" [{', '.join(techs[:3])}]" if techs else ""
+            else:
+                url, status, title, tech_str = str(h), "?", "", ""
+
+            status_color = _C.GREEN if status == 200 else _C.YELLOW if status in (301, 302) else _C.RED
+            title_str = f" {title[:30]}" if title else ""
+            print(
+                f"  {_C.CYAN}{i:3d}{_C.RESET}. "
+                f"{status_color}[{status}]{_C.RESET} "
+                f"{url[:50]}"
+                f"{_C.DIM}{title_str}{tech_str}{_C.RESET}"
+            )
+
+        if len(live_hosts) > 30:
+            print(f"  {_C.DIM}... and {len(live_hosts) - 30} more{_C.RESET}")
+
+        print(f"\n  Options:")
+        print(f"    {_C.BOLD}3{_C.RESET}      — scan only host #3")
+        print(f"    {_C.BOLD}1,3,5{_C.RESET}  — scan specific hosts")
+        print(f"    {_C.BOLD}1-10{_C.RESET}   — scan hosts 1 through 10")
+        print(f"    {_C.BOLD}all{_C.RESET}    — scan all {len(live_hosts)} hosts")
+
+        try:
+            choice = input(f"\n  {_C.BOLD}Select [{_C.GREEN}all{_C.RESET}{_C.BOLD}]: {_C.RESET}").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+        if not choice or choice.lower() == "all":
+            return None
+
+        if "-" in choice and not choice.startswith("-"):
+            parts = choice.split("-")
+            try:
+                start = int(parts[0]) - 1
+                end = int(parts[1])
+                selected = live_hosts[start:end]
+            except (ValueError, IndexError):
+                return None
+        elif "," in choice:
+            try:
+                indices = [int(x.strip()) - 1 for x in choice.split(",")]
+                selected = [live_hosts[i] for i in indices if 0 <= i < len(live_hosts)]
+            except (ValueError, IndexError):
+                return None
+        else:
+            try:
+                n = int(choice)
+                if 1 <= n <= len(live_hosts):
+                    selected = [live_hosts[n - 1]]
+                else:
+                    return None
+            except ValueError:
+                return None
+
+        print(f"  {_C.GREEN}Selected {len(selected)} host(s) — continuing scan{_C.RESET}\n")
         return selected
 
     # Run synchronously with host filter + timeout

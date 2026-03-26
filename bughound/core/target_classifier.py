@@ -25,10 +25,77 @@ _CIDR_RE = re.compile(
     r"(?:25[0-5]|2[0-4]\d|[01]?\d\d?)/\d{1,2}$"
 )
 
-# A "root-ish" domain: no subdomain prefix (just one dot separating name.tld)
-# or a wildcard domain like *.example.com
-_ROOT_DOMAIN_RE = re.compile(
-    r"^(\*\.)?[a-z0-9-]+\.[a-z]{2,}$", re.IGNORECASE
+# Country-code second-level domains (ccSLDs) — these are effectively TLDs.
+# example.gov.mm, example.co.uk, example.com.au are root domains, not subdomains.
+_CC_SLDS = frozenset({
+    "co.uk", "org.uk", "me.uk", "ac.uk", "gov.uk", "net.uk",
+    "co.jp", "or.jp", "ne.jp", "ac.jp", "go.jp",
+    "co.kr", "or.kr", "go.kr", "ac.kr",
+    "com.au", "net.au", "org.au", "edu.au", "gov.au",
+    "co.nz", "net.nz", "org.nz", "govt.nz",
+    "co.in", "net.in", "org.in", "ac.in", "gov.in", "edu.in",
+    "com.br", "net.br", "org.br", "gov.br", "edu.br",
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
+    "co.za", "net.za", "org.za", "gov.za", "ac.za",
+    "com.mx", "net.mx", "org.mx", "gob.mx", "edu.mx",
+    "com.sg", "net.sg", "org.sg", "edu.sg", "gov.sg",
+    "com.my", "net.my", "org.my", "edu.my", "gov.my",
+    "com.ph", "net.ph", "org.ph", "edu.ph", "gov.ph",
+    "com.tw", "net.tw", "org.tw", "edu.tw", "gov.tw",
+    "co.th", "or.th", "ac.th", "go.th", "in.th",
+    "com.vn", "net.vn", "org.vn", "edu.vn", "gov.vn",
+    "gov.mm", "edu.mm", "net.mm", "org.mm", "com.mm",
+    "co.id", "or.id", "ac.id", "go.id", "web.id",
+    "com.tr", "net.tr", "org.tr", "edu.tr", "gov.tr",
+    "co.il", "org.il", "ac.il", "gov.il",
+    "com.ar", "net.ar", "org.ar", "gov.ar", "edu.ar",
+    "com.hk", "net.hk", "org.hk", "edu.hk", "gov.hk",
+    "com.pk", "net.pk", "org.pk", "edu.pk", "gov.pk",
+    "com.bd", "net.bd", "org.bd", "edu.bd", "gov.bd",
+    "com.ng", "net.ng", "org.ng", "edu.ng", "gov.ng",
+    "com.eg", "net.eg", "org.eg", "edu.eg", "gov.eg",
+    "com.sa", "net.sa", "org.sa", "edu.sa", "gov.sa",
+    "com.pe", "net.pe", "org.pe", "edu.pe", "gob.pe",
+    "com.co", "net.co", "org.co", "edu.co", "gov.co",
+    "or.ke", "co.ke", "ac.ke", "go.ke",
+})
+
+
+def _is_root_domain(hostname: str) -> bool:
+    """Check if hostname is a root domain (not a subdomain).
+
+    Handles ccSLDs: example.gov.mm → root domain, sub.example.gov.mm → subdomain.
+    """
+    hostname = hostname.removeprefix("*.")
+    parts = hostname.lower().split(".")
+
+    if len(parts) == 2:
+        # example.com → root domain
+        return True
+
+    if len(parts) == 3:
+        # Check if last 2 parts are a ccSLD
+        suffix = f"{parts[-2]}.{parts[-1]}"
+        if suffix in _CC_SLDS:
+            # example.gov.mm → root domain (3 parts but ccSLD)
+            return True
+        # pro.odaha.io → subdomain (3 parts, not ccSLD)
+        return False
+
+    if len(parts) == 4:
+        # Check if last 2 parts are a ccSLD
+        suffix = f"{parts[-2]}.{parts[-1]}"
+        if suffix in _CC_SLDS:
+            # sub.example.gov.mm → subdomain
+            return False
+        return False
+
+    return False
+
+
+# Wildcard or bare domain pattern (just validates characters)
+_DOMAIN_CHARS_RE = re.compile(
+    r"^(\*\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$", re.IGNORECASE
 )
 
 ALL_STAGES = [0, 1, 2, 3, 4, 5, 6]
@@ -113,7 +180,7 @@ def classify(target: str, depth: str = "light") -> TargetClassification:
         )
 
     # --- Broad domain: root domain or wildcard ---
-    if _ROOT_DOMAIN_RE.match(cleaned):
+    if _DOMAIN_CHARS_RE.match(cleaned) and _is_root_domain(cleaned):
         # Strip wildcard prefix for normalized form
         norm = cleaned.removeprefix("*.")
         return TargetClassification(

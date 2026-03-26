@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Any
 from urllib.parse import urlparse
 
+import aiohttp
 import structlog
 
 from bughound.core import workspace
@@ -407,6 +408,52 @@ async def _run_discover(
     else:
         url_tool_counts["crawler"] = -1
         warnings.append("No crawler installed (katana or gospider) — active crawling skipped.")
+
+    # Wayback Machine URLs (pure Python, runs alongside other sources)
+    if progress_cb:
+        await progress_cb(33, "Fetching Wayback Machine URLs", "wayback_cdx")
+    target_domain = meta.target.replace("http://", "").replace("https://", "").strip("/")
+    wayback_urls_found: list[str] = []
+    try:
+        async with aiohttp.ClientSession() as _wb_session:
+            wayback_urls_found = await _fetch_wayback_urls(target_domain, _wb_session)
+            for wb_url in wayback_urls_found:
+                all_urls.append({"url": wb_url, "source": "wayback_cdx"})
+            url_tool_counts["wayback_cdx"] = len(wayback_urls_found)
+    except Exception as exc:
+        warnings.append(f"Wayback Machine CDX fetch failed: {exc}")
+
+    # Save wayback URLs to workspace
+    if wayback_urls_found:
+        await workspace.write_data(
+            workspace_id, "urls/wayback.json",
+            [{"url": u, "source": "wayback_cdx"} for u in wayback_urls_found],
+            generated_by="wayback_cdx", target=target_label,
+        )
+        files_written.append("urls/wayback.json")
+
+    # OpenAPI/Swagger spec extraction (pure Python)
+    if progress_cb:
+        await progress_cb(34, "Checking for OpenAPI/Swagger specs", "openapi_spec")
+    openapi_spec_endpoints: list[dict[str, Any]] = []
+    try:
+        async with aiohttp.ClientSession() as _oa_session:
+            for ct in crawl_targets[:5]:
+                spec_eps = await _fetch_openapi_spec(ct, _oa_session)
+                openapi_spec_endpoints.extend(spec_eps)
+                for ep in spec_eps:
+                    all_urls.append({"url": ep["url"], "source": "openapi"})
+            url_tool_counts["openapi_spec"] = len(openapi_spec_endpoints)
+    except Exception as exc:
+        warnings.append(f"OpenAPI spec extraction failed: {exc}")
+
+    # Save OpenAPI-discovered endpoints to workspace
+    if openapi_spec_endpoints:
+        await workspace.write_data(
+            workspace_id, "endpoints/openapi_specs.json", openapi_spec_endpoints,
+            generated_by="openapi_spec_extractor", target=target_label,
+        )
+        files_written.append("endpoints/openapi_specs.json")
 
     # Form extraction — pure Python crawler for forms
     extracted_forms: list[dict[str, Any]] = list(katana_forms)
@@ -1079,6 +1126,16 @@ async def _run_discover(
         param_classification = {}
 
     # ===================================================================
+    # Phase 2I: CMS Detection
+    # ===================================================================
+    if progress_cb:
+        await progress_cb(96, "Detecting CMS platforms", "cms_detection")
+
+    cms_info = await _detect_cms(workspace_id, unique_urls, flagged_hosts, target_label)
+    if cms_info:
+        files_written.append("hosts/cms_detection.json")
+
+    # ===================================================================
     # Finalize
     # ===================================================================
     if progress_cb:
@@ -1234,6 +1291,7 @@ async def _run_discover(
             "flag_distribution": dict(flag_dist.most_common(15)),
             "majority_cdn": majority_cdn,
             "httpx_time": f"{httpx_result.execution_time_seconds}s",
+            "cms_detected": cms_info if cms_info else None,
         },
         "warnings": warnings,
         "next_step": (
@@ -1452,68 +1510,351 @@ def _extract_parameters(urls: list[dict[str, str]]) -> list[dict[str, Any]]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# CMS Detection
+# ---------------------------------------------------------------------------
+
+_CMS_URL_PATTERNS: dict[str, list[str]] = {
+    "wordpress": ["/wp-content/", "/wp-includes/", "/wp-json/", "/wp-login.php", "/xmlrpc.php", "/wp-admin/"],
+    "joomla": ["/administrator/", "/components/com_", "/modules/mod_", "/templates/"],
+    "drupal": ["/sites/default/", "/core/misc/", "/modules/contrib/", "/profiles/"],
+    "magento": ["/skin/frontend/", "/js/mage/", "/downloader/", "/app/etc/"],
+    "prestashop": ["/modules/ps_", "/themes/classic/", "/admin_ps/"],
+    "opencart": ["/catalog/view/", "/admin/view/", "/system/storage/"],
+}
+
+_CMS_TECH_KEYWORDS: dict[str, list[str]] = {
+    "wordpress": ["wordpress", "wp-"],
+    "joomla": ["joomla"],
+    "drupal": ["drupal"],
+    "magento": ["magento", "adobe commerce"],
+    "prestashop": ["prestashop"],
+    "opencart": ["opencart"],
+    "shopify": ["shopify"],
+    "wix": ["wix"],
+    "squarespace": ["squarespace"],
+    "ghost": ["ghost"],
+}
+
+_SAAS_CMS = {"shopify", "wix", "squarespace", "webflow", "blogger", "weebly", "hubspot"}
+
+
+async def _detect_cms(
+    workspace_id: str,
+    urls: list[dict[str, str]],
+    flagged_hosts: list[dict[str, Any]],
+    target_label: str,
+) -> dict[str, Any] | None:
+    """Detect CMS from crawled URLs and httpx technologies.
+
+    Saves result to hosts/cms_detection.json and returns the detection dict,
+    or None if no CMS was detected.
+    """
+    # Count URL matches per CMS
+    cms_url_counts: Counter[str] = Counter()
+    for entry in urls:
+        url_str = entry.get("url", "") if isinstance(entry, dict) else str(entry)
+        url_lower = url_str.lower()
+        for cms_name, patterns in _CMS_URL_PATTERNS.items():
+            for pattern in patterns:
+                if pattern in url_lower:
+                    cms_url_counts[cms_name] += 1
+                    break  # count each URL once per CMS
+
+    # Check httpx technologies
+    cms_tech_matches: dict[str, list[str]] = {}
+    for host in flagged_hosts:
+        techs = host.get("technologies") or []
+        techs_lower = " ".join(techs).lower()
+        for cms_name, keywords in _CMS_TECH_KEYWORDS.items():
+            for kw in keywords:
+                if kw in techs_lower:
+                    cms_tech_matches.setdefault(cms_name, []).append(
+                        host.get("host", host.get("url", ""))
+                    )
+                    break
+
+    # Determine best CMS match
+    best_cms: str | None = None
+    best_score = 0
+    evidence_parts: list[str] = []
+
+    # URL-based detection
+    for cms_name, count in cms_url_counts.most_common(3):
+        score = count
+        if cms_name in cms_tech_matches:
+            score += 100  # tech detection is strong signal
+        if score > best_score:
+            best_score = score
+            best_cms = cms_name
+
+    # Tech-only detection (no URL matches needed for SaaS CMS)
+    if not best_cms:
+        for cms_name, hosts_list in cms_tech_matches.items():
+            if len(hosts_list) > 0:
+                best_cms = cms_name
+                best_score = 100
+                break
+
+    if not best_cms:
+        return None
+
+    # Determine confidence
+    url_count = cms_url_counts.get(best_cms, 0)
+    has_tech_match = best_cms in cms_tech_matches
+    if url_count >= 5 and has_tech_match:
+        confidence = "high"
+    elif url_count >= 5 or has_tech_match:
+        confidence = "high"
+    elif url_count >= 2:
+        confidence = "medium"
+    else:
+        confidence = "low"
+
+    if url_count > 0:
+        evidence_parts.append(f"{url_count} URLs matching {best_cms} patterns")
+    if has_tech_match:
+        tech_hosts = cms_tech_matches[best_cms]
+        evidence_parts.append(
+            f"Technology detected on {len(tech_hosts)} host(s): {', '.join(tech_hosts[:3])}"
+        )
+
+    # Extract version from technologies if available
+    cms_version: str | None = None
+    for host in flagged_hosts:
+        techs = host.get("technologies") or []
+        for tech in techs:
+            tech_lower = tech.lower()
+            if best_cms.lower() in tech_lower and any(c.isdigit() for c in tech):
+                # Extract version string (e.g. "WordPress 6.4.2" -> "6.4.2")
+                parts = tech.split()
+                for p in parts:
+                    if p and p[0].isdigit():
+                        cms_version = p
+                        break
+                if cms_version:
+                    break
+        if cms_version:
+            break
+
+    is_saas = best_cms in _SAAS_CMS
+
+    cms_info = {
+        "cms_type": best_cms,
+        "cms_version": cms_version,
+        "confidence": confidence,
+        "evidence": "; ".join(evidence_parts),
+        "is_saas": is_saas,
+        "url_match_count": url_count,
+        "tech_match_hosts": len(cms_tech_matches.get(best_cms, [])),
+        "all_cms_detected": {
+            name: {"url_matches": cms_url_counts.get(name, 0), "tech_matches": len(cms_tech_matches.get(name, []))}
+            for name in set(list(cms_url_counts.keys()) + list(cms_tech_matches.keys()))
+        },
+    }
+
+    await workspace.write_data(
+        workspace_id, "hosts/cms_detection.json", [cms_info],
+        generated_by="cms_detector", target=target_label,
+    )
+
+    logger.info(
+        "discover.cms_detected",
+        cms=best_cms,
+        version=cms_version,
+        confidence=confidence,
+        url_matches=url_count,
+        is_saas=is_saas,
+    )
+
+    return cms_info
+
+
+async def _fetch_sitemap(base_url: str, session: aiohttp.ClientSession) -> list[str]:
+    """Extract URLs from sitemap.xml."""
+    urls: list[str] = []
+    for path in ["/sitemap.xml", "/sitemap_index.xml", "/sitemap1.xml"]:
+        try:
+            async with session.get(
+                f"{base_url.rstrip('/')}{path}",
+                ssl=False,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    text = await resp.text(errors="replace")
+                    # Extract <loc>...</loc> tags
+                    locs = re.findall(r'<loc>(.*?)</loc>', text, re.I)
+                    urls.extend(locs)
+        except Exception:
+            pass
+    return urls
+
+
+async def _fetch_robots_txt(base_url: str, session: aiohttp.ClientSession) -> list[str]:
+    """Extract disallowed paths from robots.txt."""
+    paths: list[str] = []
+    try:
+        async with session.get(
+            f"{base_url.rstrip('/')}/robots.txt",
+            ssl=False,
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status == 200:
+                text = await resp.text(errors="replace")
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith("disallow:") or line.lower().startswith("allow:"):
+                        path = line.split(":", 1)[1].strip()
+                        if path and path != "/" and not path.startswith("#"):
+                            full_url = f"{base_url.rstrip('/')}{path}"
+                            paths.append(full_url)
+                    elif line.lower().startswith("sitemap:"):
+                        sitemap_url = line.split(":", 1)[1].strip()
+                        if sitemap_url.startswith("http"):
+                            paths.append(sitemap_url)
+    except Exception:
+        pass
+    return paths
+
+
 async def _fetch_robots_sitemap(base_url: str) -> list[dict[str, Any]]:
-    """Fetch and parse robots.txt + sitemap.xml from a host."""
-    import aiohttp
+    """Fetch and parse robots.txt + sitemap.xml from a host.
+
+    Uses the enhanced _fetch_sitemap and _fetch_robots_txt helpers to
+    check multiple sitemap paths and extract Allow/Disallow/Sitemap directives.
+    """
+    import aiohttp as _aiohttp
 
     results: list[dict[str, Any]] = []
     base = base_url.rstrip("/")
 
-    # robots.txt
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{base}/robots.txt",
-                timeout=aiohttp.ClientTimeout(total=8),
-                ssl=False,
-            ) as resp:
-                if resp.status == 200:
-                    body = await resp.text(errors="replace")
-                    for line in body.splitlines():
-                        line = line.strip()
-                        if line.lower().startswith("disallow:"):
-                            path = line.split(":", 1)[1].strip()
-                            if path and path != "/":
-                                results.append({
-                                    "host": base,
-                                    "type": "disallowed",
-                                    "value": path,
-                                })
-                        elif line.lower().startswith("sitemap:"):
-                            sitemap_url = line.split(":", 1)[1].strip()
-                            # Handle "Sitemap: https://..." where split on : cuts the URL
-                            if not sitemap_url.startswith("http"):
-                                sitemap_url = line.split(" ", 1)[1].strip()
-                            results.append({
-                                "host": base,
-                                "type": "sitemap_ref",
-                                "value": sitemap_url,
-                            })
-    except Exception:
-        pass
+        async with _aiohttp.ClientSession() as session:
+            # Fetch robots.txt paths (Disallow, Allow, Sitemap refs)
+            robots_urls = await _fetch_robots_txt(base, session)
+            for url_or_path in robots_urls:
+                if url_or_path.startswith("http"):
+                    # Sitemap reference
+                    results.append({
+                        "host": base,
+                        "type": "sitemap_ref",
+                        "value": url_or_path,
+                    })
+                else:
+                    # Full URL constructed from a Disallow/Allow path
+                    # Extract path portion back out for the legacy format
+                    path = url_or_path.replace(base, "", 1) or url_or_path
+                    results.append({
+                        "host": base,
+                        "type": "disallowed",
+                        "value": path,
+                    })
 
-    # sitemap.xml
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                f"{base}/sitemap.xml",
-                timeout=aiohttp.ClientTimeout(total=8),
-                ssl=False,
-            ) as resp:
-                if resp.status == 200:
-                    body = await resp.text(errors="replace")
-                    # Simple regex extraction of <loc> tags
-                    import re
-                    for match in re.finditer(r"<loc>\s*(https?://[^<]+)\s*</loc>", body):
-                        results.append({
-                            "host": base,
-                            "type": "sitemap_url",
-                            "value": match.group(1).strip(),
-                        })
+            # Fetch sitemap URLs from multiple sitemap paths
+            sitemap_urls = await _fetch_sitemap(base, session)
+            for loc_url in sitemap_urls:
+                results.append({
+                    "host": base,
+                    "type": "sitemap_url",
+                    "value": loc_url.strip(),
+                })
     except Exception:
         pass
 
     return results
+
+
+async def _fetch_openapi_spec(
+    base_url: str, session: aiohttp.ClientSession,
+) -> list[dict[str, Any]]:
+    """Try common OpenAPI/Swagger paths and extract endpoints."""
+    import json as _json
+
+    spec_paths = [
+        "/swagger.json", "/swagger/v1/swagger.json",
+        "/v2/api-docs", "/v3/api-docs",
+        "/openapi.json", "/openapi.yaml",
+        "/api-docs", "/api/swagger.json",
+        "/api/docs", "/docs/api",
+    ]
+    endpoints: list[dict[str, Any]] = []
+    for path in spec_paths:
+        try:
+            url = f"{base_url.rstrip('/')}{path}"
+            async with session.get(
+                url, ssl=False, timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    text = await resp.text(errors="replace")
+                    if '"paths"' in text or '"openapi"' in text or '"swagger"' in text:
+                        try:
+                            spec = _json.loads(text)
+                            paths = spec.get("paths", {})
+                            for api_path, methods in paths.items():
+                                if isinstance(methods, dict):
+                                    for method in methods:
+                                        if method.lower() in (
+                                            "get", "post", "put", "delete", "patch",
+                                        ):
+                                            full_url = f"{base_url.rstrip('/')}{api_path}"
+                                            endpoints.append({
+                                                "url": full_url,
+                                                "method": method.upper(),
+                                                "source": "openapi",
+                                            })
+                        except _json.JSONDecodeError:
+                            pass
+        except Exception:
+            pass
+    return endpoints
+
+
+async def _fetch_wayback_urls(
+    domain: str, session: aiohttp.ClientSession, limit: int = 5000,
+) -> list[str]:
+    """Fetch historical URLs using waybackurls binary (preferred) or CDX API fallback."""
+    # Prefer waybackurls binary — it queries Wayback + Common Crawl + OTX
+    if tool_runner.is_available("waybackurls"):
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "waybackurls",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(input=domain.encode()), timeout=120,
+            )
+            if stdout:
+                urls = []
+                for line in stdout.decode(errors="replace").splitlines():
+                    line = line.strip()
+                    if line.startswith("http"):
+                        urls.append(line)
+                if urls:
+                    return urls[:limit]
+        except Exception:
+            pass
+
+    # Fallback: pure-Python CDX API
+    urls: list[str] = []
+    try:
+        cdx_url = (
+            f"http://web.archive.org/cdx/search/cdx"
+            f"?url=*.{domain}/*&output=text&fl=original&collapse=urlkey&limit={limit}"
+        )
+        async with session.get(
+            cdx_url, timeout=aiohttp.ClientTimeout(total=60),
+        ) as resp:
+            if resp.status == 200:
+                text = await resp.text(errors="replace")
+                for line in text.splitlines():
+                    line = line.strip()
+                    if line.startswith("http"):
+                        urls.append(line)
+    except Exception:
+        pass
+    return urls
 
 
 def _error(error_type: str, message: str) -> dict[str, Any]:

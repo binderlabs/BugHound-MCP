@@ -17,6 +17,59 @@ from bughound.core import tool_runner, workspace
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
+# CMS URL filtering — skip CMS static paths from generic injection testing
+# ---------------------------------------------------------------------------
+
+_CMS_SKIP_PATHS: dict[str, list[str]] = {
+    "wordpress": [
+        "/wp-content/themes/", "/wp-content/plugins/", "/wp-includes/",
+        "/wp-admin/css/", "/wp-admin/js/", "/wp-admin/images/",
+    ],
+    "joomla": ["/media/", "/templates/", "/components/com_", "/modules/mod_"],
+    "drupal": ["/sites/default/files/", "/core/", "/modules/contrib/"],
+    "magento": ["/skin/", "/js/mage/", "/media/catalog/"],
+}
+
+# Cache: loaded once per workspace
+_cms_filter_cache: dict[str, list[str]] = {}
+
+
+async def _get_cms_skip_paths(workspace_id: str) -> list[str]:
+    """Load CMS skip paths for this workspace. Cached after first call."""
+    if workspace_id in _cms_filter_cache:
+        return _cms_filter_cache[workspace_id]
+
+    skip = []
+    try:
+        raw = await workspace.read_data(workspace_id, "hosts/cms_detection.json")
+        items = _extract_items(raw)
+        if items and isinstance(items[0], dict):
+            cms_type = items[0].get("cms_type", "")
+            skip = _CMS_SKIP_PATHS.get(cms_type, [])
+    except Exception:
+        pass
+
+    _cms_filter_cache[workspace_id] = skip
+    return skip
+
+
+def _filter_cms_urls(urls: list[str], skip_paths: list[str]) -> list[str]:
+    """Remove CMS static URLs from list. Keep URLs with query params."""
+    if not skip_paths:
+        return urls
+    filtered = []
+    for url in urls:
+        # Always keep URLs with query params — they're dynamic
+        if "?" in url:
+            filtered.append(url)
+            continue
+        path_lower = url.lower()
+        if not any(sp in path_lower for sp in skip_paths):
+            filtered.append(url)
+    return filtered
+
+
+# ---------------------------------------------------------------------------
 # Technique registry
 # ---------------------------------------------------------------------------
 
@@ -172,7 +225,34 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "requires_tools": [],
         "requires_data": ["technologies.WordPress"],
         "vuln_classes": ["wordpress"],
-        "description": "Test xmlrpc, user enum, plugin enum, debug log exposure",
+        "description": "Test xmlrpc, user enum, plugin enum, debug log, config backups, uploads dir, install.php, wp-cron, version disclosure, wpscan",
+    },
+    {
+        "id": "joomla_test",
+        "name": "Joomla Security Testing",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["technologies.Joomla"],
+        "vuln_classes": ["joomla"],
+        "description": "Test administrator panel, configuration.php backups, version disclosure, Joomla 4+ API",
+    },
+    {
+        "id": "drupal_test",
+        "name": "Drupal Security Testing",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["technologies.Drupal"],
+        "vuln_classes": ["drupal"],
+        "description": "Test CHANGELOG.txt, user/register, admin/config, settings.php backups, install.php",
+    },
+    {
+        "id": "magento_test",
+        "name": "Magento Security Testing",
+        "phase": "4E",
+        "requires_tools": [],
+        "requires_data": ["technologies.Magento"],
+        "vuln_classes": ["magento"],
+        "description": "Test version disclosure, downloader, admin paths, local.xml config exposure",
     },
     {
         "id": "spring_actuator_test",
@@ -408,6 +488,24 @@ TECHNIQUE_REGISTRY: list[dict[str, Any]] = [
         "vuln_classes": ["xxe"],
         "description": "Test for XXE via XML/SOAP POST with file:// entity injection",
     },
+    {
+        "id": "sqli_auth_bypass_test",
+        "name": "SQLi Authentication Bypass",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["auth_discovery"],
+        "vuln_classes": ["sqli_auth_bypass"],
+        "description": "Test login forms with SQL injection payloads to bypass authentication",
+    },
+    {
+        "id": "git_exposure_test",
+        "name": "Git/Env File Exposure",
+        "phase": "4D",
+        "requires_tools": [],
+        "requires_data": ["live_hosts"],
+        "vuln_classes": ["info_leak"],
+        "description": "Check for exposed .git directory and .env files",
+    },
 ]
 
 # Test class → technique ID mapping
@@ -428,10 +526,14 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "content_discovery": ["deep_dirfuzz"],
     "param_discovery": ["deep_param_discovery"],
     "wordpress": ["nuclei_scan", "wordpress_test"],
+    "joomla": ["nuclei_scan", "joomla_test"],
+    "drupal": ["nuclei_scan", "drupal_test"],
+    "magento": ["nuclei_scan", "magento_test"],
     "spring": ["nuclei_scan", "spring_actuator_test"],
     "subdomain_takeover": ["nuclei_scan"],
     "misconfig": ["nuclei_scan", "security_headers_check", "transport_security_check"],
-    "default_creds": ["nuclei_scan", "default_credentials_test"],
+    "default_creds": ["nuclei_scan", "default_credentials_test", "sqli_auth_bypass_test"],
+    "sqli_auth_bypass": ["sqli_auth_bypass_test"],
     "file_exposure": ["nuclei_scan"],
     "rce": ["nuclei_scan", "rce_test", "post_rce"],
     "deserialization": ["cookie_deserialization", "viewstate_mac_check"],
@@ -444,7 +546,7 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
     "cve_specific": ["nuclei_scan"],
     "nuclei_general": ["nuclei_scan"],
     "prototype_pollution": ["prototype_pollution_test"],
-    "info_leak": ["sensitive_leakage_test", "version_disclosure_check", "pii_html_leakage"],
+    "info_leak": ["sensitive_leakage_test", "version_disclosure_check", "pii_html_leakage", "git_exposure_test"],
     "vulnerable_component": ["vulnerable_components_check"],
     "xxe": ["xxe_test"],
 }
@@ -520,9 +622,25 @@ def _get_param_candidates(
 
 
 async def _load_param_classification(workspace_id: str) -> list[Any]:
-    """Load parameter classification from workspace."""
+    """Load parameter classification from workspace, filtered for CMS static URLs."""
     raw = await workspace.read_data(workspace_id, "urls/parameter_classification.json")
-    return _extract_items(raw)
+    items = _extract_items(raw)
+
+    # Apply CMS URL filtering — skip static CMS paths from injection testing
+    skip_paths = await _get_cms_skip_paths(workspace_id)
+    if skip_paths and items:
+        original_count = len(items)
+        items = [
+            item for item in items
+            if not isinstance(item, dict)
+            or "?" in item.get("url", "")  # keep parameterized URLs
+            or not any(sp in item.get("url", "").lower() for sp in skip_paths)
+        ]
+        filtered = original_count - len(items)
+        if filtered > 0:
+            logger.info("cms_url_filter", filtered=filtered, remaining=len(items))
+
+    return items
 
 
 async def _filter_to_scope(
@@ -654,6 +772,12 @@ async def execute_technique(
         return await _exec_dirfuzz(workspace_id, approved_hosts)
     elif technique_id == "wordpress_test":
         return await _exec_wordpress(workspace_id, approved_hosts)
+    elif technique_id == "joomla_test":
+        return await _exec_joomla(workspace_id, approved_hosts)
+    elif technique_id == "drupal_test":
+        return await _exec_drupal(workspace_id, approved_hosts)
+    elif technique_id == "magento_test":
+        return await _exec_magento(workspace_id, approved_hosts)
     elif technique_id == "spring_actuator_test":
         return await _exec_spring_actuator(workspace_id, approved_hosts)
     elif technique_id == "cookie_sqli":
@@ -702,8 +826,12 @@ async def execute_technique(
         return await _exec_viewstate_mac(workspace_id, approved_hosts)
     elif technique_id == "default_credentials_test":
         return await _exec_default_credentials(workspace_id, approved_hosts)
+    elif technique_id == "sqli_auth_bypass_test":
+        return await _exec_sqli_auth_bypass(workspace_id, approved_hosts)
     elif technique_id == "xxe_test":
         return await _exec_xxe(workspace_id, approved_hosts, concurrency)
+    elif technique_id == "git_exposure_test":
+        return await _exec_git_exposure(workspace_id, approved_hosts)
     else:
         logger.warning("technique.unknown", technique_id=technique_id)
         return []
@@ -1489,7 +1617,7 @@ async def _exec_dirfuzz(
 async def _exec_wordpress(
     workspace_id: str, approved_hosts: set[str],
 ) -> list[dict[str, Any]]:
-    """WordPress-specific checks via aiohttp."""
+    """WordPress-specific checks via aiohttp + optional wpscan."""
     import aiohttp as _aiohttp
 
     raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
@@ -1497,13 +1625,25 @@ async def _exec_wordpress(
 
     findings: list[dict[str, Any]] = []
     timeout = _aiohttp.ClientTimeout(total=10)
+    _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    # Also check CMS detection data (host may not have wordpress in techs
+    # but was detected via URL patterns)
+    cms_raw = await workspace.read_data(workspace_id, "hosts/cms_detection.json")
+    cms_items = _extract_items(cms_raw)
+    cms_is_wp = False
+    if cms_items:
+        cms_info = cms_items[0] if isinstance(cms_items[0], dict) else {}
+        cms_is_wp = cms_info.get("cms_type") == "wordpress"
 
     async with _aiohttp.ClientSession() as session:
         for h in hosts:
             host = (h.get("host") or "").lower()
             url = h.get("url", "")
             techs = " ".join(h.get("technologies", [])).lower()
-            if not url or host not in approved_hosts or "wordpress" not in techs:
+            if not url or host not in approved_hosts:
+                continue
+            if "wordpress" not in techs and not cms_is_wp:
                 continue
 
             base = url.rstrip("/")
@@ -1513,7 +1653,7 @@ async def _exec_wordpress(
                 async with session.post(
                     f"{base}/xmlrpc.php",
                     data='<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>',
-                    headers={"Content-Type": "text/xml"},
+                    headers={"Content-Type": "text/xml", "User-Agent": _UA},
                     ssl=False, timeout=timeout,
                 ) as resp:
                     if resp.status == 200:
@@ -1538,6 +1678,7 @@ async def _exec_wordpress(
             try:
                 async with session.get(
                     f"{base}/wp-json/wp/v2/users",
+                    headers={"User-Agent": _UA},
                     ssl=False, timeout=timeout,
                 ) as resp:
                     if resp.status == 200:
@@ -1562,6 +1703,7 @@ async def _exec_wordpress(
             try:
                 async with session.get(
                     f"{base}/wp-content/debug.log",
+                    headers={"User-Agent": _UA},
                     ssl=False, timeout=timeout,
                 ) as resp:
                     if resp.status == 200:
@@ -1575,6 +1717,603 @@ async def _exec_wordpress(
                                 "endpoint": f"{base}/wp-content/debug.log",
                                 "severity": "medium",
                                 "description": "WordPress debug.log exposed — potential info disclosure",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Test wp-config.php backup files
+            _WP_CONFIG_BACKUPS = [
+                "wp-config.php.bak", "wp-config.php~", "wp-config.php.old",
+                "wp-config.php.save", "wp-config.php.swp", "wp-config.php.txt",
+                "wp-config.bak", "wp-config.old", "wp-config.txt",
+            ]
+            for bak in _WP_CONFIG_BACKUPS:
+                try:
+                    async with session.get(
+                        f"{base}/{bak}",
+                        headers={"User-Agent": _UA},
+                        ssl=False, timeout=timeout,
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.text(errors="replace")
+                            if "DB_NAME" in body or "DB_PASSWORD" in body or "AUTH_KEY" in body:
+                                findings.append({
+                                    "vulnerability_class": "wordpress",
+                                    "tool": "wordpress_tester",
+                                    "technique_id": "wordpress_test",
+                                    "host": host,
+                                    "endpoint": f"{base}/{bak}",
+                                    "severity": "critical",
+                                    "description": f"WordPress config backup exposed: {bak}",
+                                    "evidence": body[:300],
+                                    "confidence": "high",
+                                    "needs_validation": False,
+                                })
+                                break  # one backup is enough
+                except Exception:
+                    pass
+
+            # Test /wp-content/uploads/ directory listing
+            try:
+                async with session.get(
+                    f"{base}/wp-content/uploads/",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "<title>Index of" in body or "Parent Directory" in body:
+                            findings.append({
+                                "vulnerability_class": "wordpress",
+                                "tool": "wordpress_tester",
+                                "technique_id": "wordpress_test",
+                                "host": host,
+                                "endpoint": f"{base}/wp-content/uploads/",
+                                "severity": "low",
+                                "description": "WordPress uploads directory listing enabled",
+                                "evidence": "Directory listing detected at /wp-content/uploads/",
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Test /wp-admin/install.php accessible
+            try:
+                async with session.get(
+                    f"{base}/wp-admin/install.php",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "WordPress" in body and ("install" in body.lower() or "setup" in body.lower()):
+                            findings.append({
+                                "vulnerability_class": "wordpress",
+                                "tool": "wordpress_tester",
+                                "technique_id": "wordpress_test",
+                                "host": host,
+                                "endpoint": f"{base}/wp-admin/install.php",
+                                "severity": "high",
+                                "description": "WordPress installation page accessible — potential full takeover",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Test wp-cron.php accessible
+            try:
+                async with session.get(
+                    f"{base}/wp-cron.php",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        findings.append({
+                            "vulnerability_class": "wordpress",
+                            "tool": "wordpress_tester",
+                            "technique_id": "wordpress_test",
+                            "host": host,
+                            "endpoint": f"{base}/wp-cron.php",
+                            "severity": "low",
+                            "description": "WordPress wp-cron.php accessible — potential DoS vector",
+                            "evidence": f"wp-cron.php returned status {resp.status}",
+                            "confidence": "high",
+                            "needs_validation": False,
+                        })
+            except Exception:
+                pass
+
+            # Extract WordPress version from /feed/ RSS
+            try:
+                async with session.get(
+                    f"{base}/feed/",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        import re as _re
+                        ver_match = _re.search(
+                            r'<generator>https?://wordpress\.org/\?v=([\d.]+)</generator>',
+                            body,
+                        )
+                        if ver_match:
+                            wp_ver = ver_match.group(1)
+                            findings.append({
+                                "vulnerability_class": "wordpress",
+                                "tool": "wordpress_tester",
+                                "technique_id": "wordpress_test",
+                                "host": host,
+                                "endpoint": f"{base}/feed/",
+                                "severity": "info",
+                                "description": f"WordPress version {wp_ver} disclosed in RSS feed",
+                                "evidence": f"Version {wp_ver} found via RSS generator tag",
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Run wpscan if available
+            try:
+                from bughound.tools.scanning import wpscan
+                if wpscan.is_available():
+                    import os
+                    wp_token = os.environ.get("WPSCAN_API_TOKEN")
+                    wp_result = await wpscan.execute(base, api_token=wp_token, timeout=300)
+                    if wp_result.success and wp_result.results:
+                        for r in wp_result.results:
+                            if isinstance(r, dict):
+                                findings.append(r)
+            except Exception:
+                pass
+
+    return findings
+
+
+async def _exec_joomla(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Joomla-specific checks via aiohttp."""
+    import aiohttp as _aiohttp
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    # Also check CMS detection
+    cms_raw = await workspace.read_data(workspace_id, "hosts/cms_detection.json")
+    cms_items = _extract_items(cms_raw)
+    cms_is_joomla = False
+    if cms_items:
+        cms_info = cms_items[0] if isinstance(cms_items[0], dict) else {}
+        cms_is_joomla = cms_info.get("cms_type") == "joomla"
+
+    findings: list[dict[str, Any]] = []
+    timeout = _aiohttp.ClientTimeout(total=10)
+    _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    async with _aiohttp.ClientSession() as session:
+        for h in hosts:
+            host = (h.get("host") or "").lower()
+            url = h.get("url", "")
+            techs = " ".join(h.get("technologies", [])).lower()
+            if not url or host not in approved_hosts:
+                continue
+            if "joomla" not in techs and not cms_is_joomla:
+                continue
+
+            base = url.rstrip("/")
+
+            # Test /administrator/ accessible
+            try:
+                async with session.get(
+                    f"{base}/administrator/",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "joomla" in body.lower() or "administrator" in body.lower():
+                            findings.append({
+                                "vulnerability_class": "joomla",
+                                "tool": "joomla_tester",
+                                "technique_id": "joomla_test",
+                                "host": host,
+                                "endpoint": f"{base}/administrator/",
+                                "severity": "medium",
+                                "description": "Joomla admin panel accessible",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Test configuration.php backup files
+            for bak_ext in ["~", ".bak", ".old", ".save", ".dist", ".txt"]:
+                try:
+                    async with session.get(
+                        f"{base}/configuration.php{bak_ext}",
+                        headers={"User-Agent": _UA},
+                        ssl=False, timeout=timeout,
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.text(errors="replace")
+                            if "JConfig" in body or "db" in body.lower():
+                                findings.append({
+                                    "vulnerability_class": "joomla",
+                                    "tool": "joomla_tester",
+                                    "technique_id": "joomla_test",
+                                    "host": host,
+                                    "endpoint": f"{base}/configuration.php{bak_ext}",
+                                    "severity": "critical",
+                                    "description": f"Joomla configuration backup exposed: configuration.php{bak_ext}",
+                                    "evidence": body[:300],
+                                    "confidence": "high",
+                                    "needs_validation": False,
+                                })
+                                break
+                except Exception:
+                    pass
+
+            # Version detection via /language/en-GB/en-GB.xml
+            try:
+                async with session.get(
+                    f"{base}/language/en-GB/en-GB.xml",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        import re as _re
+                        ver_match = _re.search(r'<version>([\d.]+)</version>', body)
+                        if ver_match:
+                            findings.append({
+                                "vulnerability_class": "joomla",
+                                "tool": "joomla_tester",
+                                "technique_id": "joomla_test",
+                                "host": host,
+                                "endpoint": f"{base}/language/en-GB/en-GB.xml",
+                                "severity": "info",
+                                "description": f"Joomla version {ver_match.group(1)} disclosed",
+                                "evidence": f"Version found in language XML: {ver_match.group(1)}",
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Joomla 4+ API endpoint
+            try:
+                async with session.get(
+                    f"{base}/api/index.php/v1/config/application",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if '"data"' in body or '"attributes"' in body:
+                            findings.append({
+                                "vulnerability_class": "joomla",
+                                "tool": "joomla_tester",
+                                "technique_id": "joomla_test",
+                                "host": host,
+                                "endpoint": f"{base}/api/index.php/v1/config/application",
+                                "severity": "high",
+                                "description": "Joomla 4+ API config endpoint accessible — potential info disclosure",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+    return findings
+
+
+async def _exec_drupal(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Drupal-specific checks via aiohttp."""
+    import aiohttp as _aiohttp
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    cms_raw = await workspace.read_data(workspace_id, "hosts/cms_detection.json")
+    cms_items = _extract_items(cms_raw)
+    cms_is_drupal = False
+    if cms_items:
+        cms_info = cms_items[0] if isinstance(cms_items[0], dict) else {}
+        cms_is_drupal = cms_info.get("cms_type") == "drupal"
+
+    findings: list[dict[str, Any]] = []
+    timeout = _aiohttp.ClientTimeout(total=10)
+    _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    async with _aiohttp.ClientSession() as session:
+        for h in hosts:
+            host = (h.get("host") or "").lower()
+            url = h.get("url", "")
+            techs = " ".join(h.get("technologies", [])).lower()
+            if not url or host not in approved_hosts:
+                continue
+            if "drupal" not in techs and not cms_is_drupal:
+                continue
+
+            base = url.rstrip("/")
+
+            # Version via CHANGELOG.txt
+            try:
+                async with session.get(
+                    f"{base}/CHANGELOG.txt",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "Drupal" in body:
+                            import re as _re
+                            ver_match = _re.search(r'Drupal\s+([\d.]+)', body)
+                            ver = ver_match.group(1) if ver_match else "unknown"
+                            findings.append({
+                                "vulnerability_class": "drupal",
+                                "tool": "drupal_tester",
+                                "technique_id": "drupal_test",
+                                "host": host,
+                                "endpoint": f"{base}/CHANGELOG.txt",
+                                "severity": "low",
+                                "description": f"Drupal CHANGELOG.txt exposed — version {ver}",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # /user/register accessible
+            try:
+                async with session.get(
+                    f"{base}/user/register",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "create" in body.lower() or "register" in body.lower():
+                            findings.append({
+                                "vulnerability_class": "drupal",
+                                "tool": "drupal_tester",
+                                "technique_id": "drupal_test",
+                                "host": host,
+                                "endpoint": f"{base}/user/register",
+                                "severity": "low",
+                                "description": "Drupal user registration page accessible",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # /admin/config accessible
+            try:
+                async with session.get(
+                    f"{base}/admin/config",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "configuration" in body.lower() or "drupal" in body.lower():
+                            findings.append({
+                                "vulnerability_class": "drupal",
+                                "tool": "drupal_tester",
+                                "technique_id": "drupal_test",
+                                "host": host,
+                                "endpoint": f"{base}/admin/config",
+                                "severity": "high",
+                                "description": "Drupal admin config page accessible without authentication",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # settings.php backup
+            for bak_ext in [".bak", "~", ".old", ".save", ".txt"]:
+                try:
+                    async with session.get(
+                        f"{base}/sites/default/settings.php{bak_ext}",
+                        headers={"User-Agent": _UA},
+                        ssl=False, timeout=timeout,
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.text(errors="replace")
+                            if "database" in body.lower() or "settings" in body.lower():
+                                findings.append({
+                                    "vulnerability_class": "drupal",
+                                    "tool": "drupal_tester",
+                                    "technique_id": "drupal_test",
+                                    "host": host,
+                                    "endpoint": f"{base}/sites/default/settings.php{bak_ext}",
+                                    "severity": "critical",
+                                    "description": f"Drupal settings.php backup exposed: settings.php{bak_ext}",
+                                    "evidence": body[:300],
+                                    "confidence": "high",
+                                    "needs_validation": False,
+                                })
+                                break
+                except Exception:
+                    pass
+
+            # /core/install.php accessible
+            try:
+                async with session.get(
+                    f"{base}/core/install.php",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "install" in body.lower() or "drupal" in body.lower():
+                            findings.append({
+                                "vulnerability_class": "drupal",
+                                "tool": "drupal_tester",
+                                "technique_id": "drupal_test",
+                                "host": host,
+                                "endpoint": f"{base}/core/install.php",
+                                "severity": "high",
+                                "description": "Drupal installation page accessible — potential full takeover",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+    return findings
+
+
+async def _exec_magento(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Magento-specific checks via aiohttp."""
+    import aiohttp as _aiohttp
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    cms_raw = await workspace.read_data(workspace_id, "hosts/cms_detection.json")
+    cms_items = _extract_items(cms_raw)
+    cms_is_magento = False
+    if cms_items:
+        cms_info = cms_items[0] if isinstance(cms_items[0], dict) else {}
+        cms_is_magento = cms_info.get("cms_type") == "magento"
+
+    findings: list[dict[str, Any]] = []
+    timeout = _aiohttp.ClientTimeout(total=10)
+    _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+    async with _aiohttp.ClientSession() as session:
+        for h in hosts:
+            host = (h.get("host") or "").lower()
+            url = h.get("url", "")
+            techs = " ".join(h.get("technologies", [])).lower()
+            if not url or host not in approved_hosts:
+                continue
+            if "magento" not in techs and not cms_is_magento:
+                continue
+
+            base = url.rstrip("/")
+
+            # Version detection via /magento_version or RELEASE_NOTES.txt
+            for ver_path in ["/magento_version", "/RELEASE_NOTES.txt"]:
+                try:
+                    async with session.get(
+                        f"{base}{ver_path}",
+                        headers={"User-Agent": _UA},
+                        ssl=False, timeout=timeout,
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.text(errors="replace")
+                            if "magento" in body.lower() or "release" in body.lower():
+                                findings.append({
+                                    "vulnerability_class": "magento",
+                                    "tool": "magento_tester",
+                                    "technique_id": "magento_test",
+                                    "host": host,
+                                    "endpoint": f"{base}{ver_path}",
+                                    "severity": "low",
+                                    "description": f"Magento version info exposed at {ver_path}",
+                                    "evidence": body[:300],
+                                    "confidence": "high",
+                                    "needs_validation": False,
+                                })
+                except Exception:
+                    pass
+
+            # /downloader/ accessible (Magento Connect)
+            try:
+                async with session.get(
+                    f"{base}/downloader/",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "magento" in body.lower() or "downloader" in body.lower():
+                            findings.append({
+                                "vulnerability_class": "magento",
+                                "tool": "magento_tester",
+                                "technique_id": "magento_test",
+                                "host": host,
+                                "endpoint": f"{base}/downloader/",
+                                "severity": "high",
+                                "description": "Magento downloader/Connect manager accessible",
+                                "evidence": body[:300],
+                                "confidence": "high",
+                                "needs_validation": False,
+                            })
+            except Exception:
+                pass
+
+            # Admin paths
+            for admin_path in ["/admin", "/index.php/admin", "/admin_custom"]:
+                try:
+                    async with session.get(
+                        f"{base}{admin_path}",
+                        headers={"User-Agent": _UA},
+                        ssl=False, timeout=timeout,
+                        allow_redirects=False,
+                    ) as resp:
+                        if resp.status in (200, 302):
+                            if resp.status == 200:
+                                body = await resp.text(errors="replace")
+                            else:
+                                body = resp.headers.get("Location", "")
+                            if "magento" in body.lower() or "admin" in body.lower():
+                                findings.append({
+                                    "vulnerability_class": "magento",
+                                    "tool": "magento_tester",
+                                    "technique_id": "magento_test",
+                                    "host": host,
+                                    "endpoint": f"{base}{admin_path}",
+                                    "severity": "medium",
+                                    "description": f"Magento admin panel found at {admin_path}",
+                                    "evidence": f"Status: {resp.status}",
+                                    "confidence": "high",
+                                    "needs_validation": False,
+                                })
+                                break
+                except Exception:
+                    pass
+
+            # /app/etc/local.xml exposed (Magento 1.x config)
+            try:
+                async with session.get(
+                    f"{base}/app/etc/local.xml",
+                    headers={"User-Agent": _UA},
+                    ssl=False, timeout=timeout,
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.text(errors="replace")
+                        if "connection" in body.lower() or "crypt" in body.lower():
+                            findings.append({
+                                "vulnerability_class": "magento",
+                                "tool": "magento_tester",
+                                "technique_id": "magento_test",
+                                "host": host,
+                                "endpoint": f"{base}/app/etc/local.xml",
+                                "severity": "critical",
+                                "description": "Magento local.xml config exposed — DB credentials and encryption key",
                                 "evidence": body[:300],
                                 "confidence": "high",
                                 "needs_validation": False,
@@ -2921,6 +3660,102 @@ async def _exec_default_credentials(
     return findings
 
 
+async def _exec_sqli_auth_bypass(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Test login forms with SQL injection payloads to bypass authentication."""
+    from bughound.tools.testing.config_checker import test_sqli_auth_bypass
+
+    # Build login form targets from the same two sources as default_credentials
+    login_targets: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    # Source 1: form_extractor login forms (most reliable — has field names)
+    raw_forms = await workspace.read_data(workspace_id, "urls/forms.json")
+    forms = _extract_items(raw_forms)
+    for form in forms:
+        if not isinstance(form, dict):
+            continue
+        classification = form.get("classification", "")
+        if classification not in ("login_form", "registration_form"):
+            continue
+        testable = form.get("testable", {})
+        action_url = testable.get("url", form.get("page_url", ""))
+        if not action_url or action_url in seen_urls:
+            continue
+        host = _host_from_url(action_url)
+        if host not in approved_hosts:
+            continue
+        seen_urls.add(action_url)
+
+        # Extract username/password field names from inputs
+        username_field = "username"
+        password_field = "password"
+        for inp in form.get("inputs", []):
+            inp_name = inp.get("name", "")
+            inp_type = inp.get("type", "")
+            if inp_type == "password" or inp_name.lower() in ("password", "passwd", "pass", "pwd"):
+                password_field = inp_name
+            elif inp_type in ("text", "email") or inp_name.lower() in (
+                "username", "user", "email", "login", "txtusername", "user_name",
+            ):
+                username_field = inp_name
+
+        login_targets.append({
+            "action_url": action_url,
+            "username_field": username_field,
+            "password_field": password_field,
+            "method": form.get("method", "POST"),
+        })
+
+    # Source 2: auth_discovery endpoints (fallback)
+    auth_data = await _load_auth_discovery(workspace_id)
+    for ad in auth_data:
+        for ep in ad.get("auth_endpoints", []):
+            url = ep.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            path = ep.get("path", "").lower()
+            if "login" not in path and "signin" not in path and "auth" not in path:
+                continue
+            host = _host_from_url(url)
+            if host not in approved_hosts:
+                continue
+            seen_urls.add(url)
+            login_targets.append({
+                "action_url": url,
+                "username_field": "username",
+                "password_field": "password",
+            })
+
+    findings: list[dict[str, Any]] = []
+    for form in login_targets[:5]:  # Limit to 5 login forms
+        action_url = form["action_url"]
+        host = _host_from_url(action_url)
+        try:
+            result = await asyncio.wait_for(
+                test_sqli_auth_bypass(action_url, form), timeout=120,
+            )
+            if result.get("vulnerable"):
+                findings.append({
+                    "vulnerability_class": "sqli_auth_bypass",
+                    "tool": "config_checker",
+                    "technique_id": "sqli_auth_bypass_test",
+                    "host": host,
+                    "endpoint": action_url,
+                    "severity": "critical",
+                    "description": f"SQLi authentication bypass: {result.get('payload', '?')}",
+                    "evidence": result.get("evidence", ""),
+                    "confidence": "high",
+                    "needs_validation": True,
+                })
+                break  # Found working bypass, stop
+        except Exception:
+            pass
+
+    return findings
+
+
 async def _exec_xxe(
     workspace_id: str, approved_hosts: set[str], concurrency: int,
 ) -> list[dict[str, Any]]:
@@ -3034,3 +3869,43 @@ def _host_from_url(url: str) -> str:
         return (urlparse(url).hostname or "").lower()
     except Exception:
         return ""
+
+
+async def _exec_git_exposure(
+    workspace_id: str, approved_hosts: set[str],
+) -> list[dict[str, Any]]:
+    """Check hosts for exposed .git directories and .env files."""
+    from bughound.tools.testing.config_checker import test_git_exposure
+
+    raw = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
+    hosts = _extract_items(raw)
+
+    findings: list[dict[str, Any]] = []
+    for h in hosts:
+        base = (h.get("url") or "").rstrip("/")
+        host = _host_from_url(base)
+        if host not in approved_hosts or not base:
+            continue
+        try:
+            result = await asyncio.wait_for(
+                test_git_exposure(base), timeout=30,
+            )
+            if result.get("vulnerable"):
+                exposure_type = result.get("type", "git_exposure")
+                severity = "critical" if exposure_type == "git_exposure" else "high"
+                findings.append({
+                    "vulnerability_class": "info_leak",
+                    "tool": "config_checker",
+                    "technique_id": "git_exposure_test",
+                    "host": host,
+                    "endpoint": result.get("url", base),
+                    "severity": severity,
+                    "description": f"{exposure_type.replace('_', ' ').title()} detected at {result.get('url', base)}",
+                    "evidence": result.get("evidence", ""),
+                    "confidence": result.get("confidence", "high"),
+                    "needs_validation": False,
+                })
+        except Exception:
+            pass
+
+    return findings

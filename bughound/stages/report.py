@@ -50,6 +50,14 @@ _SEV_COLORS = {
 }
 
 # ---------------------------------------------------------------------------
+# Findings that bounty programs always reject unless chained
+# ---------------------------------------------------------------------------
+
+_NEVER_SUBMIT_ALONE: set[str] = {
+    "misconfig",      # Missing headers alone — always rejected
+}
+
+# ---------------------------------------------------------------------------
 # Generic remediation per vulnerability class
 # ---------------------------------------------------------------------------
 
@@ -443,6 +451,18 @@ def _process_findings(data: dict[str, Any]) -> dict[str, Any]:
             cf_copy = dict(cf)
             cf_copy["status"] = "CONFIRMED"
             merged.append(cf_copy)
+
+    # Flag standalone findings that bounty platforms typically reject
+    for f in merged:
+        vc = f.get("vulnerability_class", "")
+        sev = f.get("severity", "info").lower()
+        is_standalone = f.get("status") != "CONFIRMED" and not f.get("chain_id")
+        if vc in _NEVER_SUBMIT_ALONE and (sev == "info" or is_standalone):
+            desc = f.get("description", "")
+            note = "(Note: typically not accepted as standalone finding on bounty platforms)"
+            if note not in desc:
+                f["description"] = f"{desc} {note}".strip() if desc else note
+                f["bounty_note"] = "standalone_weak"
 
     # Sort by severity
     merged.sort(key=lambda f: _SEV_ORDER.get(f.get("severity", "info").lower(), 5))
