@@ -1751,7 +1751,9 @@ def _suggest_test_classes(
         if detected_techs:
             to_remove: set[str] = set()
             for tech_name, skip_classes in _FRAMEWORK_SKIP_MAP.items():
-                if tech_name.lower() in detected_techs:
+                # Substring match: "asp.net" matches "microsoft asp.net",
+                # "iis" matches "iis:8.5"
+                if any(tech_name.lower() in t for t in detected_techs):
                     for sc in skip_classes:
                         if sc in classes:
                             to_remove.add(sc)
