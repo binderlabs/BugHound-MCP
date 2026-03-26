@@ -555,6 +555,12 @@ async def _run_tests(
         all_urls = await _collect_all_urls(workspace_id)
         url_level_tags = [t for t in _URL_LEVEL_TAGS if t in plan_tags or not plan_tags]
 
+        # CMS sites: skip generic injection nuclei tags on URLs — use CMS templates instead
+        cms_data_4a = await _load_cms_detection(workspace_id)
+        if cms_data_4a and cms_data_4a.get("confidence") == "high":
+            url_level_tags = []  # Skip generic URL-level nuclei (sqli, xss, etc.)
+            await _progress(2, f"CMS detected: skipping generic nuclei URL scan", "nuclei")
+
         if all_urls and url_level_tags:
             # Deduplicate URLs with urldedupe if available
             deduped_urls = await _dedupe_urls(all_urls)
@@ -987,6 +993,7 @@ async def _run_tests(
     # -- CMS-aware technique filtering ----------------------------------
     # When a CMS is detected, skip generic injection on CMS URLs.
     # Only run: CMS-specific scanner + config checks + injection on custom URLs.
+    _CMS_KEEP_TECHNIQUES = set()  # defined here so tech_specific filter can reference it
     cms_data_phase4d = await _load_cms_detection(workspace_id)
     if cms_data_phase4d and cms_data_phase4d.get("cms_type") and cms_data_phase4d.get("confidence") == "high":
         cms_type = cms_data_phase4d["cms_type"]
@@ -1098,6 +1105,11 @@ async def _run_tests(
         if test_class not in all_test_classes:
             phase_stats[f"4E_{technique_id}"] = 0
             continue
+        # CMS filter applies to tech_specific too
+        if cms_data_phase4d and cms_data_phase4d.get("confidence") == "high":
+            if technique_id not in _CMS_KEEP_TECHNIQUES:
+                phase_stats[f"4E_{technique_id}_cms_skip"] = 0
+                continue
         task = asyncio.create_task(
             _run_technique(technique_id, "4E"),
             name=f"4E_{technique_id}",
