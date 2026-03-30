@@ -428,18 +428,27 @@ async def run_agent(
     """
     # Pre-flight tool check
     import shutil
+    import subprocess as _sp
     httpx_path = shutil.which("httpx")
     if not httpx_path:
         print(f"  {_C.RED}ERROR: 'httpx' not found. Install ProjectDiscovery httpx:{_C.RESET}")
         print(f"  {_C.DIM}go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
         return
-    # Check it's not Python httpx
-    import subprocess as _sp
+    # Check it's not Python httpx (exit code 2 on -version = wrong httpx)
     try:
-        _vr = _sp.run(["file", httpx_path], capture_output=True, text=True, timeout=5)
-        if "python" in _vr.stdout.lower() or "script" in _vr.stdout.lower():
-            print(f"  {_C.RED}ERROR: Wrong 'httpx' — found Python httpx (pip) instead of ProjectDiscovery httpx (Go).{_C.RESET}")
+        _vr = _sp.run([httpx_path, "-version"], capture_output=True, text=True, timeout=5)
+        _combined = (_vr.stdout + _vr.stderr).lower()
+        _is_wrong = (
+            _vr.returncode == 2
+            or ("usage:" in _combined and "silent" not in _combined)
+            or ("/venv/" in httpx_path or "site-packages" in httpx_path)
+        ) and "projectdiscovery" not in _combined and "current version" not in _combined
+        if _is_wrong:
+            print(f"  {_C.RED}ERROR: Wrong 'httpx' installed!{_C.RESET}")
+            print(f"  {_C.RED}Found Python httpx (pip) at: {httpx_path}{_C.RESET}")
+            print(f"  {_C.RED}BugHound needs ProjectDiscovery httpx (Go binary).{_C.RESET}")
             print(f"  {_C.DIM}Fix: pip uninstall httpx && go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
+            print(f"  {_C.DIM}     export PATH=$HOME/go/bin:$PATH{_C.RESET}")
             return
     except Exception:
         pass

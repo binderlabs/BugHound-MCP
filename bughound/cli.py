@@ -180,27 +180,47 @@ def _preflight_tool_check(quiet: bool = False) -> None:
         sys.exit(1)
 
     # Verify it's ProjectDiscovery httpx, not Python httpx (pip package)
+    # Python httpx returns exit code 2 with "-version" and shows "usage: httpx"
+    # ProjectDiscovery httpx shows "Current Version: X.X.X" or "projectdiscovery"
+    is_wrong_httpx = False
     try:
         result = subprocess.run(
             [httpx_path, "-version"], capture_output=True, text=True, timeout=5,
         )
-        version_output = (result.stdout + result.stderr).lower()
-        if "projectdiscovery" not in version_output and "httpx" not in version_output:
-            # Might be Python httpx — check if it's a Go binary
-            result2 = subprocess.run(
-                ["file", httpx_path], capture_output=True, text=True, timeout=5,
-            )
-            if "python" in result2.stdout.lower() or "script" in result2.stdout.lower():
-                print(f"  {_C.RED}ERROR: Wrong 'httpx' installed.{_C.RESET}")
-                print(f"  {_C.RED}Found Python httpx (pip package) at: {httpx_path}{_C.RESET}")
-                print(f"  {_C.RED}BugHound needs ProjectDiscovery httpx (Go binary).{_C.RESET}")
-                print()
-                print(f"  {_C.YELLOW}Fix:{_C.RESET}")
-                print(f"  {_C.DIM}  pip uninstall httpx{_C.RESET}")
-                print(f"  {_C.DIM}  go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
-                sys.exit(1)
+        combined = (result.stdout + result.stderr).lower()
+        # ProjectDiscovery httpx shows version info
+        if "projectdiscovery" in combined or "current version" in combined:
+            pass  # Correct httpx
+        elif result.returncode == 2:
+            # Python httpx exits with code 2 on unknown flags
+            is_wrong_httpx = True
+        elif "usage:" in combined and "silent" not in combined:
+            # Python httpx shows usage without scanner flags
+            is_wrong_httpx = True
+        elif "/venv/" in httpx_path or "site-packages" in httpx_path:
+            # Installed in a Python venv — almost certainly Python httpx
+            is_wrong_httpx = True
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass  # Can't verify version — proceed with warning
+        # If -version crashes, try -silent flag (only Go httpx supports it)
+        try:
+            result2 = subprocess.run(
+                [httpx_path, "-silent", "-version"], capture_output=True, text=True, timeout=5,
+            )
+            if result2.returncode != 0 and "projectdiscovery" not in (result2.stdout + result2.stderr).lower():
+                is_wrong_httpx = True
+        except Exception:
+            pass
+
+    if is_wrong_httpx:
+        print(f"  {_C.RED}ERROR: Wrong 'httpx' installed!{_C.RESET}")
+        print(f"  {_C.RED}Found Python httpx (pip package) at: {httpx_path}{_C.RESET}")
+        print(f"  {_C.RED}BugHound needs ProjectDiscovery httpx (Go binary).{_C.RESET}")
+        print()
+        print(f"  {_C.YELLOW}Fix:{_C.RESET}")
+        print(f"  {_C.DIM}  pip uninstall httpx        # Remove Python httpx{_C.RESET}")
+        print(f"  {_C.DIM}  go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
+        print(f"  {_C.DIM}  export PATH=$HOME/go/bin:$PATH  # Make sure Go bin is first in PATH{_C.RESET}")
+        sys.exit(1)
 
     if quiet:
         return
