@@ -25,6 +25,17 @@ echo "[*] Installing core tools..."
 go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 echo "  [+] httpx — HTTP probing"
 
+# Warn if Python httpx shadows the Go binary
+HTTPX_PATH=$(which httpx 2>/dev/null)
+if [ -n "$HTTPX_PATH" ] && echo "$HTTPX_PATH" | grep -qE "venv|site-packages|\.local/bin"; then
+    echo ""
+    echo "  [!] WARNING: Python httpx found at $HTTPX_PATH"
+    echo "  [!] This will shadow the Go version BugHound needs."
+    echo "  [!] Fix: pip uninstall httpx"
+    echo "  [!]   OR: export PATH=\$HOME/go/bin:\$PATH  (put Go bin first)"
+    echo ""
+fi
+
 go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
 echo "  [+] nuclei — Vulnerability scanning"
 
