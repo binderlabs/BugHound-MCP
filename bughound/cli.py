@@ -159,6 +159,72 @@ def _get_banner() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight tool check
+# ---------------------------------------------------------------------------
+
+
+def _preflight_tool_check(quiet: bool = False) -> None:
+    """Check required and recommended tools before scanning.
+
+    Warns about missing tools. Exits if critical tools are broken.
+    """
+    import shutil
+    import subprocess
+
+    # httpx is critical — without it, no live host detection
+    httpx_path = shutil.which("httpx")
+    if not httpx_path:
+        print(f"  {_C.RED}ERROR: 'httpx' not found.{_C.RESET}")
+        print(f"  {_C.DIM}Install: go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
+        print(f"  {_C.DIM}Or run: ./scripts/install-tools.sh{_C.RESET}")
+        sys.exit(1)
+
+    # Verify it's ProjectDiscovery httpx, not Python httpx (pip package)
+    try:
+        result = subprocess.run(
+            [httpx_path, "-version"], capture_output=True, text=True, timeout=5,
+        )
+        version_output = (result.stdout + result.stderr).lower()
+        if "projectdiscovery" not in version_output and "httpx" not in version_output:
+            # Might be Python httpx — check if it's a Go binary
+            result2 = subprocess.run(
+                ["file", httpx_path], capture_output=True, text=True, timeout=5,
+            )
+            if "python" in result2.stdout.lower() or "script" in result2.stdout.lower():
+                print(f"  {_C.RED}ERROR: Wrong 'httpx' installed.{_C.RESET}")
+                print(f"  {_C.RED}Found Python httpx (pip package) at: {httpx_path}{_C.RESET}")
+                print(f"  {_C.RED}BugHound needs ProjectDiscovery httpx (Go binary).{_C.RESET}")
+                print()
+                print(f"  {_C.YELLOW}Fix:{_C.RESET}")
+                print(f"  {_C.DIM}  pip uninstall httpx{_C.RESET}")
+                print(f"  {_C.DIM}  go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
+                sys.exit(1)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass  # Can't verify version — proceed with warning
+
+    if quiet:
+        return
+
+    # Recommended tools — warn but don't exit
+    recommended = {
+        "nuclei": "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        "katana": "go install -v github.com/projectdiscovery/katana/cmd/katana@latest",
+        "subfinder": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    }
+    missing = []
+    for tool, install_cmd in recommended.items():
+        if not shutil.which(tool):
+            missing.append((tool, install_cmd))
+
+    if missing:
+        print(f"  {_C.YELLOW}Warning: Some recommended tools are not installed:{_C.RESET}")
+        for tool, cmd in missing:
+            print(f"    {_C.DIM}{tool}: {cmd}{_C.RESET}")
+        print(f"  {_C.DIM}BugHound will use pure-Python fallbacks where possible.{_C.RESET}")
+        print()
+
+
+# ---------------------------------------------------------------------------
 # Workspace validation helper
 # ---------------------------------------------------------------------------
 
@@ -768,6 +834,9 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     verbose = args.verbose
     quiet = args.quiet
 
+    # Pre-flight: verify critical tools are installed and correct
+    _preflight_tool_check(quiet=quiet)
+
     if not args.resume and not args.target:
         print(f"  {_C.RED}Error: target is required (or use --resume){_C.RESET}")
         sys.exit(1)
@@ -909,6 +978,8 @@ async def cmd_recon(args: argparse.Namespace) -> None:
 
     verbose = args.verbose
     quiet = args.quiet
+
+    _preflight_tool_check(quiet=quiet)
 
     if not quiet:
         print(_get_banner())
