@@ -205,22 +205,58 @@ def _preflight_tool_check(quiet: bool = False) -> None:
     if quiet:
         return
 
-    # Recommended tools — warn but don't exit
-    recommended = {
-        "nuclei": "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
-        "katana": "go install -v github.com/projectdiscovery/katana/cmd/katana@latest",
-        "subfinder": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
-    }
-    missing = []
-    for tool, install_cmd in recommended.items():
-        if not shutil.which(tool):
-            missing.append((tool, install_cmd))
+    # All tools BugHound uses, grouped by importance
+    # (tool_name, purpose, install_command, critical?)
+    _ALL_TOOLS = [
+        # Core recon — highly recommended
+        ("nuclei",       "Vulnerability scanning",   "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", True),
+        ("katana",       "Web crawling",             "go install -v github.com/projectdiscovery/katana/cmd/katana@latest", True),
+        ("subfinder",    "Subdomain discovery",      "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", True),
+        # URL discovery
+        ("gau",          "Historical URL discovery",  "go install -v github.com/lc/gau/v2/cmd/gau@latest", False),
+        ("waybackurls",  "Wayback Machine URLs",      "go install -v github.com/tomnomnom/waybackurls@latest", False),
+        # Validation
+        ("sqlmap",       "SQLi validation",           "apt install sqlmap  OR  pip install sqlmap", False),
+        ("dalfox",       "XSS validation",            "go install -v github.com/hahwul/dalfox/v2@latest", False),
+        # Discovery
+        ("ffuf",         "Directory fuzzing",         "go install -v github.com/ffuf/ffuf/v2@latest", False),
+        ("arjun",        "Parameter discovery",       "pip install arjun", False),
+        ("assetfinder",  "Subdomain discovery",       "go install -v github.com/tomnomnom/assetfinder@latest", False),
+        # CMS
+        ("wpscan",       "WordPress scanning",        "gem install wpscan  OR  apt install wpscan", False),
+        # WAF
+        ("wafw00f",      "WAF detection",             "pip install wafw00f", False),
+    ]
 
-    if missing:
-        print(f"  {_C.YELLOW}Warning: Some recommended tools are not installed:{_C.RESET}")
-        for tool, cmd in missing:
-            print(f"    {_C.DIM}{tool}: {cmd}{_C.RESET}")
-        print(f"  {_C.DIM}BugHound will use pure-Python fallbacks where possible.{_C.RESET}")
+    installed = []
+    missing_critical = []
+    missing_optional = []
+
+    for tool, purpose, install_cmd, critical in _ALL_TOOLS:
+        if shutil.which(tool):
+            installed.append((tool, purpose))
+        elif critical:
+            missing_critical.append((tool, purpose, install_cmd))
+        else:
+            missing_optional.append((tool, purpose, install_cmd))
+
+    # Show summary
+    print(f"  {_C.GREEN}Tools installed: {len(installed)}/{len(_ALL_TOOLS)}{_C.RESET}")
+
+    if missing_critical:
+        print(f"  {_C.RED}Missing (recommended):{_C.RESET}")
+        for tool, purpose, cmd in missing_critical:
+            print(f"    {_C.RED}✗ {tool:15s}{_C.RESET} {_C.DIM}— {purpose}{_C.RESET}")
+            print(f"      {_C.DIM}{cmd}{_C.RESET}")
+
+    if missing_optional:
+        print(f"  {_C.YELLOW}Missing (optional):{_C.RESET}")
+        for tool, purpose, cmd in missing_optional:
+            print(f"    {_C.YELLOW}○ {tool:15s}{_C.RESET} {_C.DIM}— {purpose}{_C.RESET}")
+
+    if missing_critical or missing_optional:
+        print(f"  {_C.DIM}Run ./scripts/install-tools.sh to install all Go tools.{_C.RESET}")
+        print(f"  {_C.DIM}BugHound uses pure-Python fallbacks when tools are missing.{_C.RESET}")
         print()
 
 
