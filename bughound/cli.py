@@ -208,24 +208,39 @@ def _preflight_tool_check(quiet: bool = False) -> None:
     # All tools BugHound uses, grouped by importance
     # (tool_name, purpose, install_command, critical?)
     _ALL_TOOLS = [
-        # Core recon — highly recommended
-        ("nuclei",       "Vulnerability scanning",   "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", True),
-        ("katana",       "Web crawling",             "go install -v github.com/projectdiscovery/katana/cmd/katana@latest", True),
-        ("subfinder",    "Subdomain discovery",      "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", True),
-        # URL discovery
+        # ── Critical (scanning won't work without these) ──
+        ("nuclei",       "Vulnerability scanning",    "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest", True),
+        ("katana",       "Web crawling",              "go install -v github.com/projectdiscovery/katana/cmd/katana@latest", True),
+        ("subfinder",    "Subdomain discovery",       "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest", True),
+        # ── Recon tools ──
         ("gau",          "Historical URL discovery",  "go install -v github.com/lc/gau/v2/cmd/gau@latest", False),
         ("waybackurls",  "Wayback Machine URLs",      "go install -v github.com/tomnomnom/waybackurls@latest", False),
-        # Validation
-        ("sqlmap",       "SQLi validation",           "apt install sqlmap  OR  pip install sqlmap", False),
-        ("dalfox",       "XSS validation",            "go install -v github.com/hahwul/dalfox/v2@latest", False),
-        # Discovery
+        ("assetfinder",  "Subdomain discovery",       "go install -v github.com/tomnomnom/assetfinder@latest", False),
+        ("findomain",    "Subdomain discovery",       "apt install findomain  OR  github.com/Edu4rdSHL/findomain", False),
+        ("amass",        "Subdomain enumeration",     "go install -v github.com/owasp-amass/amass/v4/...@latest", False),
+        ("gospider",     "Web crawling",              "go install -v github.com/jaeles-project/gospider@latest", False),
+        ("wafw00f",      "WAF detection",             "pip install wafw00f", False),
+        # ── Discovery tools ──
         ("ffuf",         "Directory fuzzing",         "go install -v github.com/ffuf/ffuf/v2@latest", False),
         ("arjun",        "Parameter discovery",       "pip install arjun", False),
-        ("assetfinder",  "Subdomain discovery",       "go install -v github.com/tomnomnom/assetfinder@latest", False),
-        # CMS
+        ("gotator",      "Subdomain permutation",     "go install -v github.com/Josue87/gotator@latest", False),
+        ("puredns",      "DNS resolution/bruteforce", "go install -v github.com/d3mondev/puredns/v2@latest", False),
+        # ── Validation tools ──
+        ("sqlmap",       "SQLi validation",           "apt install sqlmap  OR  pip install sqlmap", False),
+        ("dalfox",       "XSS validation",            "go install -v github.com/hahwul/dalfox/v2@latest", False),
+        # ── CMS scanning ──
         ("wpscan",       "WordPress scanning",        "gem install wpscan  OR  apt install wpscan", False),
-        # WAF
-        ("wafw00f",      "WAF detection",             "pip install wafw00f", False),
+        # ── One-liner pipeline tools ──
+        ("qsreplace",   "Query string replacement",   "go install -v github.com/tomnomnom/qsreplace@latest", False),
+        ("kxss",        "XSS reflection detection",    "go install -v github.com/Emoe/kxss@latest", False),
+        ("Gxss",        "XSS reflection + context",    "go install -v github.com/KathanP19/Gxss@latest", False),
+        ("gf",          "URL pattern matching",        "go install -v github.com/tomnomnom/gf@latest", False),
+        ("unfurl",      "URL component extraction",    "go install -v github.com/tomnomnom/unfurl@latest", False),
+        ("anew",        "Unique line appending",       "go install -v github.com/tomnomnom/anew@latest", False),
+        ("uro",         "URL deduplication",           "pip install uro", False),
+        ("urldedupe",   "Smart URL dedup",             "go install -v github.com/ameenmaali/urldedupe@latest", False),
+        ("bhedak",      "Upgraded qsreplace",          "go install -v github.com/R0X4R/bhedak@latest", False),
+        ("interlace",   "Parallel execution",          "pip install interlace", False),
     ]
 
     installed = []
