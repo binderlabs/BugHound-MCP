@@ -426,32 +426,50 @@ async def run_agent(
     verbose : bool
         Show detailed debug output.
     """
-    # Pre-flight tool check
+    # Pre-flight tool check — reuse CLI logic
     import shutil
     import subprocess as _sp
+    import os as _os
+
+    def _is_go_httpx(path: str) -> bool:
+        try:
+            r = _sp.run([path, "-version"], capture_output=True, text=True, timeout=5)
+            c = (r.stdout + r.stderr).lower()
+            return "projectdiscovery" in c or "current version" in c
+        except Exception:
+            return False
+
     httpx_path = shutil.which("httpx")
-    if not httpx_path:
-        print(f"  {_C.RED}ERROR: 'httpx' not found. Install ProjectDiscovery httpx:{_C.RESET}")
-        print(f"  {_C.DIM}go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
-        return
-    # Check it's not Python httpx (exit code 2 on -version = wrong httpx)
-    try:
-        _vr = _sp.run([httpx_path, "-version"], capture_output=True, text=True, timeout=5)
-        _combined = (_vr.stdout + _vr.stderr).lower()
-        _is_wrong = (
-            _vr.returncode == 2
-            or ("usage:" in _combined and "silent" not in _combined)
-            or ("/venv/" in httpx_path or "site-packages" in httpx_path)
-        ) and "projectdiscovery" not in _combined and "current version" not in _combined
-        if _is_wrong:
-            print(f"  {_C.RED}ERROR: Wrong 'httpx' installed!{_C.RESET}")
-            print(f"  {_C.RED}Found Python httpx (pip) at: {httpx_path}{_C.RESET}")
+    if httpx_path and _is_go_httpx(httpx_path):
+        pass  # Correct
+    else:
+        # Search common Go binary locations
+        _go_paths = [
+            _os.path.expanduser("~/go/bin/httpx"),
+            "/usr/local/go/bin/httpx", "/usr/local/bin/httpx",
+            "/root/go/bin/httpx", _os.path.expanduser("~/.local/bin/httpx"),
+        ]
+        found = None
+        for p in _go_paths:
+            if _os.path.isfile(p) and _os.access(p, _os.X_OK) and _is_go_httpx(p):
+                found = p
+                break
+
+        if found:
+            print(f"  {_C.YELLOW}Note: Using Go httpx from {found}{_C.RESET}")
+            from bughound.core import tool_runner
+            tool_runner._BINARY_OVERRIDES["httpx"] = found
+        elif httpx_path:
+            print(f"  {_C.RED}ERROR: Wrong 'httpx' at: {httpx_path}{_C.RESET}")
             print(f"  {_C.RED}BugHound needs ProjectDiscovery httpx (Go binary).{_C.RESET}")
-            print(f"  {_C.DIM}Fix: pip uninstall httpx && go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
+            print(f"  {_C.DIM}Fix: go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
             print(f"  {_C.DIM}     export PATH=$HOME/go/bin:$PATH{_C.RESET}")
+            print(f"  {_C.DIM}     pip uninstall httpx --break-system-packages{_C.RESET}")
             return
-    except Exception:
-        pass
+        else:
+            print(f"  {_C.RED}ERROR: 'httpx' not found.{_C.RESET}")
+            print(f"  {_C.DIM}go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest{_C.RESET}")
+            return
 
     from bughound.agent_tools import AGENT_TOOLS, execute_tool
     from bughound.agent_prompts import (

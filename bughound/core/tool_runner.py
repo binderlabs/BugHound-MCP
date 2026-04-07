@@ -49,15 +49,25 @@ _SHELL_META = re.compile(r"[;&|`$(){}!\n\r]")
 # ---------------------------------------------------------------------------
 
 
+# Override map: tool_name -> absolute path. Set by pre-flight check
+# when the correct binary is found in a non-PATH location.
+_BINARY_OVERRIDES: dict[str, str] = {}
+
+
 def find_binary(name: str) -> str | None:
     """Locate a tool binary.
 
     Search order:
+    0. Override map (set by pre-flight tool check)
     1. System PATH (via shutil.which)
     2. Each directory in TOOL_PATHS (from settings / BUGHOUND_TOOL_PATHS env)
 
     Returns the absolute path to the binary, or None.
     """
+    # 0. Override (e.g. Go httpx when Python httpx shadows it)
+    if name in _BINARY_OVERRIDES:
+        return _BINARY_OVERRIDES[name]
+
     # 1. System PATH
     path = shutil.which(name)
     if path:
