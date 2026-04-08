@@ -3,6 +3,7 @@ __pycache__/
 .env
 workspaces/
 bughound-workspaces/
+tests/
 *.log
 .venv/
 node_modules/
