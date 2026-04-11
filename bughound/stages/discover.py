@@ -536,18 +536,55 @@ async def _run_discover(
                     full = f"{base}{entry['value']}"
                     all_urls.append({"url": full, "source": "robots"})
 
-    # Deduplicate URLs
+    # Static asset extensions to filter out (no value for injection testing)
+    # Note: .js/.mjs/.jsx are NOT filtered — we analyze them for secrets/endpoints
+    _STATIC_ASSET_EXTS = frozenset({
+        ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".avif",
+        ".woff", ".woff2", ".ttf", ".eot", ".otf",
+        ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".avi", ".mov",
+        ".zip", ".tar", ".gz", ".rar", ".7z",
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".css", ".map",
+    })
+
+    def _is_static_asset(url: str) -> bool:
+        """Check if URL points to a static file that shouldn't be tested."""
+        try:
+            from urllib.parse import urlparse
+            path = urlparse(url).path.lower().rstrip("/")
+            # Strip jsessionid and similar path params (/.css;jsessionid=abc)
+            path = path.split(";")[0]
+            for ext in _STATIC_ASSET_EXTS:
+                if path.endswith(ext):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    # Deduplicate + filter static assets
     seen_urls: set[str] = set()
     unique_urls: list[dict[str, str]] = []
+    static_filtered = 0
     for entry in all_urls:
         u = entry["url"].strip()
-        if u and u not in seen_urls:
-            seen_urls.add(u)
-            unique_urls.append(entry)
+        if not u or u in seen_urls:
+            continue
+        seen_urls.add(u)
+        if _is_static_asset(u):
+            static_filtered += 1
+            continue
+        unique_urls.append(entry)
 
-    # Extract JS files
+    if static_filtered > 0:
+        logger.info(
+            "discover.static_filtered",
+            dropped=static_filtered,
+            remaining=len(unique_urls),
+        )
+
+    # Extract JS files from all_urls (BEFORE filtering) — we still want to analyze JS
     js_urls = sorted(set(
-        e["url"] for e in unique_urls
+        e["url"].strip() for e in all_urls
         if e["url"].lower().endswith((".js", ".mjs", ".jsx"))
         or "/js/" in e["url"].lower()
     ))
