@@ -536,9 +536,12 @@ async def _run_discover(
                     full = f"{base}{entry['value']}"
                     all_urls.append({"url": full, "source": "robots"})
 
-    # Static asset extensions to filter out (no value for injection testing)
-    # Note: .js/.mjs/.jsx are NOT filtered — we analyze them for secrets/endpoints
+    # Static asset extensions to filter out (no value for injection testing).
+    # .js/.mjs/.jsx ARE filtered here — we extract them into js_urls below for
+    # js_analyzer, then keep them out of crawled.json so injection tester doesn't
+    # waste time on them.
     _STATIC_ASSET_EXTS = frozenset({
+        ".js", ".mjs", ".jsx",
         ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".avif",
         ".woff", ".woff2", ".ttf", ".eot", ".otf",
         ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".avi", ".mov",
@@ -546,6 +549,27 @@ async def _run_discover(
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
         ".css", ".map",
     })
+
+    import re as _re_sa
+    # Junk characters that crawlers sometimes capture at the end of URLs
+    # (trailing quotes, parens, smart quotes, commas, periods).
+    _URL_JUNK_RE = _re_sa.compile(
+        r'["\'\)\]\}>,;\.\\]+$|%22$|%27$|%29$|%5d$|%7d$|%3e$|%e2%80%99$',
+        _re_sa.I,
+    )
+
+    def _clean_url(url: str) -> str:
+        """Strip trailing junk captured from HTML/JS extraction."""
+        if not url:
+            return url
+        url = url.strip()
+        # Repeatedly strip trailing junk until no more changes
+        while True:
+            new = _URL_JUNK_RE.sub("", url)
+            if new == url:
+                break
+            url = new
+        return url
 
     def _is_static_asset(url: str) -> bool:
         """Check if URL points to a static file that shouldn't be tested."""
@@ -561,18 +585,20 @@ async def _run_discover(
             pass
         return False
 
-    # Deduplicate + filter static assets
+    # Deduplicate + clean + filter static assets
     seen_urls: set[str] = set()
     unique_urls: list[dict[str, str]] = []
     static_filtered = 0
     for entry in all_urls:
-        u = entry["url"].strip()
+        u = _clean_url(entry.get("url", ""))
         if not u or u in seen_urls:
             continue
         seen_urls.add(u)
         if _is_static_asset(u):
             static_filtered += 1
             continue
+        # Write cleaned URL back
+        entry = {**entry, "url": u} if isinstance(entry, dict) else {"url": u}
         unique_urls.append(entry)
 
     if static_filtered > 0:
@@ -582,12 +608,27 @@ async def _run_discover(
             remaining=len(unique_urls),
         )
 
-    # Extract JS files from all_urls (BEFORE filtering) — we still want to analyze JS
-    js_urls = sorted(set(
-        e["url"].strip() for e in all_urls
-        if e["url"].lower().endswith((".js", ".mjs", ".jsx"))
-        or "/js/" in e["url"].lower()
-    ))
+    # Extract JS files from all_urls (before static filter removes them).
+    # Cleaned + deduped. These go into js_files.json for js_analyzer.
+    _js_seen: set[str] = set()
+    js_urls: list[str] = []
+    for e in all_urls:
+        u = _clean_url(e.get("url", "") if isinstance(e, dict) else str(e))
+        if not u or u in _js_seen:
+            continue
+        lower = u.lower()
+        # Match cleaned .js/.mjs/.jsx extension or /js/ path segment
+        from urllib.parse import urlparse as _up
+        path_only = _up(u).path.lower().rstrip("/").split(";")[0]
+        if (
+            path_only.endswith(".js")
+            or path_only.endswith(".mjs")
+            or path_only.endswith(".jsx")
+            or "/js/" in lower
+        ):
+            _js_seen.add(u)
+            js_urls.append(u)
+    js_urls.sort()
 
     # Extract parameters from URLs
     params_by_path = _extract_parameters(unique_urls)
