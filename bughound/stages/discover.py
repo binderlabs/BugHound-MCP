@@ -1432,7 +1432,9 @@ async def _run_discover(
             "cors_results": cors_results,
             "sensitive_paths": sensitive_findings,
             "auth_results": auth_results,
-            "crawled_urls": all_urls,
+            # Use filtered unique_urls, NOT raw all_urls (which contains
+            # static assets like .jpg/.woff/.css that we dropped)
+            "crawled_urls": unique_urls,
             "parameters_harvested": len(hidden_params) if hidden_params else 0,
             "forms_discovered": len(unique_forms),
             "secrets_found": len(js_secrets),
