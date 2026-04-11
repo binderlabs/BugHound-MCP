@@ -537,14 +537,14 @@ async def _run_discover(
                     all_urls.append({"url": full, "source": "robots"})
 
     # Static asset extensions to filter out (no value for injection testing).
-    # .js/.mjs/.jsx ARE filtered here — we extract them into js_urls below for
-    # js_analyzer, then keep them out of crawled.json so injection tester doesn't
-    # waste time on them.
+    # Note: .js/.mjs/.jsx are NOT filtered here — they're kept because:
+    #   1. JSONP endpoints (/api/data.js?callback=) are real injection targets
+    #   2. Dynamic .js with query params (?v=x) may reflect user input
+    #   3. Injection tester can skip them at its own discretion
     _STATIC_ASSET_EXTS = frozenset({
-        ".js", ".mjs", ".jsx",
         ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp", ".avif",
         ".woff", ".woff2", ".ttf", ".eot", ".otf",
-        ".mp3", ".mp4", ".wav", ".ogg", ".webm", ".avi", ".mov",
+        ".mp3", ".mp4", ".wav", ".ogg", ".ogv", ".webm", ".avi", ".mov",
         ".zip", ".tar", ".gz", ".rar", ".7z",
         ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
         ".css", ".map",
