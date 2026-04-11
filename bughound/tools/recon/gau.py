@@ -10,7 +10,10 @@ from bughound.core import tool_runner
 from bughound.schemas.models import ToolResult
 
 BINARY = "gau"
-TIMEOUT = 120
+# Bigger timeout — gau queries 4 APIs (wayback, commoncrawl, otx, urlscan)
+# and can be very slow on large targets. waybackurls still runs alongside
+# as a fast fallback for Wayback-only data.
+TIMEOUT = 300
 
 
 def is_available() -> bool:
@@ -18,10 +21,20 @@ def is_available() -> bool:
 
 
 async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
-    """Run gau against a domain. Returns deduplicated URL list."""
+    """Run gau against a domain. Returns deduplicated URL list.
+
+    Uses --threads 5 for parallelism. Skips OTX (often slow/rate-limited)
+    by default — our passive_sources module queries OTX separately.
+    """
     result = await tool_runner.run(
         BINARY,
-        [target, "--subs"],
+        [
+            target,
+            "--subs",
+            "--threads", "5",
+            "--providers", "wayback,commoncrawl,urlscan",  # skip otx (slow)
+            "--timeout", "30",  # per-provider timeout
+        ],
         target=target,
         timeout=timeout,
     )
