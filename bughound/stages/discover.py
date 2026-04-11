@@ -554,7 +554,7 @@ async def _run_discover(
     # Junk characters that crawlers sometimes capture at the end of URLs
     # (trailing quotes, parens, smart quotes, commas, periods).
     _URL_JUNK_RE = _re_sa.compile(
-        r'["\'\)\]\}>,;\.\\]+$|%22$|%27$|%29$|%5d$|%7d$|%3e$|%e2%80%99$',
+        r'["\'\)\(\]\}>,;\.\\]+$|%22$|%27$|%28$|%29$|%5b$|%5d$|%7b$|%7d$|%3e$|%e2%80%99$',
         _re_sa.I,
     )
 
@@ -571,16 +571,37 @@ async def _run_discover(
             url = new
         return url
 
+    # Pre-compile a single regex that matches any static extension followed by
+    # a URL delimiter (end-of-string, ?, #, ;, ), %, /) — this catches
+    # malformed URLs with trailing CSS garbage like .png%29%7D._container_x.
+    _ext_pattern = "|".join(
+        re.escape(ext.lstrip(".")) for ext in _STATIC_ASSET_EXTS
+    )
+    _STATIC_ASSET_RE = _re_sa.compile(
+        rf'\.({_ext_pattern})(?:$|[?#;)/%])',
+        _re_sa.I,
+    )
+
     def _is_static_asset(url: str) -> bool:
-        """Check if URL points to a static file that shouldn't be tested."""
+        """Check if URL points to a static file that shouldn't be tested.
+
+        Uses regex to catch malformed URLs where extraction captured CSS
+        garbage after the extension (e.g. .png%29%7D._container_x).
+        """
         try:
             from urllib.parse import urlparse
-            path = urlparse(url).path.lower().rstrip("/")
+            # Check path + query — static refs can appear either way
+            parsed = urlparse(url)
+            path = parsed.path.lower().rstrip("/")
             # Strip jsessionid and similar path params (/.css;jsessionid=abc)
-            path = path.split(";")[0]
+            path_clean = path.split(";")[0]
+            # Fast path: endswith check for clean URLs
             for ext in _STATIC_ASSET_EXTS:
-                if path.endswith(ext):
+                if path_clean.endswith(ext):
                     return True
+            # Slower path: regex for malformed URLs with trailing junk
+            if _STATIC_ASSET_RE.search(path):
+                return True
         except Exception:
             pass
         return False
