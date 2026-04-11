@@ -698,6 +698,92 @@ async def _run_discover(
             )
             files_written.append("urls/js_hidden_params.json")
 
+        # ===================================================================
+        # Phase 2C-trufflehog: Verify secrets with trufflehog (optional)
+        # ===================================================================
+        # js_analyzer finds pattern matches but doesn't verify them.
+        # trufflehog calls the actual API to confirm secrets are live.
+        # Verified secrets → CRITICAL findings, unverified → MEDIUM.
+        try:
+            from bughound.tools.scanning import trufflehog as _trufflehog_tool
+            if _trufflehog_tool.is_available():
+                if progress_cb:
+                    await progress_cb(46, "Verifying secrets with trufflehog", "trufflehog")
+
+                import tempfile
+                import aiohttp as _th_aiohttp
+                from pathlib import Path as _ThPath
+
+                verified_secrets: list[dict[str, Any]] = []
+                with tempfile.TemporaryDirectory(prefix="bughound_th_") as _tmp_dir:
+                    tmp_path = _ThPath(_tmp_dir)
+
+                    # Download JS files for filesystem scan (cap at 50 files for speed)
+                    async with _th_aiohttp.ClientSession(
+                        timeout=_th_aiohttp.ClientTimeout(total=15),
+                    ) as _th_session:
+                        downloaded = 0
+                        for js_url in js_urls[:50]:
+                            try:
+                                async with _th_session.get(js_url, ssl=False) as resp:
+                                    if resp.status == 200:
+                                        content = await resp.text(errors="replace")
+                                        # Sanitize filename
+                                        safe_name = (
+                                            js_url.replace("://", "_")
+                                            .replace("/", "_")
+                                            .replace(":", "_")
+                                            .replace("?", "_")[:200]
+                                        )
+                                        (tmp_path / safe_name).write_text(
+                                            content[:500_000], errors="replace",
+                                        )
+                                        downloaded += 1
+                            except Exception:
+                                continue
+
+                    if downloaded > 0:
+                        # Scan downloaded files with trufflehog (verified only)
+                        th_result = await _trufflehog_tool.scan_filesystem(
+                            str(tmp_path), only_verified=True, timeout=180,
+                        )
+                        if th_result.success and th_result.results:
+                            verified_secrets = th_result.results
+                            logger.info(
+                                "trufflehog.verified_secrets",
+                                count=len(verified_secrets),
+                                files_scanned=downloaded,
+                            )
+
+                # Save verified secrets separately and merge into main secrets
+                if verified_secrets:
+                    await workspace.write_data(
+                        workspace_id, "secrets/verified_secrets.json",
+                        verified_secrets,
+                        generated_by="trufflehog", target=target_label,
+                    )
+                    files_written.append("secrets/verified_secrets.json")
+
+                    # Boost js_secrets: mark any pattern match that trufflehog
+                    # also found as "verified" with HIGH confidence + critical
+                    for vs in verified_secrets:
+                        js_secrets.append({
+                            "name": vs.get("detector", "unknown"),
+                            "value": vs.get("raw_snippet", ""),
+                            "source_file": vs.get("source_file", ""),
+                            "confidence": "HIGH",
+                            "verified": True,
+                            "severity": "critical",
+                            "description": vs.get("description", "Verified secret"),
+                        })
+                    # Re-save merged secrets
+                    await workspace.write_data(
+                        workspace_id, "secrets/js_secrets.json", js_secrets,
+                        generated_by="js_analyzer+trufflehog", target=target_label,
+                    )
+        except Exception as _th_exc:
+            logger.debug("trufflehog.skipped", error=str(_th_exc))
+
     # ===================================================================
     # Phase 2C-map: Check for exposed source maps (.js.map)
     # ===================================================================

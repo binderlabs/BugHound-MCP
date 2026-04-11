@@ -77,6 +77,18 @@ echo "  [+] ffuf — Directory fuzzing"
 go install -v github.com/hahwul/dalfox/v2@latest
 echo "  [+] dalfox — XSS scanner"
 
+# ── Secret verification (trufflehog) ──
+echo ""
+echo "[*] Installing trufflehog (verified secret detection)..."
+if ! command -v trufflehog &>/dev/null; then
+    curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b "$HOME/go/bin" 2>/dev/null || \
+    go install -v github.com/trufflesecurity/trufflehog/v3@latest 2>/dev/null || \
+    echo "  [!] trufflehog install failed — install manually: https://github.com/trufflesecurity/trufflehog"
+fi
+if command -v trufflehog &>/dev/null; then
+    echo "  [+] trufflehog — Verified secret detection"
+fi
+
 # ── One-liner pipeline tools ──
 echo ""
 echo "[*] Installing one-liner pipeline tools..."
@@ -135,7 +147,7 @@ echo "    interactsh — go install -v github.com/projectdiscovery/interactsh/cm
 # ── Verify ──
 echo ""
 echo "[*] Verification:"
-TOOLS="httpx nuclei katana subfinder gau waybackurls assetfinder gospider ffuf dalfox qsreplace kxss Gxss gf unfurl anew urldedupe bhedak sqlmap arjun wafw00f uro"
+TOOLS="httpx nuclei katana subfinder gau waybackurls assetfinder gospider ffuf dalfox trufflehog qsreplace kxss Gxss gf unfurl anew urldedupe bhedak sqlmap arjun wafw00f uro"
 INSTALLED=0
 TOTAL=0
 for tool in $TOOLS; do

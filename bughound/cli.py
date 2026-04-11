@@ -264,6 +264,8 @@ def _preflight_tool_check(quiet: bool = False) -> None:
         # ── Validation tools ──
         ("sqlmap",       "SQLi validation",           "apt install sqlmap  OR  pip install sqlmap", False),
         ("dalfox",       "XSS validation",            "go install -v github.com/hahwul/dalfox/v2@latest", False),
+        # ── Secret verification ──
+        ("trufflehog",   "Verified secret detection", "curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin", False),
         # ── CMS scanning ──
         ("wpscan",       "WordPress scanning",        "gem install wpscan  OR  apt install wpscan", False),
         # ── One-liner pipeline tools ──

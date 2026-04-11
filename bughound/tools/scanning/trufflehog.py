@@ -1,64 +1,138 @@
-from typing import Dict, Any, List
+"""Trufflehog secret verification wrapper.
+
+Verifies secrets found by js_analyzer by calling the actual API.
+Verified = ACTIVE secret = CRITICAL finding.
+Unverified = maybe-real = MEDIUM confidence.
+
+Integration in discover.py Phase 2C (JS analysis) as an optional verification layer.
+"""
+
+from __future__ import annotations
+
 import json
-import os
-import tempfile
-from ..base_tool import BaseTool, ToolResult
+from typing import Any
 
-class TruffleHogTool(BaseTool):
-    def __init__(self):
-        super().__init__("trufflehog", timeout=600)
+from bughound.core import tool_runner
+from bughound.schemas.models import ToolResult
 
-    async def execute(self, target: str, options: Dict[str, Any]) -> ToolResult:
+BINARY = "trufflehog"
+TIMEOUT = 600
+
+
+def is_available() -> bool:
+    return tool_runner.is_available(BINARY)
+
+
+async def scan_filesystem(
+    path: str,
+    *,
+    only_verified: bool = True,
+    timeout: int = 300,
+) -> ToolResult:
+    """Scan a local directory/file for verified secrets.
+
+    path: absolute path to directory or single file.
+    only_verified: if True, trufflehog calls the API to verify secrets are live.
+    timeout: overall execution timeout.
+    """
+    args = ["filesystem", path, "--json", "--no-update"]
+    if only_verified:
+        args.append("--only-verified")
+
+    result = await tool_runner.run(BINARY, args, target=path, timeout=timeout)
+
+    if result.success and result.results:
+        parsed = _parse_output(result.results)
+        result.results = parsed
+        result.result_count = len(parsed)
+
+    return result
+
+
+async def scan_git(
+    repo_url: str,
+    *,
+    only_verified: bool = True,
+    max_depth: int = 500,
+    timeout: int = 600,
+) -> ToolResult:
+    """Scan a git repository (including history) for secrets.
+
+    repo_url: git URL (https://github.com/org/repo or local .git path).
+    only_verified: if True, trufflehog calls the API to verify secrets are live.
+    max_depth: max number of commits to scan back through history.
+    timeout: overall execution timeout.
+    """
+    args = [
+        "git", repo_url, "--json", "--no-update",
+        f"--max-depth={max_depth}",
+    ]
+    if only_verified:
+        args.append("--only-verified")
+
+    result = await tool_runner.run(BINARY, args, target=repo_url, timeout=timeout)
+
+    if result.success and result.results:
+        parsed = _parse_output(result.results)
+        result.results = parsed
+        result.result_count = len(parsed)
+
+    return result
+
+
+def _parse_output(raw_lines: list[Any]) -> list[dict[str, Any]]:
+    """Parse trufflehog JSONL output into BugHound finding format."""
+    findings: list[dict[str, Any]] = []
+
+    for line in raw_lines:
         try:
-            # TruffleHog can scan git, filesystem, or s3. 
-            # For web recon, we usually want to scan specific JS files or a git repo.
-            # If target starts with http, we might need 'filesystem' mode after downloading, 
-            # or use 'git' if it's a git repo.
-            # For simplicity in Phase 3, we assume target is a URL to a git repo OR we are scanning a local directory (the loot).
-            # Let's assume we are scanning the 'web' directory of the workspace.
-            
-            # If target is a directory path
-            if os.path.isdir(target):
-                cmd = self._build_command(target, options)
-                raw_output = await self._run_command(cmd)
-                parsed_data = self._parse_output(raw_output)
-                return ToolResult(success=True, data=parsed_data, raw_output=raw_output)
-            
-            # If target is a URL (git)
-            elif target.endswith(".git"):
-                cmd = ["trufflehog", "git", target, "--json"]
-                raw_output = await self._run_command(cmd)
-                parsed_data = self._parse_output(raw_output)
-                return ToolResult(success=True, data=parsed_data, raw_output=raw_output)
-                
-            else:
-                return ToolResult(success=False, error="TruffleHog target must be a directory or .git URL")
-
-        except Exception as e:
-            return ToolResult(success=False, error=str(e))
-
-    def _build_command(self, target: str, options: Dict[str, Any]) -> List[str]:
-        # trufflehog filesystem /path/to/dir --json
-        cmd = ["trufflehog", "filesystem", target, "--json"]
-        return cmd
-
-    def _parse_output(self, raw_output: str) -> Dict[str, Any]:
-        secrets = []
-        for line in raw_output.splitlines():
-            try:
-                if not line.strip(): continue
+            if isinstance(line, dict):
+                entry = line
+            elif isinstance(line, str):
+                line = line.strip()
+                if not line:
+                    continue
                 entry = json.loads(line)
-                # TruffleHog JSON is verbose
-                secrets.append({
-                    "detector": entry.get("DetectorName"),
-                    "decoder": entry.get("DecoderName"),
-                    "raw": entry.get("Raw"),
-                    "source": entry.get("SourceMetadata", {}).get("Data", {}).get("Filesystem", {}).get("file")
-                })
-            except json.JSONDecodeError:
+            else:
                 continue
-                
-        return {
-            "secrets": secrets,
-            "count": len(secrets)
-        }
+
+            if not isinstance(entry, dict):
+                continue
+
+            detector = entry.get("DetectorName", "unknown")
+            verified = bool(entry.get("Verified", False))
+            raw = str(entry.get("Raw", ""))
+            redacted = str(entry.get("Redacted", raw[:20] + "..." if raw else ""))
+
+            # Extract source file from metadata
+            source_meta = entry.get("SourceMetadata", {}) or {}
+            data_meta = source_meta.get("Data", {}) or {}
+            fs_meta = data_meta.get("Filesystem", {}) or {}
+            git_meta = data_meta.get("Git", {}) or {}
+
+            source_file = fs_meta.get("file") or git_meta.get("file") or "unknown"
+            commit = git_meta.get("commit", "")
+            line_num = fs_meta.get("line") or git_meta.get("line", 0)
+
+            # Severity based on verification + detector
+            severity = "critical" if verified else "high"
+            confidence = "HIGH" if verified else "MEDIUM"
+
+            findings.append({
+                "detector": detector,
+                "verified": verified,
+                "confidence": confidence,
+                "severity": severity,
+                "raw_snippet": redacted[:100],
+                "source_file": source_file,
+                "commit": commit,
+                "line": line_num,
+                "description": (
+                    f"Verified {detector} secret" if verified
+                    else f"Unverified {detector} secret"
+                ),
+            })
+        except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+            continue
+
+    return findings
