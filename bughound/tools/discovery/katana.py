@@ -84,6 +84,60 @@ async def execute(
     return _parse_results(result)
 
 
+async def execute_batch(
+    targets: list[str],
+    depth: int = 3,
+    timeout: int = TIMEOUT,
+    scope: str = "rdn",
+    concurrency: int = 10,
+) -> ToolResult:
+    """Crawl multiple URLs in ONE katana invocation using -list flag.
+
+    Much faster than running katana N times sequentially — katana handles
+    parallelism internally with -c (concurrency).
+    """
+    if not targets:
+        return ToolResult(
+            tool="katana", success=True, results=[], result_count=0,
+        )
+
+    # Normalize URLs
+    normalized = [
+        t if t.startswith(("http://", "https://")) else f"https://{t}"
+        for t in targets
+    ]
+
+    # Write URLs to temp file (katana -list reads from file)
+    import tempfile, os
+    fd, tmp = tempfile.mkstemp(suffix=".txt", prefix="bh_katana_list_")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write("\n".join(normalized))
+
+        result = await tool_runner.run(
+            BINARY,
+            [
+                "-list", tmp,
+                "-d", str(depth),
+                "-c", str(concurrency),  # internal concurrency
+                "-jsonl", "-silent",
+                "-js-crawl",
+                "-form-extraction",
+                "-automatic-form-fill",
+                "-field-scope", scope,
+            ],
+            target=f"{len(targets)} URLs",
+            timeout=timeout,
+        )
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+    return _parse_results(result)
+
+
 def _parse_results(result: ToolResult) -> ToolResult:
     """Parse JSONL output into structured URL list."""
     if not result.success:

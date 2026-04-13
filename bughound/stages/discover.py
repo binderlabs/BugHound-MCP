@@ -439,29 +439,35 @@ async def _run_discover(
 
     if katana.is_available():
         katana_count = 0
-        for ct in crawl_targets:
-            try:
-                if use_deep_crawl:
-                    cr = await katana.execute_deep(ct, timeout=180)
-                elif crawl_depth == 1:
-                    cr = await katana.execute(ct, depth=1, timeout=60)
-                else:
-                    cr = await katana.execute_light(ct, timeout=60)
-                if cr.success:
-                    for entry in cr.results:
-                        u = entry["url"] if isinstance(entry, dict) else str(entry)
-                        all_urls.append({"url": u, "source": "katana"})
-                        katana_count += 1
-                    # Extract forms from katana deep mode output
-                    for w in cr.warnings:
-                        if w.startswith("__forms__:"):
-                            import json as _json
-                            try:
-                                katana_forms.extend(_json.loads(w[10:]))
-                            except _json.JSONDecodeError:
-                                pass
-            except Exception as exc:
-                warnings.append(f"Crawl failed for {ct}: {exc}")
+        # Single batch invocation — katana handles internal parallelism.
+        # Previously: N sequential invocations (16 URLs × 180s = 48 min worst case).
+        # Now: 1 invocation, internal concurrency, ~1-3 min for typical batch.
+        #
+        # Depth 2 is a good balance for seeds — they're already deep paths,
+        # depth 2 means crawl their immediate links (forms, navigation, etc.)
+        try:
+            depth_for_batch = 3 if use_deep_crawl else 2
+            cr = await katana.execute_batch(
+                crawl_targets,
+                depth=depth_for_batch,
+                concurrency=10,
+                timeout=300,  # 5 min cap for whole batch
+            )
+            if cr.success:
+                for entry in cr.results:
+                    u = entry["url"] if isinstance(entry, dict) else str(entry)
+                    all_urls.append({"url": u, "source": "katana"})
+                    katana_count += 1
+                # Extract forms from katana batch output
+                for w in cr.warnings:
+                    if w.startswith("__forms__:"):
+                        import json as _json
+                        try:
+                            katana_forms.extend(_json.loads(w[10:]))
+                        except _json.JSONDecodeError:
+                            pass
+        except Exception as exc:
+            warnings.append(f"Katana batch crawl failed: {exc}")
         url_tool_counts["katana"] = katana_count
     elif gospider.is_available():
         # Same seeding strategy as katana — use gau/wayback URLs as seeds
