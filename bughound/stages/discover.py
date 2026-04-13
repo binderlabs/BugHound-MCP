@@ -629,10 +629,93 @@ async def _run_discover(
             remaining=len(unique_urls),
         )
 
+    # ===================================================================
+    # Phase 2B-liveness: Probe URLs in bulk to filter dead historical URLs
+    # ===================================================================
+    # gau/waybackurls return historical URLs — many are 404 now. Probing
+    # them keeps only live endpoints (200/301/302/401/403). Without this
+    # filter, downstream tools waste time on dead URLs:
+    #   - js_analyzer: downloads dead .js files (404 HTML pages, no secrets)
+    #   - arjun: param-fuzzes dead endpoints
+    #   - param_classifier: classifies non-existent URLs
+    #   - injection_tester (Stage 4): tests against dead URLs
+    if progress_cb:
+        await progress_cb(40, "Probing URLs for liveness", "url_probe")
+
+    if unique_urls and len(unique_urls) > 5:
+        live_url_set: set[str] = set()
+        dead_url_count = 0
+        # Use httpx in stdin batch mode for speed
+        if tool_runner.is_available("httpx"):
+            url_list = [e["url"] for e in unique_urls if isinstance(e, dict) and e.get("url")]
+            try:
+                # httpx -l reads from file. Write urls to temp file.
+                import tempfile as _tf_url, os as _os_url
+                _ufd, _utmp = _tf_url.mkstemp(suffix=".txt", prefix="bh_url_probe_")
+                with _os_url.fdopen(_ufd, "w") as _f:
+                    _f.write("\n".join(url_list))
+                try:
+                    # -mc 200,301,302,401,403: keep "alive-ish" URLs
+                    # -t 50: 50 threads for speed
+                    # -timeout 5: short per-URL timeout
+                    # -nc: no color codes
+                    # -silent: only print URLs, no banner
+                    probe_result = await tool_runner.run(
+                        "httpx",
+                        [
+                            "-l", _utmp,
+                            "-mc", "200,301,302,401,403",
+                            "-t", "50",
+                            "-timeout", "5",
+                            "-silent",
+                            "-nc",
+                        ],
+                        target=target_label,
+                        timeout=600,  # 10 min max for huge URL sets
+                    )
+                    if probe_result.success and probe_result.results:
+                        for line in probe_result.results:
+                            line = str(line).strip()
+                            if line.startswith("http"):
+                                live_url_set.add(line.split()[0])  # strip status code if present
+                finally:
+                    try:
+                        _os_url.unlink(_utmp)
+                    except OSError:
+                        pass
+
+                # Filter unique_urls to only live ones
+                if live_url_set:
+                    pre_count = len(unique_urls)
+                    unique_urls = [
+                        e for e in unique_urls
+                        if isinstance(e, dict) and e.get("url") in live_url_set
+                    ]
+                    dead_url_count = pre_count - len(unique_urls)
+                    logger.info(
+                        "discover.liveness_probe",
+                        total=pre_count,
+                        live=len(unique_urls),
+                        dead=dead_url_count,
+                    )
+                    if dead_url_count > 0:
+                        warnings.append(
+                            f"URL liveness: dropped {dead_url_count} dead URLs "
+                            f"from gau/wayback history ({len(unique_urls)} live remain)"
+                        )
+                else:
+                    logger.warning(
+                        "discover.liveness_probe.empty",
+                        msg="httpx returned no live URLs — possible probe failure, keeping all",
+                    )
+            except Exception as exc:
+                warnings.append(f"URL liveness probe failed: {exc}")
+
     # Extract JS files from all_urls (before static filter removes them).
     # Cleaned + deduped. These go into js_files.json for js_analyzer.
+    # Probe JS URLs for liveness too — wayback/gau return many dead .js files.
     _js_seen: set[str] = set()
-    js_urls: list[str] = []
+    js_urls_raw: list[str] = []
     for e in all_urls:
         u = _clean_url(e.get("url", "") if isinstance(e, dict) else str(e))
         if not u or u in _js_seen:
@@ -648,8 +731,56 @@ async def _run_discover(
             or "/js/" in lower
         ):
             _js_seen.add(u)
-            js_urls.append(u)
-    js_urls.sort()
+            js_urls_raw.append(u)
+
+    # Probe JS URLs for liveness — most wayback .js files are dead 404s
+    js_urls: list[str] = []
+    if js_urls_raw and len(js_urls_raw) > 5 and tool_runner.is_available("httpx"):
+        try:
+            import tempfile as _tf_js, os as _os_js
+            _jfd, _jtmp = _tf_js.mkstemp(suffix=".txt", prefix="bh_js_probe_")
+            with _os_js.fdopen(_jfd, "w") as _jf:
+                _jf.write("\n".join(js_urls_raw))
+            try:
+                js_probe = await tool_runner.run(
+                    "httpx",
+                    [
+                        "-l", _jtmp,
+                        "-mc", "200",  # JS files must return 200 (no point if 301/redirect)
+                        "-t", "50",
+                        "-timeout", "5",
+                        "-silent",
+                        "-nc",
+                    ],
+                    target=target_label,
+                    timeout=600,
+                )
+                if js_probe.success and js_probe.results:
+                    live_js = set()
+                    for line in js_probe.results:
+                        line = str(line).strip()
+                        if line.startswith("http"):
+                            live_js.add(line.split()[0])
+                    js_urls = sorted(u for u in js_urls_raw if u in live_js)
+                    js_dead = len(js_urls_raw) - len(js_urls)
+                    if js_dead > 0:
+                        logger.info(
+                            "discover.js_liveness",
+                            total=len(js_urls_raw),
+                            live=len(js_urls),
+                            dead=js_dead,
+                        )
+                else:
+                    js_urls = sorted(js_urls_raw)  # fallback if probe fails
+            finally:
+                try:
+                    _os_js.unlink(_jtmp)
+                except OSError:
+                    pass
+        except Exception:
+            js_urls = sorted(js_urls_raw)
+    else:
+        js_urls = sorted(js_urls_raw)
 
     # Extract parameters from URLs
     params_by_path = _extract_parameters(unique_urls)
