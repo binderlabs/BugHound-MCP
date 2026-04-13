@@ -225,6 +225,81 @@ _JS_KEYWORD_FILTER = frozenset({
 })
 
 
+def scan_urls_for_secrets(urls: list[str]) -> list[dict[str, Any]]:
+    """Scan a list of URLs for secrets embedded in query params / fragments.
+
+    gau/wayback/katana often return historical URLs like:
+      /callback?token=eyJhbGc...
+      /api/action?api_key=sk_live_abc123
+      /oauth?access_token=ya29.abc...
+      https://user:pass@host/
+
+    These old URLs can contain leaked credentials that are still active.
+    We reuse the same _SECRET_PATTERNS + FP filters as JS analysis.
+
+    Returns list of {type, value, confidence, source_url, match_context}.
+    Deduplicates by (pattern, value).
+    """
+    from urllib.parse import urlparse, parse_qs, unquote
+
+    secrets: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()  # (type, value)
+
+    for url in urls:
+        if not url or not isinstance(url, str):
+            continue
+
+        # Scan both the raw URL AND decoded query values (tokens often URL-encoded)
+        try:
+            parsed = urlparse(url)
+            # Decode query params
+            qs = parse_qs(parsed.query, keep_blank_values=True)
+            # Build a search string: raw URL + decoded query values
+            parts = [url]
+            for _k, vals in qs.items():
+                for v in vals:
+                    if v:
+                        parts.append(unquote(v))
+            # Also include fragment
+            if parsed.fragment:
+                parts.append(unquote(parsed.fragment))
+            search_text = "\n".join(parts)
+        except Exception:
+            search_text = url
+
+        for name, pattern, description, confidence in _SECRET_PATTERNS:
+            for match in pattern.finditer(search_text):
+                value = match.group(1) if match.lastindex else match.group(0)
+                value = value.strip()
+
+                if len(value) < 12:
+                    continue
+                if value.lower() in _FP_VALUES:
+                    continue
+
+                # Dedup by (pattern_name, value)
+                dedup_key = (name, value)
+                if dedup_key in seen:
+                    continue
+
+                # Apply existing FP filter
+                if _is_fp_value(value, url, confidence):
+                    continue
+
+                seen.add(dedup_key)
+                display = value[:60] + ("..." if len(value) > 60 else "")
+                secrets.append({
+                    "type": name,
+                    "value": display,
+                    "description": description,
+                    "confidence": confidence,
+                    "source_url": url,
+                    "source": "url_scan",
+                })
+
+    return secrets
+
+
 def extract_params_from_js(js_content: str) -> list[str]:
     """Extract parameter names from JavaScript source code."""
     params = set()

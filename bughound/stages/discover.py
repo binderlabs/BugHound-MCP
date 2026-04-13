@@ -867,6 +867,36 @@ async def _run_discover(
     await workspace.update_stats(workspace_id, urls_discovered=len(unique_urls))
 
     # ===================================================================
+    # Phase 2B-urlsecrets: Scan URL list for embedded secrets
+    # ===================================================================
+    # gau/wayback/katana often return URLs with secrets in query params:
+    #   /callback?token=eyJhbGc...
+    #   /api?api_key=sk_live_abc123
+    #   https://user:pass@host/
+    # These historical URLs can contain leaked credentials still active.
+    url_secrets: list[dict[str, Any]] = []
+    if unique_urls:
+        try:
+            url_list_to_scan = [
+                e.get("url", "") if isinstance(e, dict) else str(e)
+                for e in unique_urls
+            ]
+            url_secrets = js_analyzer.scan_urls_for_secrets(url_list_to_scan)
+            if url_secrets:
+                await workspace.write_data(
+                    workspace_id, "secrets/url_secrets.json", url_secrets,
+                    generated_by="url_scanner", target=target_label,
+                )
+                files_written.append("secrets/url_secrets.json")
+                logger.info(
+                    "discover.url_secrets",
+                    count=len(url_secrets),
+                    types=list({s["type"] for s in url_secrets}),
+                )
+        except Exception as exc:
+            warnings.append(f"URL secret scan failed: {exc}")
+
+    # ===================================================================
     # Phase 2C: JS Analysis
     # ===================================================================
     js_secrets: list[dict[str, Any]] = []
@@ -1798,6 +1828,7 @@ async def _run_discover(
             "secrets_found": len(js_secrets),
             "secrets_by_confidence": secrets_by_conf if js_urls else {},
             "secret_types": dict(secret_types.most_common(10)),
+            "url_secrets_found": len(url_secrets),
             "endpoints_from_js": len(js_endpoints),
             "hidden_endpoints": len(hidden_endpoints),
             "forms_discovered": len(unique_forms),
