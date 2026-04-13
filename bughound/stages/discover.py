@@ -708,6 +708,16 @@ async def _run_discover(
         js_endpoints = js_result.get("endpoints", [])
         js_hidden_params = js_result.get("hidden_params", [])
         secrets_by_conf = js_result.get("secrets_by_confidence", {})
+        # Track real download success (some URLs are dead 404s from wayback/gau)
+        js_files_actually_analyzed = js_result.get("files_analyzed", 0)
+        js_files_failed = js_result.get("files_failed", 0)
+        if js_files_failed > js_files_actually_analyzed * 3 and js_files_actually_analyzed < 10:
+            warnings.append(
+                f"JS analyzer: {js_files_failed} of "
+                f"{js_files_actually_analyzed + js_files_failed} JS URLs failed "
+                f"(404/timeout) — most JS URLs from wayback/gau are dead. "
+                f"Only {js_files_actually_analyzed} actually analyzed."
+            )
 
         # Cross-reference: endpoints in JS but not in crawled URLs = hidden
         crawled_paths = set()
@@ -1556,7 +1566,9 @@ async def _run_discover(
             "url_categories": url_categories,
             "url_sources": url_tool_counts,
             "js_files_found": len(js_urls),
-            "js_files_analyzed": min(len(js_urls), 100),
+            # actual downloads (excludes 404/timeout from dead wayback URLs)
+            "js_files_analyzed": js_files_actually_analyzed if js_urls else 0,
+            "js_files_failed": js_files_failed if js_urls else 0,
             "secrets_found": len(js_secrets),
             "secrets_by_confidence": secrets_by_conf if js_urls else {},
             "secret_types": dict(secret_types.most_common(10)),
