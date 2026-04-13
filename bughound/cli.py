@@ -1107,19 +1107,35 @@ async def cmd_recon(args: argparse.Namespace) -> None:
 
         # Try to load discovered data for summary
         hosts_data = await workspace.read_data(workspace_id, "hosts/live_hosts.json")
-        urls_data = await workspace.read_data(workspace_id, "urls/crawled_urls.json")
-        subs_data = await workspace.read_data(workspace_id, "subdomains/all_subdomains.json")
+        urls_data = await workspace.read_data(workspace_id, "urls/crawled.json")
+        subs_data = await workspace.read_data(workspace_id, "subdomains/all.txt")
+        js_data = await workspace.read_data(workspace_id, "urls/js_files.json")
+        forms_data = await workspace.read_data(workspace_id, "urls/forms.json")
+        secrets_data = await workspace.read_data(workspace_id, "secrets/js_secrets.json")
 
-        hosts_list = hosts_data if isinstance(hosts_data, list) else (
-            hosts_data.get("data", []) if isinstance(hosts_data, dict) else [])
-        urls_list = urls_data if isinstance(urls_data, list) else (
-            urls_data.get("data", []) if isinstance(urls_data, dict) else [])
-        subs_list = subs_data if isinstance(subs_data, list) else (
-            subs_data.get("data", []) if isinstance(subs_data, dict) else [])
+        def _list_of(raw):
+            if isinstance(raw, list):
+                return raw
+            if isinstance(raw, dict):
+                return raw.get("data", [])
+            if isinstance(raw, str):
+                # subdomains/all.txt returned as plain text
+                return [l for l in raw.splitlines() if l.strip()]
+            return []
+
+        hosts_list = _list_of(hosts_data)
+        urls_list = _list_of(urls_data)
+        subs_list = _list_of(subs_data)
+        js_list = _list_of(js_data)
+        forms_list = _list_of(forms_data)
+        secrets_list = _list_of(secrets_data)
 
         print(f"  Subdomains found:  {len(subs_list)}")
         print(f"  Live hosts:        {len(hosts_list)}")
         print(f"  URLs discovered:   {len(urls_list)}")
+        print(f"  JS files:          {len(js_list)}")
+        print(f"  Forms discovered:  {len(forms_list)}")
+        print(f"  Secrets found:     {len(secrets_list)}")
 
         elapsed = time.time() - start
         minutes = int(elapsed // 60)
