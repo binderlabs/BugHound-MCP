@@ -443,15 +443,18 @@ async def _run_discover(
         # Previously: N sequential invocations (16 URLs × 180s = 48 min worst case).
         # Now: 1 invocation, internal concurrency, ~1-3 min for typical batch.
         #
-        # Depth 2 is a good balance for seeds — they're already deep paths,
-        # depth 2 means crawl their immediate links (forms, navigation, etc.)
+        # Tuning: depth 2, scope=fqdn (strict to target host), forms disabled.
+        # form-extraction + auto-fill on 16 URLs at depth 3 explodes to
+        # 1000s of requests and times out. We extract forms via separate
+        # form_extractor module on live_hosts only.
         try:
-            depth_for_batch = 3 if use_deep_crawl else 2
             cr = await katana.execute_batch(
                 crawl_targets,
-                depth=depth_for_batch,
+                depth=2,
                 concurrency=10,
-                timeout=300,  # 5 min cap for whole batch
+                scope="fqdn",  # strict: ebs01.telekom.de only, not www.telekom.de
+                enable_forms=False,  # too slow on batch
+                timeout=300,  # 5 min cap
             )
             if cr.success:
                 for entry in cr.results:

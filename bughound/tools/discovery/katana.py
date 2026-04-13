@@ -86,15 +86,24 @@ async def execute(
 
 async def execute_batch(
     targets: list[str],
-    depth: int = 3,
+    depth: int = 2,
     timeout: int = TIMEOUT,
-    scope: str = "rdn",
+    scope: str = "fqdn",
     concurrency: int = 10,
+    rate_limit: int = 150,
+    enable_forms: bool = False,
 ) -> ToolResult:
     """Crawl multiple URLs in ONE katana invocation using -list flag.
 
     Much faster than running katana N times sequentially — katana handles
     parallelism internally with -c (concurrency).
+
+    Defaults tuned for batch mode:
+    - depth=2 (depth 3+ explodes request count on N URLs)
+    - scope='fqdn' (strict — same hostname only, not root domain)
+      Otherwise 'rdn' lets katana crawl www.telekom.de from ebs01.telekom.de
+    - enable_forms=False (form-extraction + auto-fill is VERY slow on batch)
+    - rate_limit=150 req/s default to avoid WAF triggers
     """
     if not targets:
         return ToolResult(
@@ -114,18 +123,23 @@ async def execute_batch(
         with os.fdopen(fd, "w") as f:
             f.write("\n".join(normalized))
 
+        args = [
+            "-list", tmp,
+            "-d", str(depth),
+            "-c", str(concurrency),
+            "-rl", str(rate_limit),
+            "-jsonl", "-silent",
+            "-js-crawl",
+            "-field-scope", scope,
+            "-timeout", "10",  # per-URL HTTP timeout
+        ]
+        if enable_forms:
+            # Form extraction + auto-fill is VERY expensive in batch mode.
+            # Only enable for single-host deep crawls.
+            args.extend(["-form-extraction", "-automatic-form-fill"])
+
         result = await tool_runner.run(
-            BINARY,
-            [
-                "-list", tmp,
-                "-d", str(depth),
-                "-c", str(concurrency),  # internal concurrency
-                "-jsonl", "-silent",
-                "-js-crawl",
-                "-form-extraction",
-                "-automatic-form-fill",
-                "-field-scope", scope,
-            ],
+            BINARY, args,
             target=f"{len(targets)} URLs",
             timeout=timeout,
         )
