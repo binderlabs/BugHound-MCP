@@ -201,11 +201,15 @@ async def gather_subdomains(domain: str) -> dict[str, list[str]]:
 
 
 async def gather_endpoints(domain: str) -> dict[str, list[str]]:
-    """Run all passive endpoint sources in parallel."""
+    """Run all passive endpoint sources in parallel.
+
+    Note: CommonCrawl is intentionally excluded — it's already covered by
+    gau (one of gau's --providers) and the index.commoncrawl.org server
+    is unreliable (frequent 'Server disconnected' errors, rate limits).
+    """
     sources = {
         "alienvault_otx": alienvault_otx_endpoints(domain),
         "urlscan": urlscan_endpoints(domain),
-        "commoncrawl": commoncrawl_endpoints(domain),
     }
     results = {}
     tasks = {name: asyncio.create_task(coro) for name, coro in sources.items()}
