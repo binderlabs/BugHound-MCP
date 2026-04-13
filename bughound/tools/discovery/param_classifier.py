@@ -413,10 +413,20 @@ def classify_parameters(
         # those vuln types. Inflating matched params with ALL core types makes
         # per-category counts meaningless (they all become equal to total_params).
         #
-        # Fallback: if the param name didn't match ANY pattern (generic names
-        # like "foo", "bar"), test core injection types as a safety net.
+        # Fallback for unmatched params (e.g. 'user', 'city', 'zipcode'): only
+        # add SQLi + XSS — these are the only injection types that are truly
+        # generic and don't require specific param semantics.
+        #
+        # Why NOT add LFI/RCE/SSTI/IDOR to unmatched params:
+        # - LFI needs file-path-like params (file, path, page) — testing
+        #   'city=../../etc/passwd' is near-zero signal
+        # - RCE needs command-like params (cmd, exec) — testing 'zipcode=;id'
+        #   is wasted requests
+        # - SSTI needs template-related params — testing 'user={{7*7}}' is noise
+        # - IDOR needs object-id-like params (id, uuid, _id) — testing
+        #   'street=admin' is nonsense
         if not matched_types:
-            matched_types = ["xss", "sqli", "lfi", "ssti", "idor", "rce"]
+            matched_types = ["xss", "sqli"]
 
         param_vuln_count.setdefault(param_lower, set()).update(matched_types)
 
