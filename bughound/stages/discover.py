@@ -1278,21 +1278,34 @@ async def _run_discover(
                             ],
                             target=ep_url, timeout=60,
                         )
-                        if arjun_result.success and arjun_result.results:
+                        # Process results even on nonzero exit — arjun often
+                        # returns exit 1 on difficult targets while still
+                        # writing valid JSON output with discovered params.
+                        if arjun_result.results:
                             import json as _json
-                            for line in arjun_result.results:
-                                try:
-                                    data = _json.loads(line)
-                                    if isinstance(data, dict):
-                                        for url_key, params in data.items():
-                                            if isinstance(params, list):
-                                                hidden_params.append({
-                                                    "url": url_key,
-                                                    "hidden_params": params,
-                                                    "tool": "arjun",
-                                                })
-                                except _json.JSONDecodeError:
-                                    continue
+                            # arjun writes a JSON object (may span multiple lines)
+                            raw_output = "\n".join(
+                                str(l) for l in arjun_result.results
+                            )
+                            try:
+                                data = _json.loads(raw_output)
+                                if isinstance(data, dict):
+                                    for url_key, info in data.items():
+                                        # arjun newer output: {url: {params: [...]}}
+                                        if isinstance(info, dict):
+                                            params = info.get("params", [])
+                                        elif isinstance(info, list):
+                                            params = info
+                                        else:
+                                            continue
+                                        if params:
+                                            hidden_params.append({
+                                                "url": url_key,
+                                                "hidden_params": params,
+                                                "tool": "arjun",
+                                            })
+                            except _json.JSONDecodeError:
+                                pass
                     except Exception:
                         continue
         except Exception as exc:
