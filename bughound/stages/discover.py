@@ -963,8 +963,21 @@ async def _run_discover(
                 from pathlib import Path as _ThPath
 
                 verified_secrets: list[dict[str, Any]] = []
-                with tempfile.TemporaryDirectory(prefix="bughound_th_") as _tmp_dir:
-                    tmp_path = _ThPath(_tmp_dir)
+                # Save downloaded JS files inside the workspace for inspection
+                # (was tempfile.TemporaryDirectory which auto-deleted them,
+                # making it impossible to verify what was scanned)
+                from bughound.config.settings import WORKSPACE_BASE_DIR
+                tmp_path = _ThPath(WORKSPACE_BASE_DIR) / workspace_id / "js_downloads"
+                tmp_path.mkdir(parents=True, exist_ok=True)
+                # Clean any old files from previous run
+                for _old in tmp_path.iterdir():
+                    if _old.is_file():
+                        try:
+                            _old.unlink()
+                        except OSError:
+                            pass
+                _tmp_dir = str(tmp_path)
+                if True:  # keep block scope similar to old `with` block
 
                     # Download JS files for filesystem scan (cap at 50 files for speed)
                     async with _th_aiohttp.ClientSession(
