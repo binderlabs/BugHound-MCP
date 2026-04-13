@@ -51,7 +51,10 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, str, str]] = [
     ("SQUARE_OAUTH",     re.compile(r"sq0csp-[0-9A-Za-z\-_]{43,}"),                                                     "Square OAuth Secret",         "HIGH"),
     ("PAYPAL_BRAINTREE", re.compile(r"access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}"),                           "PayPal Braintree Token",      "HIGH"),
     ("PGP_KEY",          re.compile(r"-----BEGIN PGP PRIVATE KEY BLOCK-----"),                                           "PGP Private Key",             "HIGH"),
-    ("HEROKU_API",       re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "Heroku API Key (UUID)",       "MEDIUM"),
+    # HEROKU_API: requires explicit context (heroku-related variable name)
+    # to avoid matching every UUID. Was producing massive FPs on UUIDs used
+    # for asset versioning, request IDs, GUIDs.
+    ("HEROKU_API",       re.compile(r"""(?:heroku[_-]?(?:key|token|api|secret))['":\s=]+[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}""", re.I), "Heroku API Key",       "HIGH"),
     ("AMAZON_MWS",       re.compile(r"amzn\.mws\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"),      "Amazon MWS Auth Token",       "HIGH"),
     ("SHOPIFY_TOKEN",    re.compile(r"shpat_[a-fA-F0-9]{32}"),                                                          "Shopify Admin Token",         "HIGH"),
     ("SHOPIFY_KEY",      re.compile(r"shpss_[a-fA-F0-9]{32}"),                                                          "Shopify Shared Secret",       "HIGH"),
@@ -335,6 +338,49 @@ async def _download_js(url: str, timeout: int) -> str | None:
         return None
 
 
+def _is_inside_data_uri(content: str, position: int) -> bool:
+    """Check if a match position is inside a data: URI / base64 image blob.
+
+    Looks backward up to 200 chars for tell-tale prefixes:
+      data:image/, data:application/, ;base64,, base64,
+    Looks forward up to 50 chars for image/binary signatures.
+
+    Catches FPs like Twilio SID matching PNG base64 (AC + base64 chars).
+    """
+    # Look backward — fast path: was a data: URI declared recently?
+    snippet_before = content[max(0, position - 200):position]
+    if "data:" in snippet_before:
+        # Only matters if base64 declaration follows AFTER data:
+        data_idx = snippet_before.rfind("data:")
+        after_data = snippet_before[data_idx:]
+        if "base64," in after_data:
+            return True
+        # data:image/svg+xml;... (not base64 but still binary blob)
+        if "image/" in after_data or "application/" in after_data or "font/" in after_data:
+            return True
+
+    # Look forward briefly for binary blob signatures starting near match
+    snippet_after = content[position:position + 100]
+    # PNG header in base64: iVBORw0KGgo
+    if "iVBORw0KGgo" in snippet_after or "iVBORw0KGgo" in snippet_before[-50:]:
+        return True
+    # JPEG header: /9j/
+    if "/9j/" in snippet_after[:30]:
+        return True
+
+    # Look backward for clear "concatenated base64 string" indicator —
+    # a long run of base64 chars (>200 chars) right before the match means
+    # we're INSIDE a base64 blob, not at a real assignment
+    if len(snippet_before) >= 200:
+        tail = snippet_before[-200:]
+        # Count base64-only chars in last 200
+        b64_chars = sum(1 for c in tail if c.isalnum() or c in "+/=_-")
+        if b64_chars > 190:  # 95%+ base64-like chars = inside a blob
+            return True
+
+    return False
+
+
 def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
     secrets: list[dict[str, Any]] = []
 
@@ -349,6 +395,11 @@ def _extract_secrets(content: str, source_file: str) -> list[dict[str, Any]]:
 
             # Skip common JS literal values regardless of confidence
             if value.strip().lower() in _FP_VALUES:
+                continue
+
+            # Skip matches inside base64 image data / data: URIs
+            # (Twilio SID, AWS keys, etc. can accidentally match PNG headers)
+            if _is_inside_data_uri(content, match.start()):
                 continue
 
             # Apply false-positive filter
