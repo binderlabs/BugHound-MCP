@@ -1273,10 +1273,15 @@ async def _run_discover(
                             suffix=".json", prefix="bughound_arjun_",
                         )
                         _os_arjun.close(_arjun_fd)
+                        # arjun workflow: probe stability → analyze HTTP
+                        # response → extract params → logicforce each param →
+                        # test → report. On slow ASP.NET/Java servers this
+                        # takes 90-120s per URL. 180s gives headroom while
+                        # still bailing on fully hung WAF targets.
+                        #
                         # -t 20: parallel threads (default 2 is too slow)
                         # --rate-limit 100: WAF-friendly
-                        # -T 10: per-request HTTP timeout (default 15s too long)
-                        # timeout 60s overall: fail fast if target blocks us
+                        # -T 10: per-request HTTP timeout (default 15s)
                         arjun_result = await tool_runner.run(
                             "arjun",
                             [
@@ -1286,7 +1291,7 @@ async def _run_discover(
                                 "-T", "10",
                                 "--rate-limit", "100",
                             ],
-                            target=ep_url, timeout=60,
+                            target=ep_url, timeout=180,
                         )
                         # Process results from temp file regardless of exit code
                         # (arjun may exit 1 but still write valid JSON output).
