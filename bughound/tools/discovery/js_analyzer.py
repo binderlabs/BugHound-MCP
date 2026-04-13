@@ -75,7 +75,11 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern, str, str]] = [
     ("REDIS_URI",        re.compile(r"redis://[^\s\"']{10,}"),                                                           "Redis Connection URI",        "MEDIUM"),
     # Auth patterns
     ("BASIC_AUTH",       re.compile(r"(?:Authorization|authorization)[:\s]+Basic\s+([A-Za-z0-9+/=]{20,})"),              "HTTP Basic Auth (base64)",    "MEDIUM"),
-    ("CRED_URL",         re.compile(r"https?://[^:@\s]+:[^:@\s]+@[^\s\"']+"),                                           "URL with Credentials",        "MEDIUM"),
+    # CRED_URL: tighten char classes to exclude JS string delimiters AND
+    # `@` as bare char (catches Retina asset names like family@2x.png which
+    # have @ but aren't credential URLs). Must be full user:pass@host format.
+    # User/pass chars limited to standard URL-safe + percent encoding.
+    ("CRED_URL",         re.compile(r"https?://[A-Za-z0-9._~%+\-]+:[A-Za-z0-9._~%+\-]+@[A-Za-z0-9.\-]+(?::\d+)?/"),       "URL with Credentials",        "MEDIUM"),
     # Cloud keys
     ("AZURE_KEY",        re.compile(r"AccountKey=[A-Za-z0-9+/=]{44,}"),                                                 "Azure Storage Key",           "HIGH"),
     ("AZURE_SAS",        re.compile(r"sv=\d{4}-\d{2}-\d{2}&s[a-z]=[^&]*&sig=[A-Za-z0-9%+/=]+"),                          "Azure SAS Token",             "MEDIUM"),
