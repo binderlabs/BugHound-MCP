@@ -1260,51 +1260,66 @@ async def _run_discover(
                         f"arjun: skipped {skipped_waf} WAF-protected URL(s)"
                     )
             if interesting_eps:
+                import tempfile as _arjun_tempfile
+                import json as _json
+                import os as _os_arjun
                 for ep_url in interesting_eps:
                     try:
+                        # Write to temp file instead of /dev/stdout — arjun
+                        # opens its output with 'w+' mode which fails when
+                        # stdout is a captured pipe (ValueError: can't open
+                        # pipe as read-write).
+                        _arjun_fd, _arjun_tmp = _arjun_tempfile.mkstemp(
+                            suffix=".json", prefix="bughound_arjun_",
+                        )
+                        _os_arjun.close(_arjun_fd)
                         # -t 20: parallel threads (default 2 is too slow)
                         # --rate-limit 100: WAF-friendly
                         # -T 10: per-request HTTP timeout (default 15s too long)
                         # timeout 60s overall: fail fast if target blocks us
-                        # No --stable: it hangs on warm-up when WAF blocks requests
                         arjun_result = await tool_runner.run(
                             "arjun",
                             [
                                 "-u", ep_url,
-                                "-q", "-oJ", "/dev/stdout",
+                                "-q", "-oJ", _arjun_tmp,
                                 "-t", "20",
                                 "-T", "10",
                                 "--rate-limit", "100",
                             ],
                             target=ep_url, timeout=60,
                         )
-                        # Process results even on nonzero exit — arjun often
-                        # returns exit 1 on difficult targets while still
-                        # writing valid JSON output with discovered params.
-                        if arjun_result.results:
-                            import json as _json
-                            # arjun writes a JSON object (may span multiple lines)
-                            raw_output = "\n".join(
-                                str(l) for l in arjun_result.results
-                            )
+                        # Process results from temp file regardless of exit code
+                        # (arjun may exit 1 but still write valid JSON output).
+                        try:
+                            with open(_arjun_tmp) as _arjun_f:
+                                data = _json.load(_arjun_f)
+                            if isinstance(data, dict):
+                                for url_key, info in data.items():
+                                    # arjun newer output: {url: {params: [...]}}
+                                    if isinstance(info, dict):
+                                        params = info.get("params", [])
+                                    elif isinstance(info, list):
+                                        params = info
+                                    else:
+                                        continue
+                                    # Skip ASP.NET framework params (always
+                                    # present, never vulnerable to injection)
+                                    real_params = [
+                                        p for p in params
+                                        if not p.startswith("__")
+                                    ]
+                                    if real_params:
+                                        hidden_params.append({
+                                            "url": url_key,
+                                            "hidden_params": real_params,
+                                            "tool": "arjun",
+                                        })
+                        except (_json.JSONDecodeError, FileNotFoundError, OSError):
+                            pass
+                        finally:
                             try:
-                                data = _json.loads(raw_output)
-                                if isinstance(data, dict):
-                                    for url_key, info in data.items():
-                                        # arjun newer output: {url: {params: [...]}}
-                                        if isinstance(info, dict):
-                                            params = info.get("params", [])
-                                        elif isinstance(info, list):
-                                            params = info
-                                        else:
-                                            continue
-                                        if params:
-                                            hidden_params.append({
-                                                "url": url_key,
-                                                "hidden_params": params,
-                                                "tool": "arjun",
-                                            })
-                            except _json.JSONDecodeError:
+                                _os_arjun.unlink(_arjun_tmp)
+                            except OSError:
                                 pass
                     except Exception:
                         continue
