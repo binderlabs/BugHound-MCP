@@ -191,6 +191,10 @@ async def run(
     start = time.monotonic()
 
     # --- Execute ---
+    # Launch in a new process group so we can kill the entire tree on timeout.
+    # Some tools (arjun, sqlmap) spawn many worker processes that hold pipes
+    # open after the main process dies, causing proc.communicate() to hang.
+    import os as _os
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -198,6 +202,7 @@ async def run(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            start_new_session=True,  # isolates process group
         )
 
         try:
@@ -206,11 +211,21 @@ async def run(
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
-            proc.kill()
-            # Collect whatever output was produced before timeout
+            # Kill the whole process group (arjun workers, sqlmap threads, etc.)
+            import signal as _signal
+            try:
+                _os.killpg(_os.getpgid(proc.pid), _signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+
+            # Hard 3s cap for collecting any remaining output — don't let
+            # orphan children hang us here.
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                    proc.communicate(), timeout=5,
+                    proc.communicate(), timeout=3,
                 )
             except Exception:
                 stdout_bytes, stderr_bytes = b"", b""
