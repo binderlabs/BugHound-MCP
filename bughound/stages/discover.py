@@ -1047,10 +1047,27 @@ async def _run_discover(
 
     # ===================================================================
     # Phase 2C-map: Check for exposed source maps (.js.map)
+    # Save .map content to workspace/sourcemaps/ — these contain original
+    # unminified source code, often revealing internal logic, comments,
+    # and hidden endpoints. Worth keeping for AI/manual review later.
     # ===================================================================
     source_maps_found: list[dict[str, Any]] = []
+    _MAP_SAVE_DIR = None
+    _MAP_MAX_BYTES = 5_000_000  # 5MB cap per map file
     if js_urls:
         import aiohttp as _aiohttp
+        from bughound.config.settings import WORKSPACE_BASE_DIR as _WBD_MAP
+        from pathlib import Path as _PMAP
+        _MAP_SAVE_DIR = _PMAP(_WBD_MAP) / workspace_id / "sourcemaps"
+        _MAP_SAVE_DIR.mkdir(parents=True, exist_ok=True)
+        # Clean old maps
+        for _old in _MAP_SAVE_DIR.iterdir():
+            if _old.is_file():
+                try:
+                    _old.unlink()
+                except OSError:
+                    pass
+
         _map_sem = asyncio.Semaphore(5)
 
         async def _check_map(js_url: str, sess: _aiohttp.ClientSession) -> dict[str, Any] | None:
@@ -1066,10 +1083,26 @@ async def _run_discover(
                             if len(body) > 100 and (
                                 "mappings" in body or "sources" in body
                             ):
+                                # Save to workspace
+                                try:
+                                    safe_name = (
+                                        map_url.replace("://", "_")
+                                        .replace("/", "_")
+                                        .replace(":", "_")
+                                        .replace("?", "_")[:200]
+                                    )
+                                    (_MAP_SAVE_DIR / safe_name).write_text(
+                                        body[:_MAP_MAX_BYTES], errors="replace",
+                                    )
+                                    saved_path = str(_MAP_SAVE_DIR / safe_name)
+                                except Exception:
+                                    saved_path = None
                                 return {
                                     "url": map_url,
                                     "size": len(body),
                                     "source_js": js_url,
+                                    "local_path": saved_path,
+                                    "truncated": len(body) > _MAP_MAX_BYTES,
                                 }
                 except Exception:
                     pass
@@ -1099,6 +1132,7 @@ async def _run_discover(
                 "discover.source_maps",
                 count=len(source_maps_found),
                 urls=[sm["url"] for sm in source_maps_found],
+                saved_to=str(_MAP_SAVE_DIR) if _MAP_SAVE_DIR else None,
             )
 
     # ===================================================================
