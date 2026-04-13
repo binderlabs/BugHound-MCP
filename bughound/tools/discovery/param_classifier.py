@@ -409,14 +409,14 @@ def classify_parameters(
         if param_lower in _SKIP_PARAMS:
             continue
 
-        # Ensure ALL user-input params get tested for core injection classes.
-        core_types = {"xss", "sqli", "lfi", "ssti", "idor", "rce"}
-        if matched_types:
-            for ct in core_types:
-                if ct not in matched_types:
-                    matched_types.append(ct)
-        else:
-            matched_types = list(core_types)
+        # If param name matched known patterns, trust the match and use only
+        # those vuln types. Inflating matched params with ALL core types makes
+        # per-category counts meaningless (they all become equal to total_params).
+        #
+        # Fallback: if the param name didn't match ANY pattern (generic names
+        # like "foo", "bar"), test core injection types as a safety net.
+        if not matched_types:
+            matched_types = ["xss", "sqli", "lfi", "ssti", "idor", "rce"]
 
         param_vuln_count.setdefault(param_lower, set()).update(matched_types)
 
