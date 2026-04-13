@@ -1,9 +1,17 @@
 """Passive subdomain and endpoint sources — pure aiohttp, no external tools.
 
 Free API sources for subdomain enumeration and historical endpoint discovery.
+
+API keys are loaded from ~/.gau.toml so they're shared with gau:
+  [urlscan]
+    apikey = "..."
+  [otx]      # custom section, BugHound-only
+    apikey = "..."
 """
 
 import asyncio
+import os
+from pathlib import Path
 from typing import Any
 import aiohttp
 import structlog
@@ -11,6 +19,42 @@ import structlog
 logger = structlog.get_logger()
 _TIMEOUT = aiohttp.ClientTimeout(total=30)
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+# Cache of API keys loaded from ~/.gau.toml
+_API_KEYS: dict[str, str] | None = None
+
+
+def _load_api_keys() -> dict[str, str]:
+    """Load API keys from ~/.gau.toml. Cached after first call."""
+    global _API_KEYS
+    if _API_KEYS is not None:
+        return _API_KEYS
+
+    keys: dict[str, str] = {}
+    config_path = Path.home() / ".gau.toml"
+    if config_path.exists():
+        try:
+            try:
+                import tomllib  # Python 3.11+
+                with open(config_path, "rb") as f:
+                    data = tomllib.load(f)
+            except ImportError:
+                import tomli  # fallback for older Python
+                with open(config_path, "rb") as f:
+                    data = tomli.load(f)
+
+            for section in ("urlscan", "otx"):
+                section_data = data.get(section, {})
+                if isinstance(section_data, dict):
+                    api_key = section_data.get("apikey", "").strip()
+                    if api_key:
+                        keys[section] = api_key
+        except Exception as exc:
+            logger.debug("api_keys.load_error", error=str(exc))
+
+    _API_KEYS = keys
+    return keys
 
 
 async def hackertarget(domain: str) -> list[str]:
@@ -83,12 +127,16 @@ async def rapiddns(domain: str) -> list[str]:
 
 
 async def urlscan_subdomains(domain: str) -> list[str]:
-    """URLScan.io — search for subdomains."""
+    """URLScan.io — search for subdomains. Uses API key from ~/.gau.toml [urlscan]."""
+    keys = _load_api_keys()
+    headers = {"User-Agent": _UA}
+    if keys.get("urlscan"):
+        headers["API-Key"] = keys["urlscan"]
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=100",
-                headers={"User-Agent": _UA},
+                headers=headers,
                 timeout=_TIMEOUT, ssl=False,
             ) as r:
                 if r.status != 200:
@@ -107,12 +155,16 @@ async def urlscan_subdomains(domain: str) -> list[str]:
 
 
 async def alienvault_otx_endpoints(domain: str) -> list[str]:
-    """AlienVault OTX — historical URLs/endpoints."""
+    """AlienVault OTX — historical URLs/endpoints. Uses API key from ~/.gau.toml [otx]."""
+    keys = _load_api_keys()
+    headers = {"User-Agent": _UA}
+    if keys.get("otx"):
+        headers["X-OTX-API-KEY"] = keys["otx"]
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/url_list?limit=200&page=1",
-                headers={"User-Agent": _UA},
+                headers=headers,
                 timeout=_TIMEOUT, ssl=False,
             ) as r:
                 if r.status != 200:
@@ -130,12 +182,16 @@ async def alienvault_otx_endpoints(domain: str) -> list[str]:
 
 
 async def urlscan_endpoints(domain: str) -> list[str]:
-    """URLScan.io — historical endpoints."""
+    """URLScan.io — historical endpoints. Uses API key from ~/.gau.toml [urlscan]."""
+    keys = _load_api_keys()
+    headers = {"User-Agent": _UA}
+    if keys.get("urlscan"):
+        headers["API-Key"] = keys["urlscan"]
     try:
         async with aiohttp.ClientSession() as s:
             async with s.get(
                 f"https://urlscan.io/api/v1/search/?q=domain:{domain}&size=100",
-                headers={"User-Agent": _UA},
+                headers=headers,
                 timeout=_TIMEOUT, ssl=False,
             ) as r:
                 if r.status != 200:
