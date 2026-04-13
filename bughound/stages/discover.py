@@ -1234,27 +1234,49 @@ async def _run_discover(
         await progress_cb(85, "Light parameter discovery", "arjun")  # 2G
 
     hidden_params: list[dict[str, Any]] = []
+    # Skip arjun if WAF detected — it will just hang on every request
+    waf_hosts_detected = {
+        urlparse(w.get("url", "")).hostname
+        for w in waf_results
+        if w.get("detected")
+    }
+
     if tool_runner.is_available("arjun"):
         try:
             # Pick top 10 interesting endpoints
             interesting_eps = _pick_arjun_targets(unique_urls, hidden_endpoints, 10)
+            # Filter out WAF-protected URLs (arjun will hang on them)
+            if waf_hosts_detected:
+                skipped_waf = sum(
+                    1 for ep in interesting_eps
+                    if urlparse(ep).hostname in waf_hosts_detected
+                )
+                interesting_eps = [
+                    ep for ep in interesting_eps
+                    if urlparse(ep).hostname not in waf_hosts_detected
+                ]
+                if skipped_waf:
+                    warnings.append(
+                        f"arjun: skipped {skipped_waf} WAF-protected URL(s)"
+                    )
             if interesting_eps:
                 for ep_url in interesting_eps:
                     try:
-                        # -t 20: more threads (default 2 is too slow)
-                        # --stable: reliable detection even with rate limits
-                        # --rate-limit: cap at 100 req/s to avoid WAF block
-                        # timeout 120s: enough for slow/WAF targets without hanging
+                        # -t 20: parallel threads (default 2 is too slow)
+                        # --rate-limit 100: WAF-friendly
+                        # -T 10: per-request HTTP timeout (default 15s too long)
+                        # timeout 60s overall: fail fast if target blocks us
+                        # No --stable: it hangs on warm-up when WAF blocks requests
                         arjun_result = await tool_runner.run(
                             "arjun",
                             [
                                 "-u", ep_url,
                                 "-q", "-oJ", "/dev/stdout",
                                 "-t", "20",
-                                "--stable",
+                                "-T", "10",
                                 "--rate-limit", "100",
                             ],
-                            target=ep_url, timeout=120,
+                            target=ep_url, timeout=60,
                         )
                         if arjun_result.success and arjun_result.results:
                             import json as _json
