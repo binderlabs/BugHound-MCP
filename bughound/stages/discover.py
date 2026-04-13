@@ -1241,9 +1241,20 @@ async def _run_discover(
             if interesting_eps:
                 for ep_url in interesting_eps:
                     try:
+                        # -t 20: more threads (default 2 is too slow)
+                        # --stable: reliable detection even with rate limits
+                        # --rate-limit: cap at 100 req/s to avoid WAF block
+                        # timeout 120s: enough for slow/WAF targets without hanging
                         arjun_result = await tool_runner.run(
-                            "arjun", ["-u", ep_url, "-q", "-oJ", "/dev/stdout"],
-                            target=ep_url, timeout=60,
+                            "arjun",
+                            [
+                                "-u", ep_url,
+                                "-q", "-oJ", "/dev/stdout",
+                                "-t", "20",
+                                "--stable",
+                                "--rate-limit", "100",
+                            ],
+                            target=ep_url, timeout=120,
                         )
                         if arjun_result.success and arjun_result.results:
                             import json as _json
