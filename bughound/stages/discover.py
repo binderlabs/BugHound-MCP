@@ -393,11 +393,49 @@ async def _run_discover(
         warnings.append(f"Passive endpoint sources: {exc}")
 
     # Active crawler — katana light/deep by target type, fallback to gospider
+    # Seed katana with both:
+    #   1. live host roots (traditional websites)
+    #   2. interesting URLs from gau/wayback (for backend-only targets where
+    #      the root is empty, like ebs01.telekom.de — root returns 23 bytes)
+    #
+    # Without seeds, katana on backend domains finds 0 URLs because the root
+    # is just a service identifier with no HTML to crawl.
     crawl_targets = [h["url"] for h in live_hosts if h.get("url")][:10]
+
+    # Add seed URLs from gau/wayback: prefer URLs with paths and query params
+    # (more likely to return HTML pages with links to crawl)
+    seed_urls: list[str] = []
+    seen_seed_paths: set[str] = set()
+    for entry in all_urls:
+        url = entry.get("url", "") if isinstance(entry, dict) else str(entry)
+        try:
+            parsed = urlparse(url)
+            # Skip empty paths and bare hostnames (no point seeding from /)
+            if not parsed.path or parsed.path == "/":
+                continue
+            # Dedup by path (don't seed 100 variants of /products?id=N)
+            path_key = parsed.path
+            if path_key in seen_seed_paths:
+                continue
+            seen_seed_paths.add(path_key)
+            seed_urls.append(url)
+            if len(seed_urls) >= 15:  # cap seeds at 15 to keep crawl bounded
+                break
+        except Exception:
+            continue
+    # Combine: live host roots + gau/wayback seed URLs
+    crawl_targets = crawl_targets + seed_urls
+    if seed_urls:
+        logger.info(
+            "discover.katana_seeds_added",
+            seeds=len(seed_urls),
+            total_targets=len(crawl_targets),
+        )
+
     katana_forms: list[dict[str, Any]] = []
     use_deep_crawl = meta.target_type in (TargetType.SINGLE_HOST, TargetType.SINGLE_ENDPOINT)
     # Determine crawl depth based on target type
-    crawl_depth = 1 if len(crawl_targets) > 3 else 3  # shallow for many hosts, deep for single
+    crawl_depth = 1 if len(crawl_targets) > 5 else 3
 
     if katana.is_available():
         katana_count = 0
@@ -426,8 +464,9 @@ async def _run_discover(
                 warnings.append(f"Crawl failed for {ct}: {exc}")
         url_tool_counts["katana"] = katana_count
     elif gospider.is_available():
+        # Same seeding strategy as katana — use gau/wayback URLs as seeds
         gospider_count = 0
-        for ct in crawl_targets:
+        for ct in crawl_targets:  # already includes seed_urls from above
             try:
                 cr = await gospider.execute(ct, depth=2, timeout=60)
                 if cr.success:
