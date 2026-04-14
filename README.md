@@ -43,6 +43,7 @@ python -m bughound.server
 # Mode 2: CLI
 ./bhound scan https://target.com
 ./bhound scan https://target.com -v
+./bhound scan https://target.com --profile client   # quick wins only
 ./bhound recon https://target.com
 ./bhound list
 
@@ -251,25 +252,54 @@ Test https://target.com/api/search?q=test for SQL injection using BugHound
 ## CLI Reference
 
 ```
-./bhound scan <target>                    # Full pipeline (Stages 0-6)
-./bhound scan <target> -v                 # Verbose mode (show all activity)
-./bhound scan <target> --depth deep       # Deep scan
-./bhound scan <target> --skip-validate    # Skip validation stage
-./bhound scan <target> --skip-nuclei      # Skip nuclei scanning
-./bhound scan <target> --resume <ws_id>   # Resume crashed scan
-./bhound scan <target> --output json      # JSON output for CI/CD
-./bhound scan <target> --max-hosts 5      # Auto-select top 5 hosts (broad domains)
-./bhound scan <target> --no-color         # No terminal colors
-./bhound scan <target> -q                 # Quiet mode (summary only)
-./bhound recon <target>                   # Discovery only (Stages 0-2)
-./bhound recon <target> --max-hosts 3     # Recon top 3 hosts only
-./bhound analyze <workspace_id>           # Attack surface analysis
-./bhound test <workspace_id>              # Run tests on existing recon
-./bhound validate <workspace_id>          # Validate findings
-./bhound report <workspace_id>            # Generate reports
-./bhound list                             # List workspaces
-./bhound agent <target> --provider ...    # AI agent mode
-./bhound serve                            # Start MCP server
+./bhound scan <target>                       # Full pipeline (Stages 0-6)
+./bhound scan <target> -v                    # Verbose mode (show all activity)
+./bhound scan <target> --depth deep          # Deep scan
+./bhound scan <target> --profile client      # Client-side bugs only (XSS, CORS, redirect, CSP)
+./bhound scan <target> --profile server      # Server-side bugs only (SQLi, SSRF, RCE, LFI, XXE, auth)
+./bhound scan <target> --profile both        # Full coverage (default; also prompts interactively if omitted)
+./bhound scan <target> --skip-validate       # Skip validation stage
+./bhound scan <target> --skip-nuclei         # Skip nuclei scanning
+./bhound scan <target> --resume <ws_id>      # Resume crashed scan
+./bhound scan <target> --output json         # JSON output for CI/CD
+./bhound scan <target> --max-hosts 5         # Auto-select top 5 hosts (broad domains)
+./bhound scan <target> --no-color            # No terminal colors
+./bhound scan <target> -q                    # Quiet mode (summary only)
+./bhound recon <target>                      # Discovery only (Stages 0-2)
+./bhound recon <target> --max-hosts 3        # Recon top 3 hosts only
+./bhound analyze <workspace_id>              # Attack surface analysis
+./bhound test <workspace_id>                 # Run tests on existing recon
+./bhound test <workspace_id> --profile client  # Test only client-side classes
+./bhound validate <workspace_id>             # Validate findings
+./bhound report <workspace_id>               # Generate reports
+./bhound list                                # List workspaces
+./bhound agent <target> --provider ...       # AI agent mode
+./bhound agent <target> --profile server     # Agent mode restricted to server-side tests
+./bhound serve                               # Start MCP server
+```
+
+### Test Profiles
+
+Split testing between browser-side and server-side bugs to reduce scan time:
+
+| Profile | Classes | Use when |
+|---|---|---|
+| `client` | XSS (all variants), open redirect, CORS, CSTI, prototype pollution, CSP/security headers, clickjacking | Quick wins, bug bounty triage, production-safe scans |
+| `server` | SQLi, SSRF, RCE, LFI, XXE, SSTI, IDOR, BAC, JWT, deserialization, auth bypass, CMS, rate limiting | Deep auth/injection work, slower but covers blind/time-based bugs |
+| `both` | Everything (default) | Full assessment |
+
+Stages 0-3 (recon + attack surface) always run identically — the profile only filters what Stage 4 tests. Hybrid checks (nuclei, vulnerable components, security headers) run in every profile.
+
+When invoked from MCP:
+
+```
+bughound_execute_tests(workspace_id, test_profile="client")
+bughound_list_techniques(test_profile="server")
+# or inside the scan plan:
+bughound_submit_scan_plan(workspace_id, {
+  "targets": [...],
+  "global_settings": {"test_profile": "client"}
+})
 ```
 
 For broad domain targets (e.g., `*.example.com`), BugHound enumerates subdomains and probes them with httpx. In CLI mode, you are prompted to select which live hosts to scan:

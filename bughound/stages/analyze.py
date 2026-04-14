@@ -2311,6 +2311,12 @@ async def submit_scan_plan(
         if invalid:
             errors.append(f"Invalid nuclei_severity: {', '.join(invalid)}")
 
+    test_profile = global_settings.get("test_profile")
+    if test_profile is not None and test_profile not in ("client", "server", "both"):
+        errors.append(
+            f"test_profile={test_profile!r} must be 'client', 'server', or 'both'"
+        )
+
     # Per-target validation
     all_tools: set[str] = set()
     out_of_scope: list[str] = []

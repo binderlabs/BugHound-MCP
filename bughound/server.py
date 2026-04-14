@@ -1071,14 +1071,25 @@ async def bughound_check_tool_coverage() -> str:
         "(SQLi, XSS, SSRF, LFI, IDOR, CRLF, SSTI, header injection, open redirect), "
         "and technology-specific tests (GraphQL, JWT, WordPress, Spring Boot). "
         "Requires bughound_submit_scan_plan first. Always async — returns job_id. "
+        "Optional test_profile filters which side of the test surface runs: "
+        "'client' (XSS/redirect/CORS/proto-pollution/CSP), "
+        "'server' (SQLi/SSRF/RCE/LFI/XXE/IDOR/deserialization/auth), "
+        "'both' (default — full coverage). Use 'client' for quick wins, "
+        "'server' for deep auth/injection work. "
         "IMPORTANT: After receiving the job_id, do NOT automatically call "
         "bughound_job_status. Do NOT poll or loop. Just tell the user the job "
         "is running and wait for them to ask you to check. Stage 4."
     ),
 )
-async def bughound_execute_tests(workspace_id: str) -> str:
+async def bughound_execute_tests(
+    workspace_id: str,
+    test_profile: str = "both",
+) -> str:
     """Run the scan plan."""
-    result = await stage_test.execute_tests(workspace_id, _job_manager)
+    result = await stage_test.execute_tests(
+        workspace_id, _job_manager,
+        test_profile=test_profile if test_profile in ("client", "server", "both") else "both",
+    )
     if result.get("status") == "job_started":
         return _format_job_started(result)
     return _format_test_results(result)
@@ -1122,12 +1133,18 @@ async def bughound_test_single(
         "techniques to include in scan plans. Stage 4."
     ),
 )
-async def bughound_list_techniques() -> str:
-    """List available testing techniques."""
-    from bughound.stages.techniques import list_all_techniques
+async def bughound_list_techniques(test_profile: str = "both") -> str:
+    """List available testing techniques. Optional test_profile filter."""
+    from bughound.stages.techniques import (
+        list_all_techniques, filter_techniques_by_profile, VALID_PROFILES,
+    )
     techs = list_all_techniques()
+    if test_profile not in VALID_PROFILES:
+        test_profile = "both"
+    if test_profile != "both":
+        techs = filter_techniques_by_profile(techs, test_profile)
 
-    lines = ["# Available Testing Techniques\n"]
+    lines = [f"# Available Testing Techniques (profile={test_profile})\n"]
     by_phase: dict[str, list] = {}
     for t in techs:
         by_phase.setdefault(t["phase"], []).append(t)
@@ -1136,7 +1153,8 @@ async def bughound_list_techniques() -> str:
         lines.append(f"\n## Phase {phase}\n")
         for t in by_phase[phase]:
             status = "✓" if t["available"] else f"✗ (needs: {', '.join(t['missing_tools'])})"
-            lines.append(f"- **{t['id']}** [{status}]: {t['description']}")
+            prof = t.get("profile", "both")
+            lines.append(f"- **{t['id']}** [{status}] [{prof}]: {t['description']}")
             lines.append(f"  Vuln classes: {', '.join(t['vuln_classes'])}")
 
     lines.append(f"\n**Total:** {len(techs)} techniques, "

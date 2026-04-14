@@ -553,6 +553,156 @@ _CLASS_TO_TECHNIQUES: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
+# Test profile classification — client vs server vs both
+# ---------------------------------------------------------------------------
+#
+# Each technique and vuln class is tagged with a profile so users can skip
+# one side of the test surface for faster scans. Examples:
+#   --profile client  → XSS, open redirect, CORS, proto pollution, CSP
+#   --profile server  → SQLi, SSRF, RCE, LFI, XXE, deserialization, BAC
+#   --profile both    → everything (default)
+#
+# "both" buckets = cheap/hybrid checks that belong to either side
+# (nuclei templates, vulnerable components, security headers).
+
+VALID_PROFILES = ("client", "server", "both")
+
+_CLASS_PROFILES: dict[str, str] = {
+    "xss": "client",
+    "open_redirect": "client",
+    "cors": "client",
+    "csti": "client",
+    "prototype_pollution": "client",
+
+    "sqli": "server",
+    "sqli_auth_bypass": "server",
+    "ssrf": "server",
+    "lfi": "server",
+    "rfi": "server",
+    "ssti": "server",
+    "rce": "server",
+    "xxe": "server",
+    "crlf": "server",
+    "header_injection": "server",
+    "deserialization": "server",
+    "idor": "server",
+    "bac": "server",
+    "mass_assignment": "server",
+    "rate_limiting": "server",
+    "default_creds": "server",
+    "graphql": "server",
+    "jwt": "server",
+    "wordpress": "server",
+    "joomla": "server",
+    "drupal": "server",
+    "magento": "server",
+    "spring": "server",
+    "content_discovery": "server",
+    "param_discovery": "server",
+    "auth_bypass": "server",
+    "api_abuse": "server",
+    "file_exposure": "server",
+    "subdomain_takeover": "server",
+    "info_leak": "server",
+
+    # Hybrid — run in either profile
+    "misconfig": "both",
+    "vulnerable_component": "both",
+    "cve_specific": "both",
+    "nuclei_general": "both",
+}
+
+_TECHNIQUE_PROFILES: dict[str, str] = {
+    # client
+    "xss_param_fuzz": "client",
+    "reflected_xss_test": "client",
+    "stored_xss": "client",
+    "cookie_xss": "client",
+    "dom_xss": "client",
+    "csti_test": "client",
+    "open_redirect_test": "client",
+    "cors_misconfig": "client",
+    "prototype_pollution_test": "client",
+
+    # server
+    "sqli_param_fuzz": "server",
+    "sqli_error_test": "server",
+    "cookie_sqli": "server",
+    "post_sqli": "server",
+    "sqli_auth_bypass_test": "server",
+    "ssrf_test": "server",
+    "lfi_test": "server",
+    "ssti_test": "server",
+    "post_ssti": "server",
+    "rce_test": "server",
+    "post_rce": "server",
+    "xxe_test": "server",
+    "crlf_test": "server",
+    "header_injection_test": "server",
+    "cookie_deserialization": "server",
+    "viewstate_mac_check": "server",
+    "idor_test": "server",
+    "path_idor_test": "server",
+    "broken_access_control": "server",
+    "mass_assignment_test": "server",
+    "rate_limit_test": "server",
+    "default_credentials_test": "server",
+    "graphql_test": "server",
+    "jwt_test": "server",
+    "spring_actuator_test": "server",
+    "wordpress_test": "server",
+    "joomla_test": "server",
+    "drupal_test": "server",
+    "magento_test": "server",
+    "git_exposure_test": "server",
+    "sensitive_leakage_test": "server",
+    "pii_html_leakage": "server",
+    "version_disclosure_check": "server",
+    "transport_security_check": "server",
+    "deep_dirfuzz": "server",
+    "deep_param_discovery": "server",
+
+    # both — run regardless of profile
+    "nuclei_scan": "both",
+    "vulnerable_components_check": "both",
+    "security_headers_check": "both",
+}
+
+# Enrich registry entries with their profile in place so downstream consumers
+# (MCP list_techniques, reports) see the tag without a separate lookup.
+for _t in TECHNIQUE_REGISTRY:
+    _t["profile"] = _TECHNIQUE_PROFILES.get(_t["id"], "both")
+
+
+def filter_classes_by_profile(
+    classes: list[str] | set[str], profile: str,
+) -> list[str]:
+    """Keep only test classes matching the given profile.
+
+    'both' → all classes. 'client' or 'server' → that side plus 'both' hybrids.
+    Unknown classes default to 'both' (conservative — don't silently drop).
+    """
+    if profile == "both":
+        return list(classes)
+    return [
+        c for c in classes
+        if _CLASS_PROFILES.get(c, "both") in (profile, "both")
+    ]
+
+
+def filter_techniques_by_profile(
+    techniques: list[dict[str, Any]], profile: str,
+) -> list[dict[str, Any]]:
+    """Keep only techniques matching the given profile."""
+    if profile == "both":
+        return techniques
+    return [
+        t for t in techniques
+        if t.get("profile", "both") in (profile, "both")
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Technique availability check
 # ---------------------------------------------------------------------------
 
@@ -2674,9 +2824,12 @@ async def _exec_rate_limit(
 
             base = target_url.rstrip("/")
             full_url = f"{base}{path}"
-            if full_url in tested:
+            # Case-insensitive dedup — /LogIn.aspx, /Login.aspx, /login.aspx
+            # are the same endpoint on Windows/IIS and typically on Linux too.
+            dedup_key = full_url.lower()
+            if dedup_key in tested:
                 continue
-            tested.add(full_url)
+            tested.add(dedup_key)
 
             # Only test login/auth endpoints
             if not any(k in path.lower() for k in ("/login", "/signin", "/auth", "/token")):
@@ -2689,6 +2842,18 @@ async def _exec_rate_limit(
                 # (405/404 means it doesn't exist for POST — no rate limit issue)
                 status_dist = result.get("evidence", "")
                 if "405:" in status_dist or "404:" in status_dist:
+                    continue
+
+                # Skip inconclusive results — responses identical with no auth
+                # flow indicator means we're hitting a static landing page,
+                # not actual authentication logic. Reporting as a bug would be
+                # FP (classic: /LogIn.aspx served unchanged for 30 GETs).
+                if result.get("inconclusive"):
+                    logger.info(
+                        "rate_limit.inconclusive",
+                        endpoint=full_url,
+                        msg="Skipping — endpoint doesn't appear to process auth",
+                    )
                     continue
 
                 if not result.get("rate_limited"):

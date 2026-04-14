@@ -645,11 +645,12 @@ async def _run_analyze(workspace_id: str, verbose: bool = False) -> dict:
 
 async def _run_test(
     workspace_id: str, job_manager: Any, attack_surface: dict,
-    verbose: bool = False,
+    verbose: bool = False, test_profile: str = "both",
 ) -> list[dict]:
     """Stage 4: Execute tests."""
     from bughound.stages import analyze as stage_analyze
     from bughound.stages import test as stage_test
+    from bughound.stages import techniques as stage_techniques
     from bughound.core import workspace
 
     _print_stage(4, "Test")
@@ -669,25 +670,31 @@ async def _run_test(
             "cors", "bac", "csti", "cve_specific",
         ]
 
+    # Filter by profile so the scan plan reflects what will actually run.
+    # The execute_tests filter is also applied later as a safety net.
+    filtered = stage_techniques.filter_classes_by_profile(suggested, test_profile)
+
     scan_plan = {
-        "targets": [{"host": target_host, "priority": 1, "test_classes": suggested}],
+        "targets": [{"host": target_host, "priority": 1, "test_classes": filtered}],
         "global_settings": {
             "nuclei_severity": "critical,high,medium,low,info",
             "nuclei_rate_limit": 100,
             "nuclei_concurrency": 25,
+            "test_profile": test_profile,
         },
     }
 
     await stage_analyze.submit_scan_plan(workspace_id, scan_plan)
-    print(f"  {_C.DIM}Scan plan: {len(suggested)} test classes{_C.RESET}")
+    profile_note = "" if test_profile == "both" else f", profile={test_profile}"
+    print(f"  {_C.DIM}Scan plan: {len(filtered)} test classes{profile_note}{_C.RESET}")
 
     if verbose:
-        print(f"  {_C.DIM}[*] Running {len(suggested)} techniques in parallel...{_C.RESET}",
+        print(f"  {_C.DIM}[*] Running {len(filtered)} techniques in parallel...{_C.RESET}",
               file=sys.stderr)
-        for cls in suggested:
+        for cls in filtered:
             print(f"  {_C.DIM}[*] Queued: {cls}{_C.RESET}", file=sys.stderr)
 
-    result = await stage_test.execute_tests(workspace_id, job_manager)
+    result = await stage_test.execute_tests(workspace_id, job_manager, test_profile=test_profile)
 
     if result.get("status") == "job_started":
         job_id = result["job_id"]
@@ -990,6 +997,26 @@ async def cmd_scan(args: argparse.Namespace) -> None:
             print(f"  {_C.YELLOW}Validation: skipped{_C.RESET}")
         print()
 
+    # Resolve test profile — interactive prompt if user didn't pass --profile
+    # and we're in a non-quiet TTY session (skip on resume — profile already chosen).
+    test_profile = getattr(args, "profile", "both") or "both"
+    if (test_profile == "both" and not args.resume and not quiet
+            and getattr(args, "profile", None) is None and sys.stdin.isatty()):
+        try:
+            print(f"  {_C.BOLD}Test profile:{_C.RESET}")
+            print(f"    1) client  — XSS, open redirect, CORS, proto pollution, CSP (fast)")
+            print(f"    2) server  — SQLi, SSRF, RCE, LFI, XXE, IDOR, deserialization")
+            print(f"    3) both    — full coverage [default]")
+            choice = input("  Choose [1/2/3, default 3]: ").strip() or "3"
+            test_profile = {"1": "client", "2": "server", "3": "both"}.get(
+                choice, "both",
+            )
+            print(f"  {_C.DIM}Profile: {test_profile}{_C.RESET}")
+            print()
+        except (EOFError, KeyboardInterrupt):
+            test_profile = "both"
+            print()
+
     start = time.time()
     job_manager = JobManager()
 
@@ -1022,7 +1049,7 @@ async def cmd_scan(args: argparse.Namespace) -> None:
     # Stage 4
     if resume_stage <= 4:
         findings = await _run_test(workspace_id, job_manager, attack_surface,
-                                   verbose=verbose)
+                                   verbose=verbose, test_profile=test_profile)
     else:
         # Load existing findings
         from bughound.core import workspace as ws_mod
@@ -1197,8 +1224,9 @@ async def cmd_test(args: argparse.Namespace) -> None:
         print(f"  {_C.RED}Error: No attack surface found. Run 'bughound analyze {args.workspace_id}' first.{_C.RESET}")
         sys.exit(1)
 
+    test_profile = getattr(args, "profile", "both") or "both"
     findings = await _run_test(args.workspace_id, job_manager, attack_surface,
-                               verbose=verbose)
+                               verbose=verbose, test_profile=test_profile)
 
     if quiet:
         sev_counts = Counter(f.get("severity", "?") for f in findings)
@@ -1392,6 +1420,7 @@ async def cmd_agent(args: argparse.Namespace) -> None:
         verbose=getattr(args, "verbose", False),
         resume_workspace_id=resume_workspace_id,
         from_phase=from_phase,
+        test_profile=getattr(args, "profile", "both") or "both",
     )
 
 
@@ -1444,6 +1473,11 @@ def main() -> None:
                              help="HTTP proxy for all requests (e.g., http://127.0.0.1:8080)")
     scan_parser.add_argument("--timeout", type=int, default=60, metavar="MINS",
                              help="Max time per stage in minutes (default: 60)")
+    scan_parser.add_argument("--profile", default=None,
+                             choices=["client", "server", "both"],
+                             help="Test profile: client (XSS/redirect/CORS), "
+                                  "server (SQLi/SSRF/RCE/etc), both (default). "
+                                  "If omitted in interactive mode, you'll be prompted.")
 
     # recon
     recon_parser = subparsers.add_parser("recon", parents=[_common],
@@ -1465,6 +1499,9 @@ def main() -> None:
     test_parser = subparsers.add_parser("test", parents=[_common],
                                         help="Stage 4 only (execute tests)")
     test_parser.add_argument("workspace_id", help="Workspace ID")
+    test_parser.add_argument("--profile", default="both",
+                             choices=["client", "server", "both"],
+                             help="Test profile (default: both)")
 
     # validate
     validate_parser = subparsers.add_parser("validate", parents=[_common],
@@ -1499,6 +1536,9 @@ def main() -> None:
                               help="Resume scan from existing workspace")
     agent_parser.add_argument("--from-phase", type=int, default=None, choices=[1, 2, 3, 4],
                               help="Start from specific phase (1=recon, 2=test, 3=AI validation, 4=report). Requires --resume")
+    agent_parser.add_argument("--profile", default="both",
+                              choices=["client", "server", "both"],
+                              help="Test profile (default: both)")
 
     # serve
     subparsers.add_parser("serve", parents=[_common], help="Start MCP server")

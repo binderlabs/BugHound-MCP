@@ -194,11 +194,15 @@ _CMS_SKIP_PATHS: dict[str, list[str]] = {
 async def execute_tests(
     workspace_id: str,
     job_manager: JobManager | None = None,
+    test_profile: str | None = None,
 ) -> dict[str, Any]:
     """Execute the scan plan from Stage 3 using 5-phase technique library.
 
     - Single target with few test classes → synchronous
     - Multiple targets or many test classes → async job with progress
+
+    test_profile: optional override of scan_plan global_settings.test_profile.
+    Values: 'client' (browser-side bugs), 'server' (server-side bugs), 'both'.
     """
     meta = await workspace.get_workspace(workspace_id)
     if meta is None:
@@ -216,6 +220,13 @@ async def execute_tests(
         return _error("empty_plan", "Scan plan has no targets.")
 
     global_settings = scan_plan.get("global_settings", {})
+    if test_profile is not None:
+        if test_profile not in techniques.VALID_PROFILES:
+            return _error(
+                "invalid_input",
+                f"test_profile must be one of {techniques.VALID_PROFILES}, got '{test_profile}'.",
+            )
+        global_settings = {**global_settings, "test_profile": test_profile}
 
     # Always run as background job to avoid MCP client timeouts
     total_classes = sum(len(t.get("test_classes", [])) for t in targets)
@@ -502,6 +513,28 @@ async def _run_tests(
         "prototype_pollution", "info_leak",
         "vulnerable_component", "deserialization", "default_creds",
     ])
+
+    # Apply test profile filter (client / server / both). Scan plan drives
+    # the selection; 'both' is the default and is a no-op here.
+    test_profile = global_settings.get("test_profile", "both")
+    if test_profile not in techniques.VALID_PROFILES:
+        logger.warning(
+            "scan_plan.invalid_profile",
+            profile=test_profile,
+            msg="Invalid test_profile — falling back to 'both'",
+        )
+        test_profile = "both"
+    if test_profile != "both":
+        before = len(all_test_classes)
+        all_test_classes = set(
+            techniques.filter_classes_by_profile(all_test_classes, test_profile)
+        )
+        logger.info(
+            "test.profile_filter",
+            profile=test_profile,
+            classes_before=before,
+            classes_after=len(all_test_classes),
+        )
 
     # Load auth token if available — enables authenticated testing
     try:
@@ -834,6 +867,11 @@ async def _run_tests(
 
         # Final deduplication across all 4A sub-phases
         nuclei_findings = _deduplicate_nuclei_findings(nuclei_findings)
+
+        # Filter nuclei findings whose template targets a product not present
+        # on the site — these are the bulk of catch-all routing FPs
+        # (e.g. Django/Joomla/Samsung/Loytec templates matching ASP.NET apps).
+        nuclei_findings = await _filter_product_mismatch(nuclei_findings, workspace_id)
 
         # Mark path traversal findings for validation
         for f in nuclei_findings:
@@ -1406,6 +1444,127 @@ def _is_path_traversal_candidate(template_id: str, matched_at: str) -> bool:
         or "traversal" in tid_lower
         or (".." in matched_lower and ("etc" in matched_lower or "win" in matched_lower))
     )
+
+
+# ---------------------------------------------------------------------------
+# Nuclei product-mismatch filter
+# ---------------------------------------------------------------------------
+# Each key = detected tech family on the site. Value = substrings that, if
+# present in a nuclei template's id/name, strongly imply a different product.
+# Templates matching these substrings are dropped as FP.
+#
+# Real-world driver: pro.odaha.io is ASP.NET WebForms with PathInfo routing
+# (/Orders.aspx/anything → serves Orders.aspx). Nuclei templates for Django,
+# Joomla, Samsung WLAN AP, Loytec LGATE, OrbiTeam BSCW etc. all matched the
+# same landing-page content and produced 29 critical/high FPs.
+_PRODUCT_MISMATCH_DENY: dict[str, tuple[str, ...]] = {
+    "asp.net": (
+        "django", "flask", "rails", "ruby-", "ruby/", "laravel", "symfony",
+        "wordpress", "wp-", "joomla", "drupal", "magento", "shopify",
+        "tomcat", "jboss", "weblogic", "websphere", "spring-boot", "springboot",
+        "nodejs", "node-", "express-", "nextjs", "nuxt-",
+        "phpmyadmin", "php-", "grav-cms", "concrete5", "october-cms",
+        "samsung", "loytec", "orbiteam", "bscw", "tileserver",
+        "synology", "qnap", "asus-router", "netgear", "cisco-",
+    ),
+    "php": (
+        "django", "flask", "rails", "ruby-", "laravel-",  # laravel is PHP but specific-version FPs
+        "asp.net", "aspnet", "iis-",
+        "nodejs", "node-", "express-", "nextjs",
+        "tomcat", "weblogic",
+    ),
+    "nginx": (),  # too generic to filter on
+    "apache": (),
+    "iis": (
+        "django", "flask", "rails", "ruby-", "tomcat", "jboss",
+        "wordpress", "wp-", "joomla", "drupal", "magento",
+        "nodejs", "node-", "express-", "nextjs",
+    ),
+}
+
+
+def _detected_tech_family(techs: list[dict[str, Any]]) -> set[str]:
+    """Return tech family keys for mismatch lookup (lowercased)."""
+    families: set[str] = set()
+    for t in techs:
+        name = (t.get("technology") or t.get("name") or "").lower()
+        if "asp.net" in name or "aspnet" in name:
+            families.add("asp.net")
+        if "iis" in name or "microsoft-iis" in name:
+            families.add("iis")
+        if "php" in name:
+            families.add("php")
+        if "nginx" in name:
+            families.add("nginx")
+        if "apache" in name and "tomcat" not in name:
+            families.add("apache")
+    return families
+
+
+async def _filter_product_mismatch(
+    findings: list[dict[str, Any]], workspace_id: str,
+) -> list[dict[str, Any]]:
+    """Drop nuclei findings where the template targets a product that
+    clearly isn't on the site (based on detected technologies).
+
+    Only filters `cve_specific` and obviously product-scoped classes — leaves
+    generic matchers (XSS, misconfig, security headers) alone.
+    """
+    try:
+        tech_raw = await workspace.read_data(workspace_id, "hosts/technologies.json")
+    except Exception:
+        return findings
+
+    techs = tech_raw.get("data", tech_raw) if isinstance(tech_raw, dict) else (tech_raw or [])
+    if not isinstance(techs, list) or not techs:
+        return findings
+
+    families = _detected_tech_family(techs)
+    if not families:
+        return findings
+
+    # Build the aggregate deny-list for detected families
+    deny_tokens: set[str] = set()
+    for fam in families:
+        deny_tokens.update(_PRODUCT_MISMATCH_DENY.get(fam, ()))
+    if not deny_tokens:
+        return findings
+
+    # Classes where product-specificity matters (safe to filter)
+    filterable_classes = {"cve_specific", "lfi", "rce", "sqli", "xxe", "file_exposure"}
+
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for f in findings:
+        if f.get("tool") != "nuclei":
+            kept.append(f)
+            continue
+        if f.get("vulnerability_class") not in filterable_classes:
+            kept.append(f)
+            continue
+        hay = (
+            (f.get("template_id", "") + " " + f.get("template_name", "") + " "
+             + f.get("description", "")[:300]).lower()
+        )
+        if any(tok in hay for tok in deny_tokens):
+            dropped += 1
+            logger.info(
+                "nuclei.product_mismatch_fp",
+                template=f.get("template_id"),
+                detected_tech=sorted(families),
+                msg="Dropped — template targets product not on site",
+            )
+            continue
+        kept.append(f)
+
+    if dropped:
+        logger.info(
+            "nuclei.product_mismatch_summary",
+            dropped=dropped,
+            kept=len(kept),
+            detected_tech=sorted(families),
+        )
+    return kept
 
 
 async def _validate_traversal_findings(

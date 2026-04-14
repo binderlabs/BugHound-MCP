@@ -406,6 +406,7 @@ async def run_agent(
     verbose: bool = False,
     resume_workspace_id: str | None = None,
     from_phase: int | None = None,
+    test_profile: str = "both",
 ) -> None:
     """Run the full BugHound agent pipeline.
 
@@ -425,6 +426,10 @@ async def run_agent(
         Maximum AI reasoning steps across all phases.
     verbose : bool
         Show detailed debug output.
+    test_profile : str
+        Which side of the test surface to run: 'client' (XSS/CORS/redirect/
+        proto-pollution/CSP), 'server' (SQLi/SSRF/RCE/LFI/XXE/IDOR/deser/auth),
+        or 'both' (default). Controls Stage 4 filtering.
     """
     # Pre-flight tool check — reuse CLI logic
     import shutil
@@ -507,6 +512,8 @@ async def run_agent(
     print(f"  {_C.DIM}Provider:{_C.RESET} {provider_name}")
     print(f"  {_C.DIM}Model:{_C.RESET}    {model or 'default'}")
     print(f"  {_C.DIM}Depth:{_C.RESET}    {depth}")
+    if test_profile != "both":
+        print(f"  {_C.DIM}Profile:{_C.RESET}  {test_profile}")
     print()
 
     try:
@@ -633,18 +640,23 @@ async def run_agent(
                 "cors", "bac", "csti", "cve_specific",
             ]
 
+        # Apply test profile filter so the scan plan reflects what will run.
+        from bughound.stages import techniques as _stage_techniques
+        _filtered = _stage_techniques.filter_classes_by_profile(_suggested, test_profile)
+
         _scan_plan = {
-            "targets": [{"host": _target_host, "priority": 1, "test_classes": _suggested}],
+            "targets": [{"host": _target_host, "priority": 1, "test_classes": _filtered}],
             "global_settings": {
                 "nuclei_severity": "critical,high,medium,low,info",
                 "nuclei_rate_limit": 100,
                 "nuclei_concurrency": 25,
+                "test_profile": test_profile,
             },
         }
         await stage_analyze.submit_scan_plan(workspace_id, _scan_plan)
 
         _jm = _JM()
-        _test_result = await stage_test.execute_tests(workspace_id, _jm)
+        _test_result = await stage_test.execute_tests(workspace_id, _jm, test_profile=test_profile)
 
         if _test_result.get("status") == "job_started":
             _job_id = _test_result["job_id"]

@@ -1324,12 +1324,66 @@ async def test_csti(
 # Prototype Pollution Testing
 # ---------------------------------------------------------------------------
 
+# Server-side framework indicators — prototype pollution is JS-only. If any
+# of these appear in response headers, we skip the test for that host to
+# avoid FPs from plain param reflection (seen 22× on an ASP.NET lab target).
+_NON_JS_SERVER_MARKERS = (
+    "asp.net", "x-aspnet", "aspnetcore",
+    "php/", "x-powered-by: php",
+    "django", "gunicorn", "uwsgi", "werkzeug", "flask",
+    "passenger", "ruby", "rails", "puma",
+    "java", "spring", "tomcat", "jetty", "coldfusion",
+    "apache-coyote", "iis/", "microsoft-iis",
+    "laravel", "phpsessid",
+)
+
+# Cache: host → is_js_runtime (True = Node/Express-like, False = non-JS, None = unknown)
+_JS_RUNTIME_CACHE: dict[str, bool | None] = {}
+
+
+async def _is_js_runtime(session: aiohttp.ClientSession, url: str) -> bool | None:
+    """Return False if host is clearly a non-JS server (ASP.NET/PHP/Java/etc).
+
+    None means unknown — don't skip. True would mean confirmed Node-like,
+    but we don't currently try to positively identify (too many edge cases).
+    """
+    host = urlparse(url).netloc.lower()
+    if not host:
+        return None
+    if host in _JS_RUNTIME_CACHE:
+        return _JS_RUNTIME_CACHE[host]
+
+    base = f"{urlparse(url).scheme}://{host}/"
+    try:
+        status, body, headers = await _send(session, base)
+        combined = " ".join(f"{k}:{v}" for k, v in headers.items()).lower()
+        # Body can also reveal framework (e.g., "Powered by WordPress", aspx forms)
+        body_lower = body[:4000].lower() if body else ""
+        for marker in _NON_JS_SERVER_MARKERS:
+            if marker in combined or marker in body_lower:
+                _JS_RUNTIME_CACHE[host] = False
+                return False
+    except Exception:
+        pass
+    _JS_RUNTIME_CACHE[host] = None
+    return None
+
 
 async def test_prototype_pollution(
     target_url: str, param: str, original_value: str,
 ) -> dict[str, Any]:
-    """Test for client-side prototype pollution via query/JSON params."""
+    """Test for client-side prototype pollution via query/JSON params.
+
+    Auto-skips on servers identified as non-JS runtimes (ASP.NET, PHP, Java,
+    Python, Ruby) since prototype pollution only affects JS engines. This
+    avoids FPs where a server simply reflects the payload string.
+    """
     async with aiohttp.ClientSession() as session:
+        # Short-circuit on non-JS servers — proto pollution is a JS-only vuln.
+        runtime = await _is_js_runtime(session, target_url)
+        if runtime is False:
+            return {"vulnerable": False, "url": target_url, "param": param}
+
         # Baseline
         baseline_status, baseline_body, baseline_headers = await _send(session, target_url)
         if baseline_status == 0:
@@ -1355,6 +1409,11 @@ async def test_prototype_pollution(
                 # it's just being reflected, not processed
                 if payload in body:
                     continue
+                # Stronger anti-echo: does the marker appear OUTSIDE of
+                # reflection contexts (form value, href, input value)? If
+                # it only shows up inside reflected HTML, it's not pollution.
+                if _marker_only_reflected(body, marker):
+                    continue
 
                 return {
                     "vulnerable": True,
@@ -1366,6 +1425,28 @@ async def test_prototype_pollution(
                 }
 
     return {"vulnerable": False, "url": target_url, "param": param}
+
+
+def _marker_only_reflected(body: str, marker: str) -> bool:
+    """Return True if marker appears exclusively inside reflection contexts
+    (form input values, href/action/src attrs, URL-decoded form values).
+
+    Real prototype pollution would surface the marker as a JS property name,
+    usually inside <script> blocks or as a property of a polluted object
+    being rendered. If we strip reflection contexts and the marker is gone,
+    it's just param echo (common on ASP.NET, PHP).
+    """
+    if marker not in body:
+        return False
+    # Strip common reflection contexts:
+    #  - value="...<marker>..."
+    #  - href/action/src="...<marker>..."
+    #  - <input ... value="...<marker>...">
+    cleaned = re.sub(r'value\s*=\s*"[^"]*"', '', body)
+    cleaned = re.sub(r"value\s*=\s*'[^']*'", '', cleaned)
+    cleaned = re.sub(r'(?:href|action|src)\s*=\s*"[^"]*"', '', cleaned)
+    cleaned = re.sub(r"(?:href|action|src)\s*=\s*'[^']*'", '', cleaned)
+    return marker not in cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -1508,10 +1589,45 @@ async def test_header_injection(target_url: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+_TAXONOMY_PARAM_NAMES = frozenset({
+    # Lookup / enum params where changing the value returning different
+    # content is expected behavior, NOT an authorization bypass.
+    "country", "countryid", "country_id", "countrycode", "country_code",
+    "cuntryid",  # observed typo in real targets
+    "region", "regionid", "region_id",
+    "city", "cityid", "city_id", "cityname", "city_name",
+    "state", "stateid", "state_id", "province",
+    "category", "cat", "catid", "categoryid", "category_id",
+    "type", "kind", "sort", "order", "orderby", "sortby", "direction",
+    "lang", "language", "locale", "currency",
+    "status", "tag", "tagid", "tag_id",
+    "genre", "brand", "size", "color", "colour", "price",
+    "year", "month", "day", "date", "from", "to",
+    "page", "per_page", "limit", "offset", "count", "start", "end",
+    "q", "query", "search", "keyword", "keywords", "filter", "view",
+    "theme", "skin", "format",
+})
+
+
 async def test_idor(
     target_url: str, param: str, original_value: str,
 ) -> dict[str, Any]:
-    """Test IDOR by manipulating ID values and comparing responses."""
+    """Test IDOR by manipulating ID values and comparing responses.
+
+    Skips known taxonomy/lookup params (country, category, sort, page) where a
+    response diff is expected behavior, not an authorization bypass. Real IDOR
+    requires an access-controlled object (user, order, invoice, document).
+    """
+    # Taxonomy param → lookup, not an access-controlled object
+    if param.lower().strip() in _TAXONOMY_PARAM_NAMES:
+        return {
+            "potential_idor": False,
+            "param": param,
+            "url": target_url,
+            "reason": "Taxonomy/lookup param — different content is expected, not IDOR",
+            "confidence": "low",
+        }
+
     async with aiohttp.ClientSession() as session:
         # Baseline request
         baseline_status, baseline_body, _ = await _send(session, target_url)
@@ -2254,24 +2370,45 @@ async def test_broken_access(
 
             # Strategy 2: Verb tampering on 403 endpoints
             for endpoint in endpoints:
-                get_status, _, _ = await _send(session, endpoint)
+                get_status, get_body, _ = await _send(session, endpoint)
 
                 if get_status not in (401, 403):
                     continue
 
-                for method in ("POST", "PUT", "DELETE", "PATCH", "OPTIONS"):
+                # OPTIONS excluded: returning 200 for OPTIONS is standard HTTP
+                # (preflight, verb negotiation). It does NOT mean the protected
+                # resource is accessible via that method — the OPTIONS response
+                # body is typically empty or just Allow headers. Real verb
+                # tampering = the protected content returned via alt method.
+                for method in ("POST", "PUT", "DELETE", "PATCH"):
                     status, body, _ = await _send(session, endpoint, method=method)
 
-                    if status == 200:
-                        findings.append({
-                            "endpoint": endpoint,
-                            "accessible": True,
-                            "status_code": status,
-                            "content_length": len(body),
-                            "technique": "verb_tampering",
-                            "evidence": f"GET returned {get_status}, {method} returned 200",
-                        })
-                        break
+                    if status != 200:
+                        continue
+                    # Must return substantive, different content than the
+                    # blocked GET response. Empty or near-empty bodies are
+                    # typical "success" codes from placeholder handlers
+                    # (e.g., /trace.axd OPTIONS returning 0 bytes).
+                    if len(body) < 200:
+                        continue
+                    # If body is identical to the blocked GET response, the
+                    # server just returned its generic 403 page with status
+                    # rewritten — not actual access.
+                    if get_body and body == get_body:
+                        continue
+
+                    findings.append({
+                        "endpoint": endpoint,
+                        "accessible": True,
+                        "status_code": status,
+                        "content_length": len(body),
+                        "technique": "verb_tampering",
+                        "evidence": (
+                            f"GET returned {get_status} ({len(get_body) if get_body else 0}B), "
+                            f"{method} returned 200 ({len(body)}B) with different content"
+                        ),
+                    })
+                    break
 
                 # Strategy 2b: X-HTTP-Method-Override
                 if get_status in (401, 403):
@@ -2418,32 +2555,88 @@ async def test_broken_access(
 async def test_rate_limit(
     auth_endpoint: str, method: str = "POST",
 ) -> dict[str, Any]:
-    """Send 30 rapid requests to detect missing rate limiting."""
+    """Send 30 rapid requests to detect missing rate limiting.
+
+    To avoid FPs on landing pages that always return 200, this function also
+    checks whether the request actually reached authentication logic. If every
+    response is byte-identical AND carries no auth-attempt indicator (invalid
+    credential message, new session cookie, redirect, token challenge), we
+    report inconclusive — hammering a static landing page isn't a rate-limit
+    bypass.
+    """
     status_counts: dict[int, int] = {}
     requests_before_block = 0
     rate_limited = False
     lockout_detected = False
 
+    response_hashes: set[str] = set()
+    auth_attempt_reached = False  # Did any request look like it hit auth logic?
+
+    _AUTH_ATTEMPT_RE = re.compile(
+        r"invalid\s+(?:user|credential|login|password)|"
+        r"login\s+fail|"
+        r"incorrect\s+(?:user|password)|"
+        r"authentication\s+fail|"
+        r"access\s+denied|"
+        r"csrf|"
+        r"account.*locked|"
+        r"too\s+many.*attempt|"
+        r"locked\s+out|"
+        r"temporarily.*disabled",
+        re.I,
+    )
+
     try:
         async with aiohttp.ClientSession() as session:
             for i in range(1, 31):
-                status, body, _ = await _send(session, auth_endpoint, method=method)
+                status, body, headers = await _send(session, auth_endpoint, method=method)
 
                 status_counts[status] = status_counts.get(status, 0) + 1
+
+                if body:
+                    response_hashes.add(
+                        hashlib.md5(body.encode(errors="replace"), usedforsecurity=False).hexdigest()
+                    )
+
+                # Auth-attempt indicators:
+                #   3xx redirect (login handlers redirect on success/failure)
+                #   Set-Cookie with session/auth cookie name
+                #   Body text matches auth-flow language
+                if 300 <= status < 400:
+                    auth_attempt_reached = True
+                set_cookie = headers.get("set-cookie", "") if headers else ""
+                if re.search(r"session|auth|token|jsessionid|phpsessid|aspxauth", set_cookie, re.I):
+                    auth_attempt_reached = True
+                if body and _AUTH_ATTEMPT_RE.search(body):
+                    auth_attempt_reached = True
 
                 if status == 429 and not rate_limited:
                     rate_limited = True
                     requests_before_block = i
 
                 # Lockout: account locked indicators in body
-                if re.search(r"account.*locked|too many.*attempt|locked out|temporarily.*disabled", body, re.I):
+                if body and re.search(r"account.*locked|too many.*attempt|locked out|temporarily.*disabled", body, re.I):
                     lockout_detected = True
 
     except Exception:
         pass
 
+    # Inconclusive: all responses identical AND nothing that looks like auth
+    # flow hit — we're hammering a static landing page, not an auth endpoint.
+    # Report as not rate-limited but mark confidence low.
+    inconclusive = (
+        not rate_limited
+        and len(response_hashes) <= 1
+        and not auth_attempt_reached
+    )
+
     if rate_limited:
         evidence = f"HTTP 429 received after {requests_before_block} requests"
+    elif inconclusive:
+        evidence = (
+            f"30 requests returned identical responses with no auth-flow indicator "
+            f"(status: {status_counts}) — endpoint may not process authentication"
+        )
     else:
         evidence = f"No rate limiting detected after 30 requests (status distribution: {status_counts})"
 
@@ -2453,6 +2646,8 @@ async def test_rate_limit(
         "requests_before_block": requests_before_block,
         "lockout_detected": lockout_detected,
         "evidence": evidence,
+        "inconclusive": inconclusive,
+        "auth_attempt_reached": auth_attempt_reached,
     }
 
 
