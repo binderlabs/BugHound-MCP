@@ -732,12 +732,26 @@ async def _run_discover(
                     except OSError:
                         pass
 
-                # Filter unique_urls to only live ones
+                # Filter unique_urls to only live ones.
+                # httpx normalizes URLs (http→https via redirect, spaces→+,
+                # encoding). Match by (hostname, path) instead of exact string.
                 if live_url_set:
+                    def _url_key(u: str) -> tuple[str, str]:
+                        """Normalize URL to (hostname, path) for loose matching."""
+                        try:
+                            from urllib.parse import urlparse as _up, unquote as _uq
+                            p = _up(u)
+                            host = (p.hostname or "").lower()
+                            path = _uq(p.path.lower()).rstrip("/")
+                            return (host, path)
+                        except Exception:
+                            return (u.lower(), "")
+
+                    live_keys = {_url_key(lu) for lu in live_url_set}
                     pre_count = len(unique_urls)
                     unique_urls = [
                         e for e in unique_urls
-                        if isinstance(e, dict) and e.get("url") in live_url_set
+                        if isinstance(e, dict) and _url_key(e.get("url", "")) in live_keys
                     ]
                     dead_url_count = pre_count - len(unique_urls)
                     logger.info(
@@ -809,7 +823,20 @@ async def _run_discover(
                         line = str(line).strip()
                         if line.startswith("http"):
                             live_js.add(line.split()[0])
-                    js_urls = sorted(u for u in js_urls_raw if u in live_js)
+
+                    # Match by (host, path) — httpx normalizes URLs
+                    def _js_key(u: str) -> tuple[str, str]:
+                        try:
+                            from urllib.parse import urlparse as _up, unquote as _uq
+                            p = _up(u)
+                            return ((p.hostname or "").lower(),
+                                    _uq(p.path.lower()).rstrip("/"))
+                        except Exception:
+                            return (u.lower(), "")
+                    live_js_keys = {_js_key(lu) for lu in live_js}
+                    js_urls = sorted(
+                        u for u in js_urls_raw if _js_key(u) in live_js_keys
+                    )
                     js_dead = len(js_urls_raw) - len(js_urls)
                     if js_dead > 0:
                         logger.info(
