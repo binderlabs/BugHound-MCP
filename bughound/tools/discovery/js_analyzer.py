@@ -225,6 +225,29 @@ _JS_KEYWORD_FILTER = frozenset({
 })
 
 
+# Query param names that commonly carry secrets (auth tokens, keys, hashes).
+# Used by scan_urls_for_secrets() to flag high-entropy values in these params.
+_SENSITIVE_PARAM_NAMES: frozenset[str] = frozenset({
+    "key", "apikey", "api_key", "api-key",
+    "token", "access_token", "accesstoken", "auth_token", "authtoken",
+    "id_token", "refresh_token", "jwt", "bearer",
+    "secret", "client_secret", "clientsecret", "app_secret", "appsecret",
+    "hash", "sig", "signature", "hmac",
+    "session", "sessionid", "session_id", "sid",
+    "auth", "authorization", "credential", "credentials",
+    "password", "passwd", "pwd",
+    "otp", "code", "verify_code",
+    "csrf", "xsrf", "csrf_token", "xsrf_token",
+})
+
+# High-entropy value matcher — hex, base64, base64url, random alphanumeric.
+# Requires mostly alphanumeric content (no natural-language words).
+# Also allows common padding chars (. - _ = + /).
+_HIGH_ENTROPY_PARAM_RE = re.compile(
+    r"^[A-Za-z0-9._\-+/=]{16,}$"
+)
+
+
 def scan_urls_for_secrets(urls: list[str]) -> list[dict[str, Any]]:
     """Scan a list of URLs for secrets embedded in query params / fragments.
 
@@ -296,6 +319,47 @@ def scan_urls_for_secrets(urls: list[str]) -> list[dict[str, Any]]:
                     "source_url": url,
                     "source": "url_scan",
                 })
+
+        # Sensitive-named query params with high-entropy values (custom app tokens)
+        # Catches cases that don't match known-vendor patterns:
+        #   ?key=d4984b5a06ecad2c466202b5974ab18a  (MD5-like hex)
+        #   ?hash=bfff75189693c998d29f25643a10f0c8 (HMAC)
+        #   ?signature=AbCdEf123...                (custom sig)
+        #   ?session=uuid-like                     (session tokens)
+        try:
+            for pname, pvals in qs.items():
+                pname_lower = pname.lower()
+                if pname_lower in _SENSITIVE_PARAM_NAMES:
+                    for pv in pvals:
+                        if not pv or len(pv) < 16:
+                            continue
+                        pv_stripped = pv.strip()
+                        # Skip obvious placeholders
+                        if pv_stripped.lower() in _FP_VALUES:
+                            continue
+                        # Skip obvious non-secrets (e.g., URLs, emails, text)
+                        if "://" in pv_stripped or "@" in pv_stripped or " " in pv_stripped:
+                            continue
+                        # Require high-entropy character set (hex/base64-like)
+                        if not _HIGH_ENTROPY_PARAM_RE.match(pv_stripped):
+                            continue
+
+                        dedup_key = ("CUSTOM_TOKEN", pv_stripped)
+                        if dedup_key in seen:
+                            continue
+                        seen.add(dedup_key)
+                        display = pv_stripped[:60] + ("..." if len(pv_stripped) > 60 else "")
+                        secrets.append({
+                            "type": "CUSTOM_TOKEN",
+                            "value": display,
+                            "description": f"High-entropy token in '{pname}' param (custom app secret)",
+                            "confidence": "MEDIUM",
+                            "source_url": url,
+                            "source": "url_scan",
+                            "param_name": pname,
+                        })
+        except Exception:
+            pass
 
     return secrets
 
