@@ -249,7 +249,7 @@ async def extract_forms(
     targets: list[str],
     max_pages: int = 50,
     depth: int = 2,
-    concurrency: int = 5,
+    concurrency: int = 10,
     timeout: int = 15,
 ) -> list[dict[str, Any]]:
     """Extract forms from target URLs.

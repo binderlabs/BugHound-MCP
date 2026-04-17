@@ -44,7 +44,7 @@ def _load_api_keys() -> dict[str, str]:
                 with open(config_path, "rb") as f:
                     data = tomli.load(f)
 
-            for section in ("urlscan", "otx"):
+            for section in ("urlscan", "otx", "chaos", "github"):
                 section_data = data.get(section, {})
                 if isinstance(section_data, dict):
                     api_key = section_data.get("apikey", "").strip()
@@ -52,6 +52,19 @@ def _load_api_keys() -> dict[str, str]:
                         keys[section] = api_key
         except Exception as exc:
             logger.debug("api_keys.load_error", error=str(exc))
+
+    # Environment variable fallback for keys not in config file
+    env_map = {
+        "chaos": ("CHAOS_API_KEY", "PDCP_API_KEY"),
+        "github": ("GITHUB_TOKEN", "GH_TOKEN"),
+    }
+    for section, env_vars in env_map.items():
+        if section not in keys:
+            for env_var in env_vars:
+                val = os.environ.get(env_var, "").strip()
+                if val:
+                    keys[section] = val
+                    break
 
     _API_KEYS = keys
     return keys
@@ -123,6 +136,41 @@ async def rapiddns(domain: str) -> list[str]:
                 return list(set(m.lower() for m in matches))
     except Exception as e:
         logger.debug("rapiddns.error", error=str(e))
+        return []
+
+
+async def chaos_subdomains(domain: str) -> list[str]:
+    """ProjectDiscovery Chaos dataset — curated subdomain corpus for BB programs.
+
+    Requires CHAOS_API_KEY (free tier available at chaos.projectdiscovery.io).
+    Reads from ~/.gau.toml [chaos] apikey or CHAOS_API_KEY / PDCP_API_KEY env.
+    """
+    keys = _load_api_keys()
+    api_key = keys.get("chaos")
+    if not api_key:
+        return []
+    headers = {"User-Agent": _UA, "Authorization": api_key}
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(
+                f"https://dns.projectdiscovery.io/dns/{domain}/subdomains",
+                headers=headers,
+                timeout=_TIMEOUT, ssl=False,
+            ) as r:
+                if r.status == 401:
+                    logger.debug("chaos.unauthorized", msg="Invalid CHAOS_API_KEY")
+                    return []
+                if r.status != 200:
+                    return []
+                data = await r.json(content_type=None)
+                subs = set()
+                for sub in data.get("subdomains", []):
+                    full = f"{sub}.{domain}".strip().lower()
+                    if full.endswith(f".{domain}") or full == domain:
+                        subs.add(full)
+                return list(subs)
+    except Exception as e:
+        logger.debug("chaos.error", error=str(e))
         return []
 
 
@@ -245,6 +293,7 @@ async def gather_subdomains(domain: str) -> dict[str, list[str]]:
         "certspotter": certspotter(domain),
         "rapiddns": rapiddns(domain),
         "urlscan": urlscan_subdomains(domain),
+        "chaos": chaos_subdomains(domain),
     }
     results = {}
     tasks = {name: asyncio.create_task(coro) for name, coro in sources.items()}

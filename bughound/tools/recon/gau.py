@@ -31,7 +31,7 @@ async def execute(target: str, timeout: int = TIMEOUT) -> ToolResult:
         [
             target,
             "--subs",
-            "--threads", "5",
+            "--threads", "10",
             "--providers", "wayback,commoncrawl,urlscan",  # skip otx (slow)
             "--timeout", "30",  # per-provider timeout
         ],

@@ -407,6 +407,7 @@ async def run_agent(
     resume_workspace_id: str | None = None,
     from_phase: int | None = None,
     test_profile: str = "both",
+    speed: str = "normal",
 ) -> None:
     """Run the full BugHound agent pipeline.
 
@@ -651,6 +652,7 @@ async def run_agent(
                 "nuclei_rate_limit": 100,
                 "nuclei_concurrency": 25,
                 "test_profile": test_profile,
+                "speed": speed,
             },
         }
         await stage_analyze.submit_scan_plan(workspace_id, _scan_plan)
@@ -767,7 +769,32 @@ async def run_agent(
             "You MUST validate EVERY finding — do NOT stop after the first batch.\n"
             "START with critical/high severity, then work through medium/low.\n"
             "Do NOT call generate_report() until ALL findings have been validated.\n"
-            "Process 3-5 findings per iteration, not all at once.\n",
+            "Process 3-5 findings per iteration, not all at once.\n\n"
+            "=== ANTI-FP PRIMITIVES (use before confirming injection findings) ===\n"
+            "verify_not_honeytoken(url, param, injection_value, safe_value, vuln_class):\n"
+            "  Tests if a SQL error / LFI marker / etc. is actually a static mock response.\n"
+            "  MANDATORY before confirming any SQLi/LFI/RCE/SSTI on suspicious targets.\n"
+            "  If honeytoken=true → mark finding FALSE_POSITIVE.\n\n"
+            "detect_url_auth(login_url):\n"
+            "  Detects auth-in-URL anti-patterns (?UserName=, ?token=, ?user=).\n"
+            "  HIGH severity if found — credentials leak via history/referrer/logs.\n"
+            "  Run on every login flow.\n\n"
+            "test_viewstate_binding(aspx_url):\n"
+            "  For ASP.NET WebForms pages — checks if __VIEWSTATE is session-bound.\n"
+            "  If not → CSRF replay attack possible. Run on any .aspx page with forms.\n\n"
+            "=== WORKFLOW EXPLORATION (for understanding multi-step flows) ===\n"
+            "capture_workflow(start_url, actions[]): Runs browser actions (click/input/\n"
+            "  navigate) with full network traffic capture. Use to see actual POST\n"
+            "  payloads (including hidden __VIEWSTATE, CSRF tokens) a workflow sends.\n"
+            "  Much better than guessing at form structure.\n\n"
+            "submit_form(url, field_overrides): Fetches form, preserves hidden fields,\n"
+            "  submits with your overrides, returns full request + response. Use for\n"
+            "  testing login, stored XSS POST, form-based SQLi. Cheaper than\n"
+            "  capture_workflow when you already know the form.\n\n"
+            "record_user_story(candidate_id, ...): Persist a structured UserStory\n"
+            "  after exploring a workflow — personas/routes/apis/notes/follow_ups.\n"
+            "  Use after capture_workflow to crystallize what you learned for later\n"
+            "  reasoning and report generation.\n",
         },
     ]
 

@@ -853,7 +853,7 @@ async def execute_technique(
     technique_id: str,
     workspace_id: str,
     targets: list[dict[str, Any]],
-    concurrency: int = 5,
+    concurrency: int = 15,
 ) -> list[dict[str, Any]]:
     """Execute a specific technique and return findings.
 
@@ -1186,7 +1186,7 @@ async def _run_injection_batch(
     vuln_class: str,
     technique_id: str,
     severity: str,
-    concurrency: int = 5,
+    concurrency: int = 15,
     limit: int = 20,
     result_key: str = "vulnerable",
 ) -> list[dict[str, Any]]:

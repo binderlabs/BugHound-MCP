@@ -121,6 +121,26 @@ Chaos also requires an environment variable:
 echo 'export CHAOS_API_KEY="your-key"' >> ~/.zshrc && source ~/.zshrc
 ```
 
+### BugHound-native API keys (`~/.gau.toml`)
+
+BugHound's own recon modules (chaos subdomain source, GitHub recon, URLScan, AlienVault OTX) read keys from `~/.gau.toml` so they're shared across tools:
+
+```toml
+[urlscan]
+apikey = "..."
+
+[otx]
+apikey = "..."
+
+[chaos]
+apikey = "..."
+
+[github]
+apikey = "ghp_..."    # read:public_repo is enough
+```
+
+Environment variables (`CHAOS_API_KEY`, `PDCP_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`) are respected as fallback. GitHub recon and chaos subdomain lookups are skipped silently if no token is found.
+
 ## MCP Configuration
 
 ### Claude Code
@@ -186,7 +206,7 @@ BUGHOUND_WORKSPACE_DIR = "/path/to/workspaces"
 
 ## MCP Tools Reference
 
-BugHound exposes 28 MCP tools organized by function:
+BugHound exposes ~30 MCP tools organized by function (plus 6 agent-mode-only primitives for anti-FP / workflow exploration):
 
 | Tool | Description |
 |------|-------------|
@@ -199,7 +219,7 @@ BugHound exposes 28 MCP tools organized by function:
 | `bughound_execute_tests` | Stage 4: run all techniques based on scan plan (background job) |
 | `bughound_test_single` | Surgical test on one endpoint with one technique |
 | `bughound_nuclei_scan` | Direct nuclei scan with custom options |
-| `bughound_list_techniques` | List all 43 techniques with availability |
+| `bughound_list_techniques` | List all 48 techniques with availability (optional `test_profile` filter) |
 | `bughound_list_pipelines` | List 17 one-liner pipelines |
 | `bughound_run_pipeline` | Run a one-liner pipeline (gf + qsreplace + kxss etc.) |
 | `bughound_validate_all` | Stage 5: batch validate all findings (background job) |
@@ -301,6 +321,47 @@ bughound_submit_scan_plan(workspace_id, {
   "global_settings": {"test_profile": "client"}
 })
 ```
+
+### Speed Modes
+
+Tune concurrency for the target's WAF profile:
+
+| Mode | Flag | Use when |
+|---|---|---|
+| `stealth` | `--stealth` | Real bug-bounty targets behind Cloudflare/Akamai — clamps nuclei rate ≤10, per-technique concurrency 5, low parallelism |
+| `normal` | (default) | Most targets — balanced: nuclei rate 100, per-technique concurrency 15 |
+| `fast` | `--fast` | Lab targets / owned infra — cranks nuclei rate 250+, per-technique concurrency 30, 4 heavy slots |
+
+Works on `scan`, `test`, and `agent` commands. Mutually exclusive with each other. Combine freely with `--profile`:
+
+```
+./bhound scan <target> --profile client --fast     # 5-10× faster than default on labs
+./bhound scan <target> --stealth                    # slow + safe for bounty
+./bhound agent <target> --profile server --stealth  # AI agent, server-only, stealth rate
+```
+
+### Extended Recon Sources
+
+Stage 2 discovery now includes additional passive/active sources beyond subfinder + gau:
+
+- **Chaos dataset** (ProjectDiscovery) — curated BB subdomain corpus. Free tier. Needs `[chaos]` key.
+- **GitHub recon** — searches GitHub code for `"<domain>" extension:env`, `password`, `api_key`, etc. Extracts secrets from result snippets with inline regex. Optional deep mode clones org repos and runs trufflehog. Needs `[github]` token.
+- **Cloud bucket discovery** — S3 / Azure Blob / GCS / DO Spaces permutation + probing. Generates bucket-name candidates from domain + discovered subdomains. Reports publicly-listable buckets as HIGH severity.
+- **Expanded sensitive-path probe** — 172 paths covering env variants (`.env.dev`, `.env.staging`), framework configs (`appsettings.json`, `application.yml`), credentials (`.aws/credentials`, `.ssh/id_rsa`), git/svn exposure, backup patterns (`backup.7z`, `database.sql.gz`), Spring Actuator, Next.js leaks, CI/CD artifacts (`Jenkinsfile`, `.gitlab-ci.yml`).
+- **Tiered wordlist selection** — auto-picks assetnote/SecLists raft-medium for `--depth light`, raft-large for `--depth deep`. Falls back to dirbuster-medium (86k) when SecLists isn't installed.
+
+### Agent Mode Advanced Primitives
+
+`./bhound agent` now ships with anti-FP and workflow-exploration tools the AI can call:
+
+| Tool | Purpose |
+|---|---|
+| `verify_not_honeytoken` | Replays URL with safe vs injection payload; kills FPs where the "vuln" is a static mock response (common on intentionally-vulnerable labs). Use before confirming SQLi/LFI/RCE/SSTI. |
+| `detect_url_auth` | Flags auth-in-URL anti-pattern (`?UserName=`, `?token=`) — HIGH severity, credentials leak via history/referrer/logs. |
+| `test_viewstate_binding` | ASP.NET WebForms — captures `__VIEWSTATE` in one session, replays in another. If accepted → CSRF token replay possible. |
+| `capture_workflow` | Playwright browser + network recording. Executes sequence of click/input/navigate actions, returns all captured requests (method, URL, post body including hidden `__VIEWSTATE`/CSRF tokens, Set-Cookie). Essential for understanding multi-step flows. |
+| `submit_form` | Parses form, preserves hidden fields, submits with overrides. Returns full round-trip including session-cookie detection and URL-auth-in-redirect flagging. |
+| `record_user_story` | Persists structured exploration results (personas, routes, APIs with payloads, notes, follow-up candidates) to `workspace/<id>/agent/user_stories.json`. |
 
 For broad domain targets (e.g., `*.example.com`), BugHound enumerates subdomains and probes them with httpx. In CLI mode, you are prompted to select which live hosts to scan:
 

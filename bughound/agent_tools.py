@@ -328,6 +328,234 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+
+    # === ANTI-FP / CONTEXT-AWARE REASONING PRIMITIVES ===
+    {
+        "type": "function",
+        "function": {
+            "name": "verify_not_honeytoken",
+            "description": (
+                "Test whether a suspected injection finding is actually a honeytoken / "
+                "static mock response. Replays the endpoint with a SAFE payload that "
+                "should NOT trigger any real vulnerability, then compares against the "
+                "original injection response. If the same error/marker appears with "
+                "both injection AND safe payload, the site is serving mock content — "
+                "FALSE POSITIVE. Use BEFORE declaring SQLi / LFI / SSTI / RCE confirmed. "
+                "Returns {honeytoken: bool, confidence, comparison}."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full injection URL (e.g. https://x/p?id=1%27)"},
+                    "param": {"type": "string", "description": "Parameter name that was injected"},
+                    "injection_value": {"type": "string", "description": "The payload you used (e.g. \"1'\", \"../../etc/passwd\")"},
+                    "safe_value": {"type": "string", "description": "A benign value that should NOT trigger vuln (e.g. \"1\", \"foo\")"},
+                    "vuln_class": {
+                        "type": "string",
+                        "enum": ["sqli", "lfi", "ssti", "rce", "xxe", "ssrf"],
+                        "description": "Which class we're testing for honeytoken",
+                    },
+                },
+                "required": ["url", "param", "injection_value", "safe_value", "vuln_class"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "detect_url_auth",
+            "description": (
+                "Check whether a site uses URL-based authentication (credentials or "
+                "auth tokens passed in query string — e.g. `?UserName=admin`, "
+                "`?token=...`, `?user=...`, `?auth=...`). This is a HIGH severity "
+                "anti-pattern: credentials leak via browser history, referrer headers, "
+                "proxy logs, and trivial XSS steals them. Fetches the login flow and "
+                "inspects redirects + response for auth-in-URL patterns."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "login_url": {"type": "string", "description": "URL of login page or a post-login URL to inspect"},
+                    "test_username": {"type": "string", "description": "Optional test username to POST (default: 'admin')"},
+                    "test_password": {"type": "string", "description": "Optional test password (default: 'test1234')"},
+                },
+                "required": ["login_url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "test_viewstate_binding",
+            "description": (
+                "Test whether an ASP.NET page's __VIEWSTATE is bound to session / "
+                "CSRF-safe. Captures ViewState from target_url as an anonymous session, "
+                "then replays POST with that ViewState from a DIFFERENT anonymous "
+                "session. If the POST succeeds (not rejected with 'The state information "
+                "is invalid'), ViewState is not session-bound = CSRF replay possible. "
+                "Use on ASP.NET WebForms pages (*.aspx) that have forms."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_url": {"type": "string", "description": "ASPX page URL with a form"},
+                },
+                "required": ["target_url"],
+            },
+        },
+    },
+
+    # === WORKFLOW EXPLORATION (browser + traffic capture) ===
+    {
+        "type": "function",
+        "function": {
+            "name": "capture_workflow",
+            "description": (
+                "Execute a sequence of browser actions (navigate/click/input/wait) "
+                "in a real Chromium session while recording ALL network traffic. "
+                "Returns captured flows (method, URL, status, request/response headers, "
+                "request bodies, Set-Cookie, redirects) plus final page state (URL, "
+                "title, body preview, cookies). Use this when you need to see the "
+                "actual API requests a workflow generates — e.g. clicking a login "
+                "button reveals the POST payload including hidden __VIEWSTATE. "
+                "Much more informative than read_page for multi-step workflows."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "start_url": {
+                        "type": "string",
+                        "description": "Initial URL to load in browser.",
+                    },
+                    "actions": {
+                        "type": "array",
+                        "description": (
+                            "Ordered list of browser actions. Each action is "
+                            "an object: "
+                            "{type: 'navigate', url}; "
+                            "{type: 'click', selector}; "
+                            "{type: 'input', selector, value}; "
+                            "{type: 'submit_form', selector}; "
+                            "{type: 'wait', seconds}; "
+                            "{type: 'evaluate', js}."
+                        ),
+                        "items": {"type": "object"},
+                    },
+                    "wait_seconds": {
+                        "type": "integer",
+                        "description": "Final settling wait after all actions (default 2).",
+                        "default": 2,
+                    },
+                },
+                "required": ["start_url", "actions"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_form",
+            "description": (
+                "Fetch a page, parse the first matching form (or form by index), "
+                "fill specified fields (preserving all hidden fields like __VIEWSTATE "
+                "/ __EVENTVALIDATION / CSRF tokens), submit, and return the full "
+                "round-trip: exact request (method, URL, headers, form body), "
+                "response status, response headers, Set-Cookie list, redirect chain, "
+                "and a body preview. Use this to test auth, form-based CSRF, stored "
+                "input, POST-based SQLi/XSS — anything that needs proper form "
+                "mechanics rather than hand-crafted http_request."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "URL of page containing the form.",
+                    },
+                    "field_overrides": {
+                        "type": "object",
+                        "description": (
+                            "Map of field name → value to override. Hidden fields "
+                            "are preserved from the page unless overridden here."
+                        ),
+                    },
+                    "form_index": {
+                        "type": "integer",
+                        "description": "Which form on the page to use (default 0).",
+                        "default": 0,
+                    },
+                    "follow_redirects": {
+                        "type": "boolean",
+                        "description": "Follow 30x redirects (default false — so agent sees the Location).",
+                        "default": False,
+                    },
+                },
+                "required": ["url", "field_overrides"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_user_story",
+            "description": (
+                "Persist a structured UserStory record for a workflow/surface the "
+                "agent has explored. Use AFTER capture_workflow or submit_form to "
+                "crystallize what was learned. Stored under workspace agent/user_stories.json "
+                "and feeds Stage 3 attack-surface reasoning. Mirrors PAIStrike's "
+                "DeepExplorationResult shape: personas, routes, apis, notes, "
+                "follow_up_candidates, unresolved_gaps."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidate_id": {"type": "string", "description": "Unique ID (e.g. 'candidate-login')"},
+                    "candidate_name": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["verified", "partial", "rejected"],
+                    },
+                    "personas": {
+                        "type": "array",
+                        "description": "List of {name, description, goals[], signals[]}",
+                        "items": {"type": "object"},
+                    },
+                    "routes": {
+                        "type": "array",
+                        "description": "URLs exercised",
+                        "items": {"type": "string"},
+                    },
+                    "apis": {
+                        "type": "array",
+                        "description": "List of {method, path, headers, payload, description}",
+                        "items": {"type": "object"},
+                    },
+                    "technologies": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "notes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "follow_up_candidates": {
+                        "type": "array",
+                        "description": "New surfaces to explore",
+                        "items": {"type": "object"},
+                    },
+                    "unresolved_gaps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "sensitive_data": {
+                        "type": "string",
+                        "description": "Any secrets/credentials/PII observed",
+                    },
+                },
+                "required": ["candidate_id", "candidate_name", "status"],
+            },
+        },
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -926,6 +1154,762 @@ async def _append_findings(
 # ---------------------------------------------------------------------------
 
 
+async def _tool_verify_not_honeytoken(
+    url: str, param: str, injection_value: str, safe_value: str,
+    vuln_class: str,
+) -> dict[str, Any]:
+    """Replay URL with safe vs injection payload; flag honeytokens.
+
+    Classic lab-target pattern (pro.odaha.io): serves the same `ODBC error`
+    string for ANY value, whether you inject or not. Real SQLi must produce
+    different content under injection vs benign input.
+    """
+    import hashlib
+    import aiohttp
+
+    inj_url = _replace_param(url, param, injection_value)
+    safe_url = _replace_param(url, param, safe_value)
+    # Vuln-class-specific fingerprint strings — what we'd treat as "confirmed"
+    fingerprints = {
+        "sqli": [
+            "sql syntax", "mysql_fetch", "odbc microsoft access", "oracle error",
+            "pg_query", "unclosed quotation", "syntax error",
+            "microsoft ole db", "sqlstate", "unterminated string",
+        ],
+        "lfi": ["root:x:0:0", "/bin/bash", "daemon:x:", "[boot loader]"],
+        "ssti": ["49"],  # {{7*7}} → 49, context-dependent
+        "rce": ["uid=", "gid=", "groups="],
+        "xxe": ["root:x:0:0", "<!doctype"],
+        "ssrf": ["169.254.169.254", "ami-id", "metadata"],
+    }
+    markers = [m.lower() for m in fingerprints.get(vuln_class, [])]
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    try:
+        async with aiohttp.ClientSession(headers=_get_auth_headers()) as s:
+            async with s.get(inj_url, timeout=timeout, ssl=False) as r:
+                inj_body = (await r.text(errors="replace")).lower()[:30000]
+            async with s.get(safe_url, timeout=timeout, ssl=False) as r:
+                safe_body = (await r.text(errors="replace")).lower()[:30000]
+    except Exception as exc:
+        return {"status": "error", "message": f"Probe failed: {exc}"}
+
+    inj_marker_hits = [m for m in markers if m in inj_body]
+    safe_marker_hits = [m for m in markers if m in safe_body]
+
+    same_content = False
+    if inj_body and safe_body:
+        inj_hash = hashlib.md5(inj_body.encode(errors="replace"), usedforsecurity=False).hexdigest()
+        safe_hash = hashlib.md5(safe_body.encode(errors="replace"), usedforsecurity=False).hexdigest()
+        same_content = inj_hash == safe_hash
+
+    # Honeytoken decision:
+    #   - Injection marker shows up in BOTH injection AND safe response → mock
+    #   - Or responses are byte-identical (server ignores the param) → mock
+    if inj_marker_hits and safe_marker_hits:
+        return {
+            "honeytoken": True,
+            "confidence": "high",
+            "reason": (
+                f"Vuln markers {inj_marker_hits} appear in response to BOTH "
+                f"injection payload AND safe payload. Server is serving static "
+                f"mock content — this is a honeytoken, not a real {vuln_class}."
+            ),
+            "inj_markers_found": inj_marker_hits,
+            "safe_markers_found": safe_marker_hits,
+            "action": "Mark finding as FALSE_POSITIVE / RETIRED.",
+        }
+    if same_content:
+        return {
+            "honeytoken": True,
+            "confidence": "medium",
+            "reason": (
+                "Injection and safe payload produce byte-identical responses — "
+                "server ignores the parameter entirely."
+            ),
+            "action": "Mark finding as FALSE_POSITIVE / RETIRED.",
+        }
+    if inj_marker_hits and not safe_marker_hits:
+        return {
+            "honeytoken": False,
+            "confidence": "high",
+            "reason": (
+                f"Injection triggers markers {inj_marker_hits} but safe payload "
+                f"does NOT — genuine {vuln_class} behavior."
+            ),
+            "inj_markers_found": inj_marker_hits,
+            "action": "Finding is likely real. Proceed with confirmation.",
+        }
+    return {
+        "honeytoken": "unknown",
+        "confidence": "low",
+        "reason": "No markers in either response — inconclusive. Try deeper probe.",
+        "inj_body_len": len(inj_body),
+        "safe_body_len": len(safe_body),
+    }
+
+
+async def _tool_detect_url_auth(
+    login_url: str, test_username: str = "admin",
+    test_password: str = "test1234",
+) -> dict[str, Any]:
+    """Check for auth-in-URL anti-pattern (credentials passed via query string).
+
+    Fetches the login page, attempts a POST with test creds, inspects the
+    response redirect + body for URL-based auth markers.
+    """
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    # Patterns that strongly indicate URL-based auth
+    url_auth_params = re.compile(
+        r"[?&](?:username|user|uname|userid|user_id|login|auth|token|"
+        r"sessionid|session_id|sid|uid|email|password|pass|pwd|apikey|"
+        r"api_key|access_token|jwt)=",
+        re.IGNORECASE,
+    )
+
+    findings: list[dict[str, Any]] = []
+    try:
+        async with aiohttp.ClientSession(
+            headers={**_get_auth_headers(), "User-Agent": _UA if "_UA" in globals() else "BugHound"},
+        ) as s:
+            # Fetch login page
+            async with s.get(login_url, timeout=timeout, ssl=False) as r:
+                login_body = await r.text(errors="replace")
+                login_final_url = str(r.url)
+
+            # Check login page itself
+            for m in url_auth_params.finditer(login_final_url):
+                findings.append({
+                    "source": "login_page_url",
+                    "url": login_final_url,
+                    "matched_pattern": m.group(0),
+                })
+
+            # Scan login page links / forms for auth-in-URL hrefs
+            # Forms with GET method submitting auth params are the classic case
+            for form_match in re.finditer(
+                r"<form[^>]*method\s*=\s*[\"']?get[\"']?[^>]*>(.*?)</form>",
+                login_body, re.IGNORECASE | re.DOTALL,
+            ):
+                form_html = form_match.group(0)[:500]
+                inputs = re.findall(
+                    r'name\s*=\s*["\']([^"\']+)["\']', form_html, re.IGNORECASE,
+                )
+                auth_names = [
+                    n for n in inputs if n.lower() in (
+                        "username", "user", "login", "email", "password",
+                        "pass", "pwd", "userid",
+                    )
+                ]
+                if auth_names:
+                    findings.append({
+                        "source": "form_method_get",
+                        "url": login_final_url,
+                        "auth_field_names": auth_names,
+                        "note": (
+                            "Login form uses GET method — credentials will be "
+                            "sent in URL query string (browser history + "
+                            "referrer + logs exposure)."
+                        ),
+                    })
+
+            # Attempt a test POST to see if response redirects with auth in URL
+            form_data = aiohttp.FormData()
+            # Guess common field names
+            for k, v in [
+                ("username", test_username), ("user", test_username),
+                ("email", test_username), ("txtUserName", test_username),
+                ("password", test_password), ("pass", test_password),
+                ("txtPassword", test_password),
+            ]:
+                form_data.add_field(k, v)
+
+            try:
+                async with s.post(
+                    login_url, data=form_data, timeout=timeout,
+                    ssl=False, allow_redirects=False,
+                ) as r:
+                    loc = r.headers.get("Location", "")
+                    if loc and url_auth_params.search(loc):
+                        findings.append({
+                            "source": "post_redirect",
+                            "redirect_location": loc,
+                            "note": (
+                                "Login POST redirects to URL containing auth "
+                                "params — session state carried in URL."
+                            ),
+                        })
+            except Exception:
+                pass
+    except Exception as exc:
+        return {"status": "error", "message": f"Probe failed: {exc}"}
+
+    if findings:
+        return {
+            "url_auth_detected": True,
+            "severity": "HIGH",
+            "findings": findings,
+            "impact": (
+                "Credentials / auth tokens in URL leak via: browser history, "
+                "HTTP Referrer headers to external sites, proxy/CDN logs, "
+                "screen-share / over-shoulder. Any XSS on any page with a link "
+                "out trivially steals the token via Referrer."
+            ),
+            "recommendation": "Use POST body + session cookies with HttpOnly.",
+        }
+    return {
+        "url_auth_detected": False,
+        "note": "No URL-based auth patterns detected on this endpoint.",
+    }
+
+
+async def _tool_test_viewstate_binding(target_url: str) -> dict[str, Any]:
+    """Test if ASP.NET __VIEWSTATE is session-bound (CSRF-safe) or replayable.
+
+    1. Session A: GET page, extract __VIEWSTATE + __EVENTVALIDATION.
+    2. Session B (fresh cookie jar): POST to same page with Session A's
+       ViewState.
+    3. If POST succeeds (no "The state information is invalid" error),
+       ViewState is not session-bound → CSRF replay possible.
+    """
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=15)
+
+    def _extract_hidden(body: str, name: str) -> str:
+        m = re.search(
+            rf'<input[^>]*name="{re.escape(name)}"[^>]*value="([^"]*)"',
+            body, re.IGNORECASE,
+        )
+        if m:
+            return m.group(1)
+        m = re.search(
+            rf'<input[^>]*value="([^"]*)"[^>]*name="{re.escape(name)}"',
+            body, re.IGNORECASE,
+        )
+        return m.group(1) if m else ""
+
+    try:
+        # Session A: capture ViewState
+        async with aiohttp.ClientSession() as sa:
+            async with sa.get(target_url, timeout=timeout, ssl=False) as r:
+                a_body = await r.text(errors="replace")
+                a_status = r.status
+        viewstate = _extract_hidden(a_body, "__VIEWSTATE")
+        event_validation = _extract_hidden(a_body, "__EVENTVALIDATION")
+        viewstate_gen = _extract_hidden(a_body, "__VIEWSTATEGENERATOR")
+
+        if not viewstate:
+            return {
+                "applicable": False,
+                "reason": "No __VIEWSTATE field present — not an ASP.NET WebForms page.",
+                "status_code": a_status,
+            }
+
+        # Session B: fresh cookie jar, replay
+        async with aiohttp.ClientSession() as sb:
+            post_data = {
+                "__VIEWSTATE": viewstate,
+                "__EVENTVALIDATION": event_validation,
+                "__VIEWSTATEGENERATOR": viewstate_gen,
+                # Harmless-looking submit
+                "__EVENTTARGET": "",
+                "__EVENTARGUMENT": "",
+            }
+            async with sb.post(
+                target_url, data=post_data, timeout=timeout, ssl=False,
+                allow_redirects=False,
+            ) as r:
+                b_body = await r.text(errors="replace")
+                b_status = r.status
+
+        invalid_markers = [
+            "the state information is invalid",
+            "validation of viewstate mac failed",
+            "viewstate verification failed",
+            "could not load viewstate",
+        ]
+        rejected = any(m in b_body.lower() for m in invalid_markers)
+
+        if rejected:
+            return {
+                "applicable": True,
+                "session_bound": True,
+                "csrf_replay_possible": False,
+                "note": "ViewState rejected across sessions — properly bound.",
+                "status_codes": {"capture": a_status, "replay": b_status},
+            }
+        # Status 200/302 without invalid-state error = ViewState accepted
+        if b_status < 500 and b_status != 400:
+            return {
+                "applicable": True,
+                "session_bound": False,
+                "csrf_replay_possible": True,
+                "severity": "HIGH",
+                "status_codes": {"capture": a_status, "replay": b_status},
+                "note": (
+                    "ViewState captured in one session accepted by server when "
+                    "replayed from a DIFFERENT session. CSRF tokens are not "
+                    "session-bound — attacker can harvest a ViewState + forge "
+                    "POSTs from victim browser."
+                ),
+                "impact": (
+                    "Any authenticated ASP.NET POST flow is CSRF-exploitable. "
+                    "Attacker grabs ViewState from their own session, embeds "
+                    "in victim-facing form, victim's browser submits with "
+                    "their cookies."
+                ),
+                "recommendation": (
+                    "Enable ViewStateUserKey in web.config + bind ViewState to "
+                    "per-session nonce. Or use AntiForgeryToken pattern."
+                ),
+            }
+        return {
+            "applicable": True,
+            "session_bound": "unknown",
+            "csrf_replay_possible": "unknown",
+            "note": f"Inconclusive — server returned {b_status}.",
+            "status_codes": {"capture": a_status, "replay": b_status},
+        }
+    except Exception as exc:
+        return {"status": "error", "message": f"Probe failed: {exc}"}
+
+
+async def _tool_capture_workflow(
+    start_url: str, actions: list[dict[str, Any]], wait_seconds: int = 2,
+) -> dict[str, Any]:
+    """Run a browser workflow with full traffic capture via Playwright.
+
+    Records every request/response the browser makes during the actions,
+    including hidden fields in form submissions (ViewState, CSRF tokens),
+    cookies set, redirects followed. One atomic call covers the whole flow.
+    """
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return {
+            "status": "error",
+            "message": "Playwright not installed. pip install playwright && playwright install chromium",
+        }
+
+    captured_requests: list[dict[str, Any]] = []
+    captured_responses: list[dict[str, Any]] = []
+    console_logs: list[str] = []
+
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                ignore_https_errors=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            page = await context.new_page()
+
+            # Record every request — includes POST body / form data
+            async def _on_request(request: Any) -> None:
+                try:
+                    body = None
+                    try:
+                        body = request.post_data
+                    except Exception:
+                        body = None
+                    captured_requests.append({
+                        "req_id": id(request),
+                        "method": request.method,
+                        "url": request.url,
+                        "headers": dict(request.headers),
+                        "post_data": (body[:5000] if body else None),
+                        "resource_type": request.resource_type,
+                    })
+                except Exception:
+                    pass
+
+            async def _on_response(response: Any) -> None:
+                try:
+                    headers = dict(response.headers)
+                    captured_responses.append({
+                        "req_id": id(response.request),
+                        "url": response.url,
+                        "status": response.status,
+                        "headers": headers,
+                        "set_cookie": headers.get("set-cookie", ""),
+                    })
+                except Exception:
+                    pass
+
+            page.on("request", lambda r: asyncio.ensure_future(_on_request(r)))
+            page.on("response", lambda r: asyncio.ensure_future(_on_response(r)))
+            page.on("console", lambda msg: console_logs.append(
+                f"[{msg.type}] {msg.text}"[:150],
+            ))
+
+            action_log: list[dict[str, Any]] = []
+
+            try:
+                await page.goto(start_url, wait_until="domcontentloaded", timeout=15000)
+                action_log.append({"action": "navigate", "url": start_url, "ok": True})
+            except Exception as exc:
+                action_log.append({
+                    "action": "navigate", "url": start_url, "ok": False,
+                    "error": str(exc)[:200],
+                })
+
+            # Execute each action
+            for idx, act in enumerate(actions[:20]):  # cap at 20 actions
+                atype = act.get("type", "").lower()
+                try:
+                    if atype == "navigate":
+                        url = act.get("url", "")
+                        await page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                        action_log.append({"action": "navigate", "url": url, "ok": True})
+                    elif atype == "click":
+                        sel = act.get("selector", "")
+                        await page.click(sel, timeout=5000)
+                        action_log.append({"action": "click", "selector": sel, "ok": True})
+                    elif atype == "input":
+                        sel = act.get("selector", "")
+                        val = act.get("value", "")
+                        await page.fill(sel, val, timeout=5000)
+                        action_log.append({
+                            "action": "input", "selector": sel,
+                            "value_preview": val[:40], "ok": True,
+                        })
+                    elif atype == "submit_form":
+                        sel = act.get("selector", "form")
+                        await page.evaluate(
+                            f"document.querySelector('{sel}').submit()",
+                        )
+                        action_log.append({"action": "submit_form", "selector": sel, "ok": True})
+                    elif atype == "wait":
+                        secs = int(act.get("seconds", 1))
+                        await page.wait_for_timeout(secs * 1000)
+                        action_log.append({"action": "wait", "seconds": secs})
+                    elif atype == "evaluate":
+                        js = act.get("js", "")
+                        result = await page.evaluate(js)
+                        action_log.append({
+                            "action": "evaluate",
+                            "result_preview": str(result)[:200],
+                            "ok": True,
+                        })
+                    else:
+                        action_log.append({
+                            "action": atype, "ok": False,
+                            "error": f"Unknown action type",
+                        })
+                except Exception as exc:
+                    action_log.append({
+                        "action": atype, "step": idx, "ok": False,
+                        "error": str(exc)[:200],
+                    })
+
+            # Final settle
+            await page.wait_for_timeout(wait_seconds * 1000)
+
+            final_url = page.url
+            final_title = ""
+            final_body = ""
+            try:
+                final_title = await page.title()
+                final_body = (await page.content())[:8000]
+            except Exception:
+                pass
+            cookies = await context.cookies()
+            cookie_list = [
+                {
+                    "name": c["name"],
+                    "value": c["value"][:60],
+                    "domain": c.get("domain", ""),
+                    "httpOnly": c.get("httpOnly", False),
+                    "secure": c.get("secure", False),
+                }
+                for c in cookies[:30]
+            ]
+
+            await browser.close()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "message": f"Browser workflow failed: {str(exc)[:300]}",
+            "captured_so_far": len(captured_requests),
+        }
+
+    # Merge requests + responses by req_id into flows
+    resp_by_id = {r["req_id"]: r for r in captured_responses}
+    flows: list[dict[str, Any]] = []
+    for req in captured_requests:
+        resp = resp_by_id.get(req["req_id"], {})
+        flows.append({
+            "method": req["method"],
+            "url": req["url"],
+            "req_headers": {
+                k: v for k, v in req.get("headers", {}).items()
+                if k.lower() in (
+                    "content-type", "cookie", "referer", "origin",
+                    "authorization", "x-requested-with",
+                )
+            },
+            "post_data": req.get("post_data"),
+            "resource_type": req.get("resource_type"),
+            "status": resp.get("status"),
+            "set_cookie": resp.get("set_cookie", ""),
+        })
+
+    # Filter out the noise (images, fonts, CSS) — keep doc/xhr/fetch/form
+    significant = [
+        f for f in flows
+        if f.get("resource_type") in ("document", "xhr", "fetch", "other")
+        or f.get("method") != "GET"
+    ]
+
+    return {
+        "status": "success",
+        "action_log": action_log,
+        "final_url": final_url,
+        "final_title": final_title,
+        "final_body_preview": final_body,
+        "cookies": cookie_list,
+        "console_logs": console_logs[:30],
+        "flows_total": len(flows),
+        "flows_significant": len(significant),
+        "flows": significant[:50],
+    }
+
+
+async def _tool_submit_form(
+    url: str, field_overrides: dict[str, Any], form_index: int = 0,
+    follow_redirects: bool = False,
+) -> dict[str, Any]:
+    """Parse a form, merge overrides with hidden fields, submit, return round-trip."""
+    import aiohttp
+
+    timeout = aiohttp.ClientTimeout(total=20)
+    headers = {
+        **_get_auth_headers(),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+
+    try:
+        async with aiohttp.ClientSession(headers=headers, cookie_jar=aiohttp.CookieJar(unsafe=True)) as s:
+            # Fetch the page containing the form
+            async with s.get(url, timeout=timeout, ssl=False) as r:
+                page_html = await r.text(errors="replace")
+                page_url = str(r.url)
+        # Find forms
+        forms = list(re.finditer(
+            r"<form\b[^>]*>(.*?)</form>",
+            page_html, re.IGNORECASE | re.DOTALL,
+        ))
+        if not forms:
+            return {"status": "error", "message": "No <form> found on page."}
+        if form_index >= len(forms):
+            form_index = 0
+        form_match = forms[form_index]
+        form_tag = form_match.group(0)
+
+        # Extract action + method
+        action_match = re.search(
+            r'action\s*=\s*["\']([^"\']*)["\']', form_tag, re.IGNORECASE,
+        )
+        method_match = re.search(
+            r'method\s*=\s*["\']?(get|post)["\']?', form_tag, re.IGNORECASE,
+        )
+        action = action_match.group(1) if action_match else page_url
+        method = (method_match.group(1) if method_match else "POST").upper()
+
+        # Resolve action URL
+        from urllib.parse import urljoin
+        action_url = urljoin(page_url, action)
+
+        # Parse all input / textarea / select fields
+        fields: dict[str, str] = {}
+        for inp in re.finditer(
+            r"<(?:input|textarea|select)\b[^>]*>", form_tag, re.IGNORECASE,
+        ):
+            tag = inp.group(0)
+            nm = re.search(r'name\s*=\s*["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            val = re.search(r'value\s*=\s*["\']([^"\']*)["\']', tag, re.IGNORECASE)
+            tp = re.search(r'type\s*=\s*["\']([^"\']+)["\']', tag, re.IGNORECASE)
+            if not nm:
+                continue
+            name = nm.group(1)
+            value = val.group(1) if val else ""
+            input_type = (tp.group(1) if tp else "text").lower()
+            # Skip submit buttons that weren't the one clicked; but keep named
+            # submit buttons if they have a value (form expects them).
+            if input_type in ("submit", "button", "image") and not value:
+                continue
+            fields[name] = value
+
+        # Apply overrides
+        for k, v in field_overrides.items():
+            fields[k] = str(v)
+
+        # Build and send
+        async with aiohttp.ClientSession(
+            headers=headers, cookie_jar=aiohttp.CookieJar(unsafe=True),
+        ) as s:
+            # Warm up session cookies first (fetch the form page again in same jar)
+            async with s.get(url, timeout=timeout, ssl=False) as r:
+                pass
+
+            redirect_chain: list[dict[str, Any]] = []
+            set_cookies_all: list[str] = []
+
+            if method == "GET":
+                from urllib.parse import urlencode
+                qs = urlencode(fields)
+                full_url = action_url + ("&" if "?" in action_url else "?") + qs
+                # Manually handle redirects if follow_redirects
+                current_url = full_url
+                for hop in range(10 if follow_redirects else 1):
+                    async with s.get(
+                        current_url, timeout=timeout, ssl=False,
+                        allow_redirects=False,
+                    ) as resp:
+                        sc = resp.headers.getall("Set-Cookie", [])
+                        set_cookies_all.extend(sc)
+                        loc = resp.headers.get("Location", "")
+                        resp_status = resp.status
+                        resp_body = (await resp.text(errors="replace"))[:6000]
+                        resp_headers = {k: v for k, v in resp.headers.items()}
+                    redirect_chain.append({
+                        "url": current_url, "status": resp_status, "location": loc,
+                    })
+                    if not follow_redirects or resp_status not in (301, 302, 303, 307, 308) or not loc:
+                        break
+                    current_url = urljoin(current_url, loc)
+                final_body = resp_body
+                final_status = resp_status
+                final_resp_headers = resp_headers
+                req_payload = qs
+                req_ct = "url-encoded (GET)"
+            else:
+                current_url = action_url
+                for hop in range(10 if follow_redirects else 1):
+                    if hop == 0:
+                        async with s.post(
+                            current_url, data=fields, timeout=timeout,
+                            ssl=False, allow_redirects=False,
+                        ) as resp:
+                            sc = resp.headers.getall("Set-Cookie", [])
+                            set_cookies_all.extend(sc)
+                            loc = resp.headers.get("Location", "")
+                            resp_status = resp.status
+                            resp_body = (await resp.text(errors="replace"))[:6000]
+                            resp_headers = {k: v for k, v in resp.headers.items()}
+                    else:
+                        async with s.get(
+                            current_url, timeout=timeout, ssl=False,
+                            allow_redirects=False,
+                        ) as resp:
+                            sc = resp.headers.getall("Set-Cookie", [])
+                            set_cookies_all.extend(sc)
+                            loc = resp.headers.get("Location", "")
+                            resp_status = resp.status
+                            resp_body = (await resp.text(errors="replace"))[:6000]
+                            resp_headers = {k: v for k, v in resp.headers.items()}
+                    redirect_chain.append({
+                        "url": current_url, "status": resp_status, "location": loc,
+                    })
+                    if not follow_redirects or resp_status not in (301, 302, 303, 307, 308) or not loc:
+                        break
+                    current_url = urljoin(current_url, loc)
+                final_body = resp_body
+                final_status = resp_status
+                final_resp_headers = resp_headers
+                from urllib.parse import urlencode
+                req_payload = urlencode(fields)
+                req_ct = "application/x-www-form-urlencoded"
+
+            # Detect session cookie established
+            session_cookie_set = False
+            sc_text = " ".join(set_cookies_all).lower()
+            for marker in ("session", "auth", "sid", "token", "phpsessid", "aspxauth", "jsessionid"):
+                if marker in sc_text:
+                    session_cookie_set = True
+                    break
+
+            # Detect URL-auth pattern (username in Location)
+            url_auth_in_redirect = False
+            for hop in redirect_chain:
+                if hop.get("location"):
+                    if re.search(
+                        r"[?&](?:username|user|uname|userid|email|token|auth|sid)=",
+                        hop["location"], re.I,
+                    ):
+                        url_auth_in_redirect = True
+                        break
+
+            return {
+                "status": "success",
+                "request": {
+                    "method": method,
+                    "url": action_url,
+                    "content_type": req_ct,
+                    "payload": req_payload[:4000],
+                    "fields_submitted": list(fields.keys()),
+                    "hidden_field_count": len([
+                        f for f in fields if f.startswith("__") or "token" in f.lower()
+                    ]),
+                },
+                "response": {
+                    "status": final_status,
+                    "headers": {
+                        k: v for k, v in final_resp_headers.items()
+                        if k.lower() in (
+                            "content-type", "location", "set-cookie",
+                            "x-powered-by", "server",
+                        )
+                    },
+                    "body_preview": final_body,
+                    "redirect_chain": redirect_chain,
+                    "set_cookies": set_cookies_all,
+                    "session_cookie_set": session_cookie_set,
+                    "url_auth_in_redirect": url_auth_in_redirect,
+                },
+            }
+    except Exception as exc:
+        return {"status": "error", "message": f"Form submit failed: {str(exc)[:300]}"}
+
+
+async def _tool_record_user_story(
+    workspace_id: str, story: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist a UserStory record to agent/user_stories.json."""
+    from bughound.core import workspace
+
+    existing = await workspace.read_data(workspace_id, "agent/user_stories.json")
+    items: list[dict[str, Any]]
+    if isinstance(existing, dict) and "data" in existing:
+        items = existing["data"] if isinstance(existing["data"], list) else []
+    elif isinstance(existing, list):
+        items = existing
+    else:
+        items = []
+
+    # Dedup by candidate_id (last write wins)
+    cid = story.get("candidate_id", "")
+    items = [i for i in items if isinstance(i, dict) and i.get("candidate_id") != cid]
+    items.append(story)
+
+    await workspace.write_data(
+        workspace_id, "agent/user_stories.json", items,
+        generated_by="agent", target=cid or "unknown",
+    )
+    return {
+        "status": "success",
+        "candidate_id": cid,
+        "total_stories": len(items),
+        "path": "agent/user_stories.json",
+    }
+
+
 async def execute_tool(
     name: str,
     arguments: dict[str, Any],
@@ -1287,6 +2271,80 @@ async def execute_tool(
                 curl_command=arguments.get("curl_command", ""),
                 impact=arguments.get("impact", ""),
             )
+
+        elif name == "verify_not_honeytoken":
+            url = arguments["url"]
+            if not _is_in_scope(url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {url}"})
+            result = await _tool_verify_not_honeytoken(
+                url=url,
+                param=arguments["param"],
+                injection_value=arguments["injection_value"],
+                safe_value=arguments["safe_value"],
+                vuln_class=arguments["vuln_class"],
+            )
+
+        elif name == "detect_url_auth":
+            url = arguments["login_url"]
+            if not _is_in_scope(url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {url}"})
+            result = await _tool_detect_url_auth(
+                login_url=url,
+                test_username=arguments.get("test_username", "admin"),
+                test_password=arguments.get("test_password", "test1234"),
+            )
+
+        elif name == "test_viewstate_binding":
+            url = arguments["target_url"]
+            if not _is_in_scope(url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {url}"})
+            result = await _tool_test_viewstate_binding(target_url=url)
+
+        elif name == "capture_workflow":
+            start_url = arguments["start_url"]
+            if not _is_in_scope(start_url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {start_url}"})
+            actions = arguments.get("actions", [])
+            # Also scope-check any navigate actions
+            for act in actions:
+                if isinstance(act, dict) and act.get("type") == "navigate":
+                    u = act.get("url", "")
+                    if u and not _is_in_scope(u, target_scope):
+                        return json.dumps({"status": "error", "message": f"Out of scope navigate action: {u}"})
+            result = await _tool_capture_workflow(
+                start_url=start_url,
+                actions=actions,
+                wait_seconds=arguments.get("wait_seconds", 2),
+            )
+
+        elif name == "submit_form":
+            url = arguments["url"]
+            if not _is_in_scope(url, target_scope):
+                return json.dumps({"status": "error", "message": f"Out of scope: {url}"})
+            result = await _tool_submit_form(
+                url=url,
+                field_overrides=arguments.get("field_overrides", {}),
+                form_index=arguments.get("form_index", 0),
+                follow_redirects=arguments.get("follow_redirects", False),
+            )
+
+        elif name == "record_user_story":
+            # Build story dict from args
+            story = {
+                "candidate_id": arguments.get("candidate_id", ""),
+                "candidate_name": arguments.get("candidate_name", ""),
+                "status": arguments.get("status", "partial"),
+                "personas": arguments.get("personas", []),
+                "routes": arguments.get("routes", []),
+                "apis": arguments.get("apis", []),
+                "technologies": arguments.get("technologies", []),
+                "notes": arguments.get("notes", []),
+                "follow_up_candidates": arguments.get("follow_up_candidates", []),
+                "unresolved_gaps": arguments.get("unresolved_gaps", []),
+                "sensitive_data": arguments.get("sensitive_data", ""),
+                "recorded_at": __import__("datetime").datetime.now().isoformat(),
+            }
+            result = await _tool_record_user_story(ws_id, story)
 
         else:
             result = {

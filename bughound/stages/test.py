@@ -559,10 +559,21 @@ async def _run_tests(
     nuclei_rate = global_settings.get("nuclei_rate_limit", 100)
     nuclei_concurrency = global_settings.get("nuclei_concurrency", 25)
     nuclei_timeout = global_settings.get("nuclei_timeout", 600)  # 10 min per batch default
-    stealth_mode = global_settings.get("stealth", False)
-    if stealth_mode:
+
+    # Speed mode — controls concurrency envelope:
+    #   'stealth' → WAF-friendly: slow, low parallelism (for real BB targets)
+    #   'normal'  → default tuned for safe/lab use (current defaults)
+    #   'fast'    → aggressive: 2× technique parallelism, higher nuclei rate
+    # stealth can also be set via the legacy global_settings.stealth=True flag.
+    speed_mode = global_settings.get("speed", "normal")
+    if global_settings.get("stealth"):
+        speed_mode = "stealth"
+    if speed_mode == "stealth":
         nuclei_rate = min(nuclei_rate, 10)
         nuclei_concurrency = min(nuclei_concurrency, 5)
+    elif speed_mode == "fast":
+        nuclei_rate = max(nuclei_rate, 250)
+        nuclei_concurrency = max(nuclei_concurrency, 40)
 
     # Check if interactsh is available (for OOB templates)
     no_interactsh = not tool_runner.is_available("interactsh-client")
@@ -1072,8 +1083,15 @@ async def _run_tests(
     # -- Build runnable task list (filter by test_class + availability) -
     # Heavy tools that spawn subprocesses — limit concurrency
     _HEAVY_TECHNIQUES = {"sqli_param_fuzz", "xss_param_fuzz", "deep_dirfuzz"}
-    _HEAVY_SLOTS = 2
-    _LIGHT_SLOTS = 10
+    if speed_mode == "fast":
+        _HEAVY_SLOTS, _LIGHT_SLOTS = 4, 20
+        _tech_concurrency = 30
+    elif speed_mode == "stealth":
+        _HEAVY_SLOTS, _LIGHT_SLOTS = 1, 4
+        _tech_concurrency = 5
+    else:
+        _HEAVY_SLOTS, _LIGHT_SLOTS = 2, 10
+        _tech_concurrency = 15
     heavy_sem = asyncio.Semaphore(_HEAVY_SLOTS)
     light_sem = asyncio.Semaphore(_LIGHT_SLOTS)
 
@@ -1090,6 +1108,7 @@ async def _run_tests(
                 tech_findings = await asyncio.wait_for(
                     techniques.execute_technique(
                         technique_id, workspace_id, sorted_targets,
+                        concurrency=_tech_concurrency,
                     ),
                     timeout=600,  # 10 minute max per technique
                 )

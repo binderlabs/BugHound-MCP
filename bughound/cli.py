@@ -646,6 +646,7 @@ async def _run_analyze(workspace_id: str, verbose: bool = False) -> dict:
 async def _run_test(
     workspace_id: str, job_manager: Any, attack_surface: dict,
     verbose: bool = False, test_profile: str = "both",
+    speed: str = "normal",
 ) -> list[dict]:
     """Stage 4: Execute tests."""
     from bughound.stages import analyze as stage_analyze
@@ -681,6 +682,7 @@ async def _run_test(
             "nuclei_rate_limit": 100,
             "nuclei_concurrency": 25,
             "test_profile": test_profile,
+            "speed": speed,
         },
     }
 
@@ -1048,8 +1050,10 @@ async def cmd_scan(args: argparse.Namespace) -> None:
 
     # Stage 4
     if resume_stage <= 4:
+        speed_mode = getattr(args, "speed", None) or "normal"
         findings = await _run_test(workspace_id, job_manager, attack_surface,
-                                   verbose=verbose, test_profile=test_profile)
+                                   verbose=verbose, test_profile=test_profile,
+                                   speed=speed_mode)
     else:
         # Load existing findings
         from bughound.core import workspace as ws_mod
@@ -1225,8 +1229,10 @@ async def cmd_test(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     test_profile = getattr(args, "profile", "both") or "both"
+    speed_mode = getattr(args, "speed", None) or "normal"
     findings = await _run_test(args.workspace_id, job_manager, attack_surface,
-                               verbose=verbose, test_profile=test_profile)
+                               verbose=verbose, test_profile=test_profile,
+                               speed=speed_mode)
 
     if quiet:
         sev_counts = Counter(f.get("severity", "?") for f in findings)
@@ -1421,6 +1427,7 @@ async def cmd_agent(args: argparse.Namespace) -> None:
         resume_workspace_id=resume_workspace_id,
         from_phase=from_phase,
         test_profile=getattr(args, "profile", "both") or "both",
+        speed=getattr(args, "speed", None) or "normal",
     )
 
 
@@ -1478,6 +1485,14 @@ def main() -> None:
                              help="Test profile: client (XSS/redirect/CORS), "
                                   "server (SQLi/SSRF/RCE/etc), both (default). "
                                   "If omitted in interactive mode, you'll be prompted.")
+    _speed = scan_parser.add_mutually_exclusive_group()
+    _speed.add_argument("--fast", action="store_const", const="fast",
+                        dest="speed", help="Aggressive concurrency "
+                        "(2x technique parallelism, higher nuclei rate). "
+                        "Use on lab targets / owned infra — may trip WAFs.")
+    _speed.add_argument("--stealth", action="store_const", const="stealth",
+                        dest="speed", help="WAF-friendly: low parallelism, "
+                        "reduced nuclei rate. Use on real bug-bounty targets.")
 
     # recon
     recon_parser = subparsers.add_parser("recon", parents=[_common],
@@ -1502,6 +1517,11 @@ def main() -> None:
     test_parser.add_argument("--profile", default="both",
                              choices=["client", "server", "both"],
                              help="Test profile (default: both)")
+    _tspeed = test_parser.add_mutually_exclusive_group()
+    _tspeed.add_argument("--fast", action="store_const", const="fast",
+                         dest="speed", help="Aggressive concurrency")
+    _tspeed.add_argument("--stealth", action="store_const", const="stealth",
+                         dest="speed", help="WAF-friendly low concurrency")
 
     # validate
     validate_parser = subparsers.add_parser("validate", parents=[_common],
@@ -1539,6 +1559,11 @@ def main() -> None:
     agent_parser.add_argument("--profile", default="both",
                               choices=["client", "server", "both"],
                               help="Test profile (default: both)")
+    _aspeed = agent_parser.add_mutually_exclusive_group()
+    _aspeed.add_argument("--fast", action="store_const", const="fast",
+                         dest="speed", help="Aggressive concurrency")
+    _aspeed.add_argument("--stealth", action="store_const", const="stealth",
+                         dest="speed", help="WAF-friendly low concurrency")
 
     # serve
     subparsers.add_parser("serve", parents=[_common], help="Start MCP server")

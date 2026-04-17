@@ -392,6 +392,82 @@ async def _run_discover(
     except Exception as exc:
         warnings.append(f"Passive endpoint sources: {exc}")
 
+    # ===================================================================
+    # Phase 2B-ext: External recon (GitHub code search + cloud buckets)
+    # ===================================================================
+    # Runs against the root target domain. GitHub needs GITHUB_TOKEN env
+    # or ~/.gau.toml [github] apikey — skips silently if no token.
+    # Cloud bucket discovery is always on; just permutes names and probes.
+    if progress_cb:
+        await progress_cb(40, "GitHub + cloud asset discovery", "external_recon")
+
+    ext_domain = meta.target.replace("http://", "").replace("https://", "").strip("/").split("/")[0]
+    # Strip port if present
+    if ":" in ext_domain:
+        ext_domain = ext_domain.split(":")[0]
+
+    # Load any known subdomains so cloud bucket permutation can mine stems
+    ext_subs: list[str] = []
+    try:
+        raw_subs = await workspace.read_data(workspace_id, "subdomains/all.txt")
+        if isinstance(raw_subs, list):
+            ext_subs = [s for s in raw_subs if isinstance(s, str)]
+        elif isinstance(raw_subs, dict) and "data" in raw_subs:
+            ext_subs = [s for s in raw_subs["data"] if isinstance(s, str)]
+    except Exception:
+        pass
+
+    # Fire both in parallel — GitHub is rate-limited serial (~25s),
+    # cloud probe is fan-out (~15-30s depending on candidate count).
+    try:
+        from bughound.tools.recon import github_recon, cloud_assets
+        gh_task = asyncio.create_task(github_recon.run_recon(ext_domain))
+        cloud_task = asyncio.create_task(
+            cloud_assets.discover(ext_domain, subdomains=ext_subs),
+        )
+
+        try:
+            gh_result = await asyncio.wait_for(gh_task, timeout=120)
+            if gh_result:
+                await workspace.write_data(
+                    workspace_id, "recon/github.json", [gh_result],
+                    generated_by="github_recon", target=target_label,
+                )
+                files_written.append("recon/github.json")
+                summary = gh_result.get("summary", {})
+                logger.info(
+                    "discover.github_recon",
+                    status=summary.get("status"),
+                    hits=summary.get("hits_total", 0),
+                    secrets=summary.get("secrets_total", 0),
+                )
+        except asyncio.TimeoutError:
+            warnings.append("GitHub recon timed out — skipping")
+        except Exception as exc:
+            warnings.append(f"GitHub recon: {exc}")
+
+        try:
+            cloud_result = await asyncio.wait_for(cloud_task, timeout=180)
+            if cloud_result and cloud_result.get("findings"):
+                await workspace.write_data(
+                    workspace_id, "recon/cloud_assets.json", [cloud_result],
+                    generated_by="cloud_assets", target=target_label,
+                )
+                files_written.append("recon/cloud_assets.json")
+                summary = cloud_result.get("summary", {})
+                logger.info(
+                    "discover.cloud_assets",
+                    total=summary.get("total", 0),
+                    listable=summary.get("listable", 0),
+                    by_cloud=summary.get("by_cloud", {}),
+                )
+        except asyncio.TimeoutError:
+            warnings.append("Cloud bucket discovery timed out — skipping")
+        except Exception as exc:
+            warnings.append(f"Cloud bucket discovery: {exc}")
+    except Exception as exc:
+        warnings.append(f"External recon (github/cloud): {exc}")
+
     # Active crawler — katana light/deep by target type, fallback to gospider
     # Seed katana with both:
     #   1. live host roots (traditional websites)
@@ -1459,11 +1535,18 @@ async def _run_discover(
         if progress_cb:
             await progress_cb(78, "Deep directory fuzzing with ffuf", "ffuf")
         try:
-            for host_url in live_host_urls[:5]:  # limit to first 5 hosts
+            # Pick wordlist tier by scan depth. Light uses medium (30k),
+            # deep uses large (1M+ curated). Previously hardcoded to "small"
+            # (dirb/common 4.6k) which missed most modern endpoints.
+            _depth = getattr(meta, "depth", "light")
+            _wl_size = "large" if _depth == "deep" else "medium"
+            _host_limit = 10 if _depth == "deep" else 5
+            _timeout = 300 if _depth == "deep" else 120
+            for host_url in live_host_urls[:_host_limit]:
                 ffuf_result = await ffuf.execute(
                     host_url,
-                    wordlist_size="small",
-                    timeout=120,
+                    wordlist_size=_wl_size,
+                    timeout=_timeout,
                 )
                 if ffuf_result.success and ffuf_result.results:
                     for entry in ffuf_result.results:
@@ -1489,17 +1572,9 @@ async def _run_discover(
                 # Use root URLs as fallback
                 api_endpoints = live_host_urls[:3]
 
-            param_wordlist = None
-            from pathlib import Path
-            # Check for SecLists param names
-            param_paths = [
-                Path("/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt"),
-                Path("/usr/share/wordlists/dirb/common.txt"),
-            ]
-            for p in param_paths:
-                if p.exists():
-                    param_wordlist = str(p)
-                    break
+            # Use the tiered wordlist resolver so we get assetnote params
+            # when available, SecLists burp-parameter-names as fallback.
+            param_wordlist = ffuf.find_wordlist("params")
 
             if param_wordlist:
                 if progress_cb:
@@ -1508,7 +1583,7 @@ async def _run_discover(
                     param_fuzz_result = await ffuf.execute(
                         api_url.rstrip("/") + "/FUZZ",
                         wordlist=param_wordlist,
-                        wordlist_size="small",
+                        wordlist_size="params",
                         timeout=60,
                     )
                     if param_fuzz_result.success and param_fuzz_result.results:

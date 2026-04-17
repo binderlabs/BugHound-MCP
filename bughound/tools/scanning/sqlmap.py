@@ -54,7 +54,7 @@ async def execute(
         "--level", str(level),
         "--risk", str(risk),
         "--technique", technique,
-        "--threads", "1",
+        "--threads", "5",
         "--disable-coloring",
         "--retries", "1",
         "--timeout", "10",

@@ -23,7 +23,7 @@ _EVIL_ORIGINS = [
 async def check_cors(
     host_urls: list[str],
     max_hosts: int = 50,
-    concurrency: int = 5,
+    concurrency: int = 10,
     timeout: int = 8,
 ) -> list[dict[str, Any]]:
     """Test CORS configuration on live host URLs.

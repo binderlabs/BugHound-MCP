@@ -628,7 +628,7 @@ def _replace_param_value(url: str, param: str, new_value: str) -> str:
 
 async def probe_reflection(
     classification: dict[str, Any],
-    concurrency: int = 8,
+    concurrency: int = 20,
     max_params: int = 60,
 ) -> dict[str, Any]:
     """Live-probe params to detect reflection, SQL errors, and LFI indicators.

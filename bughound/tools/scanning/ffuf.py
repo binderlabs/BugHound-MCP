@@ -17,19 +17,34 @@ from bughound.schemas.models import ToolResult
 BINARY = "ffuf"
 TIMEOUT = 600
 
-# Common wordlist locations (checked in order)
+# Common wordlist locations (checked in order).
+# Order matters — assetnote wordlists are preferred (curated from real-world data).
 _WORDLISTS = {
     "small": [
-        "/usr/share/wordlists/dirb/common.txt",
+        "/usr/share/wordlists/assetnote/data/manual/httparchive_directories_1m_2024.txt",
         "/usr/share/seclists/Discovery/Web-Content/common.txt",
+        "/usr/share/wordlists/dirb/common.txt",
     ],
     "medium": [
+        "/usr/share/wordlists/assetnote/data/manual/httparchive_directories_1m_2024.txt",
         "/usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt",
         "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
     ],
     "large": [
+        "/usr/share/wordlists/assetnote/data/automated/httparchive_directories_1m_2024.txt",
         "/usr/share/seclists/Discovery/Web-Content/raft-large-directories.txt",
         "/usr/share/wordlists/dirbuster/directory-list-2.3-big.txt",
+    ],
+    # Parameter name fuzzing
+    "params": [
+        "/usr/share/wordlists/assetnote/data/manual/parameters.txt",
+        "/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt",
+        "/usr/share/wordlists/dirb/common.txt",
+    ],
+    # API route fuzzing (kiterunner-style wordlist for API endpoint names)
+    "api": [
+        "/usr/share/wordlists/assetnote/data/manual/api_endpoints.txt",
+        "/usr/share/seclists/Discovery/Web-Content/api/api-endpoints.txt",
     ],
 }
 
