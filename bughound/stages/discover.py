@@ -1272,6 +1272,145 @@ async def _run_discover(
             )
 
     # ===================================================================
+    # Phase 2C-spa: SPA detection + route extraction + backend probing
+    # ===================================================================
+    # For modern Single Page Applications (React/Vue/Angular/Next/Vite),
+    # the HTML body is essentially empty (<div id="root"></div>). Traditional
+    # crawlers find nothing. We need to:
+    #   1. Detect the SPA pattern from the probed HTML
+    #   2. Extract route definitions from the JS bundle (React Router etc.)
+    #   3. Probe common SPA backend paths (/api/health, /graphql, etc.)
+    from bughound.tools.discovery import spa_analyzer
+
+    spa_detections: list[dict[str, Any]] = []
+    spa_routes: list[dict[str, Any]] = []
+    spa_backend_endpoints: list[dict[str, Any]] = []
+
+    if progress_cb:
+        await progress_cb(52, "SPA analysis (route + backend discovery)", "spa_analyzer")
+
+    # Fetch root HTML per live host, detect SPA pattern
+    try:
+        import aiohttp as _aio_spa
+        _spa_timeout = _aio_spa.ClientTimeout(total=10)
+        _UA_spa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+        async def _check_host_for_spa(host_url: str) -> dict[str, Any] | None:
+            try:
+                async with _aio_spa.ClientSession(
+                    headers={"User-Agent": _UA_spa}, timeout=_spa_timeout,
+                ) as _s:
+                    async with _s.get(host_url, ssl=False, allow_redirects=True) as _r:
+                        if _r.status != 200:
+                            return None
+                        _body = await _r.text(errors="replace")
+                        _hdr = {k.lower(): v for k, v in _r.headers.items()}
+                detect = spa_analyzer.detect_spa(_body, _hdr)
+                if detect.get("is_spa"):
+                    return {
+                        "host": host_url,
+                        "framework": detect.get("framework"),
+                        "builders": detect.get("builders", []),
+                        "confidence": detect.get("confidence"),
+                        "signals": detect.get("signals", []),
+                    }
+            except Exception:
+                return None
+            return None
+
+        _spa_tasks = [_check_host_for_spa(u) for u in live_host_urls[:15]]
+        _spa_results = await asyncio.gather(*_spa_tasks, return_exceptions=True)
+        for r in _spa_results:
+            if isinstance(r, dict):
+                spa_detections.append(r)
+    except Exception as exc:
+        warnings.append(f"SPA detection: {exc}")
+
+    # If any host is an SPA, extract routes from downloaded JS and probe backends
+    if spa_detections:
+        # Route extraction from already-downloaded JS files (we have these
+        # from js_analyzer workspace dir). Iterate saved .js files.
+        try:
+            from bughound.config.settings import WORKSPACE_BASE_DIR
+            _js_dir = WORKSPACE_BASE_DIR / workspace_id / "js_downloads"
+            if _js_dir.is_dir():
+                _route_seen: set[str] = set()
+                _gql_ops_seen: set[str] = set()
+                for _js_file in _js_dir.rglob("*.js"):
+                    try:
+                        _content = _js_file.read_text(errors="replace")[:2_000_000]
+                    except Exception:
+                        continue
+                    for _r in spa_analyzer.extract_routes_from_js(_content):
+                        if _r["route"] not in _route_seen:
+                            _route_seen.add(_r["route"])
+                            spa_routes.append(_r)
+                    for _op in spa_analyzer.extract_graphql_operations(_content):
+                        _gql_ops_seen.add(_op)
+                if _gql_ops_seen:
+                    await workspace.write_data(
+                        workspace_id, "urls/graphql_operations.json",
+                        [{"name": n} for n in sorted(_gql_ops_seen)],
+                        generated_by="spa_analyzer", target=target_label,
+                    )
+                    files_written.append("urls/graphql_operations.json")
+        except Exception as exc:
+            warnings.append(f"SPA route extraction: {exc}")
+
+        # Probe common SPA backend paths per detected SPA host
+        try:
+            _backend_tasks = [
+                spa_analyzer.probe_spa_backends(d["host"])
+                for d in spa_detections[:5]  # cap at 5 SPA hosts
+            ]
+            _backend_results = await asyncio.gather(*_backend_tasks, return_exceptions=True)
+            for _res in _backend_results:
+                if isinstance(_res, list):
+                    spa_backend_endpoints.extend(_res)
+        except Exception as exc:
+            warnings.append(f"SPA backend probe: {exc}")
+
+        # Add discovered SPA routes and backend paths to all_urls so later
+        # phases (param extraction, nuclei, etc.) see them.
+        for spa_host in spa_detections:
+            host_root = spa_host["host"].rstrip("/")
+            for route_entry in spa_routes:
+                route = route_entry["route"]
+                all_urls.append({
+                    "url": f"{host_root}{route}",
+                    "source": "spa_router",
+                })
+        for be in spa_backend_endpoints:
+            all_urls.append({"url": be["url"], "source": "spa_backend_probe"})
+
+        # Write SPA findings
+        await workspace.write_data(
+            workspace_id, "hosts/spa_detection.json", spa_detections,
+            generated_by="spa_analyzer", target=target_label,
+        )
+        files_written.append("hosts/spa_detection.json")
+        if spa_routes:
+            await workspace.write_data(
+                workspace_id, "urls/spa_routes.json", spa_routes,
+                generated_by="spa_analyzer", target=target_label,
+            )
+            files_written.append("urls/spa_routes.json")
+        if spa_backend_endpoints:
+            await workspace.write_data(
+                workspace_id, "urls/spa_backends.json", spa_backend_endpoints,
+                generated_by="spa_analyzer", target=target_label,
+            )
+            files_written.append("urls/spa_backends.json")
+
+        logger.info(
+            "discover.spa_analysis",
+            spa_hosts=len(spa_detections),
+            routes_extracted=len(spa_routes),
+            backend_endpoints=len(spa_backend_endpoints),
+            frameworks=list({d.get("framework") for d in spa_detections if d.get("framework")}),
+        )
+
+    # ===================================================================
     # Phase 2C-param: Parameter Summary
     # ===================================================================
     if params_by_path:

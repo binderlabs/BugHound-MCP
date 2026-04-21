@@ -360,6 +360,28 @@ Stage 2 discovery now includes additional passive/active sources beyond subfinde
 - **Expanded sensitive-path probe** — 172 paths covering env variants (`.env.dev`, `.env.staging`), framework configs (`appsettings.json`, `application.yml`), credentials (`.aws/credentials`, `.ssh/id_rsa`), git/svn exposure, backup patterns (`backup.7z`, `database.sql.gz`), Spring Actuator, Next.js leaks, CI/CD artifacts (`Jenkinsfile`, `.gitlab-ci.yml`).
 - **Tiered wordlist selection** — auto-picks assetnote/SecLists raft-medium for `--depth light`, raft-large for `--depth deep`. Falls back to dirbuster-medium (86k) when SecLists isn't installed.
 
+### SPA (Single Page Application) handling
+
+Modern webapps ship an empty HTML skeleton like:
+
+```html
+<body><div id="root"></div><script src="/assets/index-X.js"></script></body>
+```
+
+Traditional crawlers see nothing — zero forms, zero links, zero content. Stage 2 now detects this and pivots:
+
+1. **SPA detection** — recognizes React / Vue / Angular / Next / Vite / CRA / Nuxt / Gatsby / Remix / Svelte-Kit skeletons via body emptiness + script patterns + framework signatures.
+2. **Router config extraction** — parses React Router / Vue Router / Angular Router definitions from the downloaded JS bundle, surfacing routes like `/users/:id`, `/admin/dashboard` that static crawling would miss.
+3. **GraphQL operation extraction** — grabs `gql\`query ... \`` / `mutation ...` operation names from the bundle.
+4. **Common backend probe** — tries 30+ typical SPA API paths (`/api/health`, `/api/me`, `/graphql`, `/graphiql`, `/api/config`, `/.well-known/openid-configuration`, `/actuator/*`, etc.) with content-type + body-signal filtering to dodge SPA fallback 200s.
+
+Results feed into `all_urls`, so downstream phases (param discovery, nuclei, testing) see the real attack surface. Outputs land in:
+
+- `hosts/spa_detection.json` — which hosts are SPAs + framework + confidence
+- `urls/spa_routes.json` — extracted client-side routes
+- `urls/spa_backends.json` — discovered backend endpoints
+- `urls/graphql_operations.json` — GraphQL operation names
+
 ### Agent Mode Advanced Primitives
 
 `./bhound agent` now ships with anti-FP and workflow-exploration tools the AI can call:
