@@ -86,7 +86,17 @@ BugHound works with zero external tools using 29 pure-Python techniques. For ful
 | gotator | Subdomain permutation | `go install github.com/Josue87/gotator@latest` |
 | puredns | DNS resolution | `go install github.com/d3mondev/puredns/v2@latest` |
 
-Run `./scripts/install-tools.sh` to install all Go tools automatically.
+**Automated install:**
+
+```bash
+./scripts/install-tools.sh              # Core + recon + python + seclists (recommended)
+./scripts/install-tools.sh --minimal    # Core Go tools only (httpx/nuclei/katana/subfinder/ffuf/dnsx)
+./scripts/install-tools.sh --full       # Everything + assetnote wordlists (~1GB download)
+```
+
+The installer is idempotent — safe to re-run. Each tool is verified after install; a clear summary at the end shows how many installed/skipped/failed. If any tool fails, the script continues (unlike older versions) and prints diagnostics for the failed tool only.
+
+If your friend (or you) hit "script ran but tools aren't actually installed," re-run `./scripts/install-tools.sh` — the new version explicitly checks `command -v` for every tool after install and reports `[x]` on real failure. No more silent PEP-668 / `set -e` abort issues.
 
 ### API Keys for Better Subdomain Coverage (Optional)
 
